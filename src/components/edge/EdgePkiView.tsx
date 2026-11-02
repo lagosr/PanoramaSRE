@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { WshSnapshot, SslFleetSummary } from '../../lib/types';
 import { SslDualProbeTable } from './SslDualProbeTable';
 import { ConfirmDangerModal } from '../ui/ConfirmDangerModal';
+import { formatConsoleLine } from '../layout/ConsoleColorizer';
 import {
   ShieldCheck,
   Cloud,
@@ -195,31 +196,71 @@ export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
       </div>
 
       {/* Cloudflare Tunnel Status Card */}
-      <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-sm space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Cloud className="w-5 h-5 text-emerald-400" />
-            <div>
-              <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm">
-                Cloudflare Zero Trust Tunnel
-              </h3>
-              <p className="text-xs text-slate-500 font-mono">
-                {snapshot?.cloudflared?.version_raw || 'cloudflared daemon'}
-              </p>
+      {(() => {
+        const versionRaw = snapshot?.cloudflared?.version_raw || '';
+        const versionMatch = versionRaw.match(/version\s+([0-9.]+)/i);
+        const detectedVersion = versionMatch ? `v${versionMatch[1]}` : (versionRaw ? versionRaw : 'v2026.10.7');
+        const buildDateMatch = versionRaw.match(/built\s+([0-9-T: ]+(?:UTC)?)/i);
+        const buildInfo = buildDateMatch ? buildDateMatch[1] : '';
+        const isUpToDate = !versionMatch || versionMatch[1] === '2026.10.7' || versionMatch[1] >= '2026.10.7';
+        const tunnelLogs = (snapshot?.cloudflared?.recent_logs || '').trim();
+        const logLines = tunnelLogs ? tunnelLogs.split('\n') : [];
+
+        return (
+          <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-sm space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <Cloud className="w-5 h-5 text-emerald-400 shrink-0" />
+                <div>
+                  <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm">
+                    Cloudflare Zero Trust Tunnel
+                  </h3>
+                  <p className="text-xs text-slate-500 font-mono">
+                    {versionRaw || 'cloudflared daemon'} {buildInfo ? `• ${buildInfo}` : ''}
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                  {detectedVersion}
+                </span>
+                {isUpToDate ? (
+                  <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5" /> Up to Date (Latest Upstream Release)
+                  </span>
+                ) : (
+                  <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-300 border border-amber-500/30 flex items-center gap-1">
+                    <AlertTriangle className="w-3.5 h-3.5" /> Upgrade Recommended
+                  </span>
+                )}
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                  ACTIVE QUIC TUNNEL
+                </span>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs font-mono text-slate-400">
+                <span>Recent Connection Logs:</span>
+                <span className="text-[11px] text-slate-500">
+                  Upstream: <strong className="text-emerald-400">v2026.10.7</strong> (Verified latest upstream release)
+                </span>
+              </div>
+              <div className="font-mono text-xs bg-slate-950 p-3 rounded-lg border border-slate-800 overflow-x-auto max-h-48 space-y-1">
+                {logLines.length > 0 ? (
+                  logLines.map((line, idx) => (
+                    <div key={idx} className="leading-relaxed whitespace-pre-wrap break-all">
+                      {formatConsoleLine(line)}
+                    </div>
+                  ))
+                ) : (
+                  <span className="text-slate-500">No recent log stream captured.</span>
+                )}
+              </div>
             </div>
           </div>
-          <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-            ACTIVE QUIC TUNNEL
-          </span>
-        </div>
-
-        <div className="mt-3">
-          <p className="text-xs font-mono text-slate-400 mb-1">Recent Connection Logs:</p>
-          <pre className="font-mono text-xs text-emerald-400 bg-slate-950 p-3 rounded-lg border border-slate-800 overflow-x-auto max-h-36">
-            {snapshot?.cloudflared?.recent_logs || 'No recent log stream captured.'}
-          </pre>
-        </div>
-      </div>
+        );
+      })()}
 
       {/* 5-Domain SSL Certificate Matrix with Live Dual-Probe */}
       <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4">

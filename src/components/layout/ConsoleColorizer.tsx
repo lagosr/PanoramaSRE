@@ -22,6 +22,7 @@ export function formatConsoleLine(line: string): React.ReactNode {
     /error/i.test(line) ||
     /fatal/i.test(line) ||
     /\[err\]/i.test(line) ||
+    /\bERR\b/.test(line) ||
     /failed/i.test(line) ||
     /exit code: [1-9]\d*/i.test(line) ||
     /command failed/i.test(line) ||
@@ -33,6 +34,7 @@ export function formatConsoleLine(line: string): React.ReactNode {
   // 2. Warnings & Deprecations
   if (
     /warn/i.test(line) ||
+    /\bWRN\b/.test(line) ||
     /caution/i.test(line) ||
     /deprecated/i.test(line) ||
     /uncommitted/i.test(line) ||
@@ -42,7 +44,7 @@ export function formatConsoleLine(line: string): React.ReactNode {
     return <span className="text-amber-400">{line}</span>;
   }
 
-  // 3. Success & Completion
+  // 3. Success, Tunnel Info & Completion
   if (
     /success/i.test(line) ||
     /healthy/i.test(line) ||
@@ -50,9 +52,15 @@ export function formatConsoleLine(line: string): React.ReactNode {
     /passed/i.test(line) ||
     /synchronized/i.test(line) ||
     /exit code: 0/i.test(line) ||
-    /finished `release`/i.test(line)
+    /finished `release`/i.test(line) ||
+    /Registered tunnel connection/i.test(line)
   ) {
     return <span className="text-emerald-400 font-medium">{line}</span>;
+  }
+
+  // 3.5. Standard Tunnel Informational logs
+  if (/\bINF\b/.test(line)) {
+    return <span className="text-sky-300/90">{line}</span>;
   }
 
   // 4. Docker & Runner Prefixes (#1, #2, [RUNNER], [PanoramaSRE])

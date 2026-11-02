@@ -300,6 +300,7 @@ export const App: React.FC = () => {
             localSqlitePath: item.manifest.local_sqlite_path || '',
             themeColor: item.manifest.theme_color || 'emerald',
             icon: item.manifest.icon || 'Layers',
+            hasDatabase: item.manifest.has_database ?? true,
             portalOrder: 1,
             roles: ['admin'],
             sre: {

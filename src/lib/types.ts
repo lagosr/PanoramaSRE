@@ -14,6 +14,7 @@ export interface AppManifest {
   localSqlitePath: string;
   themeColor: string;
   icon: string;
+  hasDatabase?: boolean;
   portalOrder: number;
   roles: string[];
   sre: {
@@ -66,6 +67,14 @@ export interface ChangedFileItem {
   path: string;
 }
 
+export interface GitReleaseCandidate {
+  tag: string;
+  commit_short: string;
+  committed_at: string;
+  subject: string;
+  is_deployed: boolean;
+}
+
 export interface AppCompositionReport {
   app_id: string;
   state: 'IN_SYNC' | 'LOCAL_WIP' | 'AHEAD' | 'DIRTY_PROD' | 'DIVERGED' | 'LEGACY_UNSTAMPED' | 'PROD_UNREACHABLE';
@@ -83,6 +92,7 @@ export interface AppCompositionReport {
   changed_files_since_prod: ChangedFileItem[];
   blast_radius_badges: string[];
   new_env_keys: string[];
+  recent_candidates?: GitReleaseCandidate[];
 }
 
 export type DevServerStatus = 'STOPPED' | 'RUNNING_MANAGED' | 'RUNNING_EXTERNAL';

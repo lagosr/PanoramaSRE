@@ -18,6 +18,15 @@ pub struct ChangedFileItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitReleaseCandidate {
+    pub tag: String,
+    pub commit_short: String,
+    pub committed_at: String,
+    pub subject: String,
+    pub is_deployed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppCompositionReport {
     pub app_id: String,
     pub state: String, // "IN_SYNC" | "LOCAL_WIP" | "AHEAD" | "DIRTY_PROD" | "DIVERGED" | "LEGACY_UNSTAMPED" | "PROD_UNREACHABLE"
@@ -35,6 +44,7 @@ pub struct AppCompositionReport {
     pub changed_files_since_prod: Vec<ChangedFileItem>,
     pub blast_radius_badges: Vec<String>, // "DB_MIGRATION", "AUTH_SECURITY", "ENV_CONTRACT", "DEPENDENCY_DELTA", "DOCKER_INFRA", "APP_LOGIC_UI"
     pub new_env_keys: Vec<String>,
+    pub recent_candidates: Vec<GitReleaseCandidate>,
 }
 
 fn run_git(repo_dir: &Path, args: &[&str]) -> Result<String, String> {
@@ -119,6 +129,48 @@ pub async fn compute_app_composition(
         .collect();
     let local_dirty = !dirty_files.is_empty();
 
+    // Gather recent git commits and release tags to form candidate rollback and release history
+    let mut recent_candidates: Vec<GitReleaseCandidate> = Vec::new();
+
+    // 1. Tags
+    if let Ok(tag_out) = run_git(repo, &["tag", "-l", "--format=%(refname:short)|%(creatordate:iso-strict)|%(objectname:short)", "--sort=-creatordate"]) {
+        for line in tag_out.lines().filter(|l| !l.is_empty()) {
+            let parts: Vec<&str> = line.split('|').collect();
+            if parts.len() >= 3 && !parts[0].is_empty() {
+                let tag_name = parts[0].to_string();
+                let commit_short = parts[2].to_string();
+                let is_deployed = tag_name == "deployed/prod" || prod_sha.as_deref().map(|p| p.starts_with(&commit_short) || commit_short == &p[..p.len().min(7)]).unwrap_or(false);
+                recent_candidates.push(GitReleaseCandidate {
+                    tag: tag_name,
+                    commit_short,
+                    committed_at: parts[1].to_string(),
+                    subject: format!("Release tag {}", parts[0]),
+                    is_deployed,
+                });
+            }
+        }
+    }
+
+    // 2. Recent commits (top 8)
+    if let Ok(log_out) = run_git(repo, &["log", "-n", "8", "--pretty=format:%h\t%cI\t%s"]) {
+        for line in log_out.lines().filter(|l| !l.is_empty()) {
+            let cols: Vec<&str> = line.splitn(3, '\t').collect();
+            if cols.len() == 3 {
+                let c_sha = cols[0].to_string();
+                let is_deployed = prod_sha.as_deref().map(|p| p.starts_with(&c_sha) || c_sha == &p[..p.len().min(7)]).unwrap_or(false);
+                if !recent_candidates.iter().any(|c| c.commit_short == c_sha && c.tag != c_sha) {
+                    recent_candidates.push(GitReleaseCandidate {
+                        tag: c_sha.clone(),
+                        commit_short: c_sha,
+                        committed_at: cols[1].to_string(),
+                        subject: cols[2].to_string(),
+                        is_deployed,
+                    });
+                }
+            }
+        }
+    }
+
     let Some(ref p_sha) = prod_sha else {
         let all_touched: Vec<String> = dirty_files.iter().map(|f| f.path.clone()).collect();
         let blast_radius_badges = classify_blast_radius(&all_touched, false);
@@ -144,6 +196,7 @@ pub async fn compute_app_composition(
             changed_files_since_prod: vec![],
             blast_radius_badges,
             new_env_keys: vec![],
+            recent_candidates,
         });
     };
 
@@ -167,6 +220,7 @@ pub async fn compute_app_composition(
             changed_files_since_prod: vec![],
             blast_radius_badges,
             new_env_keys: vec![],
+            recent_candidates,
         });
     }
 
@@ -189,6 +243,7 @@ pub async fn compute_app_composition(
             changed_files_since_prod: vec![],
             blast_radius_badges: vec![],
             new_env_keys: vec![],
+            recent_candidates,
         });
     }
 
@@ -279,6 +334,7 @@ pub async fn compute_app_composition(
         changed_files_since_prod,
         blast_radius_badges,
         new_env_keys,
+        recent_candidates,
     })
 }
 

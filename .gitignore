@@ -22,7 +22,7 @@ Thumbs.db
 .idea/
 
 # Local data & backups cache
-backups/
+/backups/
 *.tar.gz
 *.sqlite-shm
 *.sqlite-wal
