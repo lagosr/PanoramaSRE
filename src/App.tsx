@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { ask } from '@tauri-apps/plugin-dialog';
 import { runStreamJob } from './lib/process-runner';
 import { SidebarRail, NavItem } from './components/layout/SidebarRail';
 import { TopLiveSyncBar } from './components/layout/TopLiveSyncBar';
-import { SreTerminalDrawer, TerminalTab } from './components/layout/SreTerminalDrawer';
+import { SreEventsConsolePanel, TerminalTab, SystemEventItem } from './components/layout/SreEventsConsolePanel';
 import { CommandCenterView } from './components/hud/CommandCenterView';
 import { LocalDevView } from './components/local-dev/LocalDevView';
 import { SettingsView } from './components/settings/SettingsView';
@@ -50,20 +52,132 @@ export const App: React.FC = () => {
   const [activeTerminalTabId, setActiveTerminalTabId] = useState<string>('');
   const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(false);
 
-  // Universal Action Feedback State
+  // Load saved console sessions from SQLite database on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const saved = await invoke<
+          Array<{
+            id: string;
+            title: string;
+            lines: string[];
+            is_running: boolean;
+            exit_code: number | null;
+          }>
+        >('get_saved_console_sessions');
+
+        if (saved && saved.length > 0) {
+          const loadedTabs: TerminalTab[] = saved.map((s) => ({
+            id: s.id,
+            title: s.title,
+            lines: s.lines,
+            isRunning: false, // past runs are not running across app launch
+            exitCode: s.exit_code ?? undefined,
+          }));
+          setTerminalTabs(loadedTabs);
+          setActiveTerminalTabId(loadedTabs[loadedTabs.length - 1].id);
+        }
+      } catch (err) {
+        console.warn('Failed to hydrate console sessions from DB:', err);
+      }
+    })();
+  }, []);
+
+  // Intercept window close requested to ask user whether to minimize or quit
+  useEffect(() => {
+    let unlistenFn: (() => void) | undefined;
+
+    (async () => {
+      try {
+        const appWindow = getCurrentWindow();
+        unlistenFn = await appWindow.onCloseRequested(async (event) => {
+          event.preventDefault();
+
+          // Ask the user: Yes = Minimize to Tray, No = Quit Completely
+          const shouldMinimize = await ask(
+            'Do you want to minimize PanoramaSRE to the system tray?\n\n• Yes: Minimize to tray (keep dev servers and monitoring running)\n• No: Quit completely and shut down all supervised dev servers',
+            {
+              title: 'Close PanoramaSRE',
+              kind: 'info',
+              okLabel: 'Minimize to Tray',
+              cancelLabel: 'Quit Completely',
+            }
+          );
+
+          if (shouldMinimize) {
+            await appWindow.hide();
+          } else {
+            // User chose Quit Completely
+            await invoke('exit_app_completely');
+          }
+        });
+      } catch (err) {
+        console.warn('Failed to attach window close listener:', err);
+      }
+    })();
+
+    return () => {
+      if (unlistenFn) unlistenFn();
+    };
+  }, []);
+
+  // Universal Action Feedback & Events History
   const [actionFeedback, setActionFeedback] = useState<{
     message: string;
     type: 'pending' | 'success' | 'error';
   } | null>(null);
 
+  const [eventsHistory, setEventsHistory] = useState<SystemEventItem[]>([]);
+
   const showActionFeedback = useCallback((message: string, type: 'pending' | 'success' | 'error', durationMs?: number) => {
     setActionFeedback({ message, type });
+
+    // Deduplicate / resolve active in-flight pending events into success/error when state transitions
+    setEventsHistory((prev) => {
+      const now = new Date().toLocaleTimeString();
+      if (type === 'success' || type === 'error') {
+        // Find if there's a preceding pending event that matches this action and update it in-place
+        const pendingIndex = prev.findIndex((e) => e.type === 'pending');
+        if (pendingIndex !== -1) {
+          const updated = [...prev];
+          updated[pendingIndex] = {
+            ...updated[pendingIndex],
+            type,
+            message,
+            timestamp: now,
+          };
+          return updated;
+        }
+      }
+
+      const newEvent: SystemEventItem = {
+        id: `ev-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+        timestamp: now,
+        message,
+        type,
+      };
+      return [newEvent, ...prev.slice(0, 99)];
+    });
+
     if (durationMs && durationMs > 0) {
       setTimeout(() => {
         setActionFeedback((current) => (current?.message === message ? null : current));
       }, durationMs);
     }
   }, []);
+
+  const saveTabToDb = useCallback(
+    (tab: { id: string; title: string; lines: string[]; isRunning: boolean; exitCode?: number }) => {
+      invoke('save_console_session', {
+        id: tab.id,
+        title: tab.title,
+        lines: tab.lines,
+        isRunning: tab.isRunning,
+        exitCode: tab.exitCode ?? null,
+      }).catch((e) => console.warn('Failed to save console session to DB:', e));
+    },
+    []
+  );
 
   // Keep ref to current apps to update granular sub-properties without full component tree thrashing
   const appsRef = useRef<DiscoveredApp[]>([]);
@@ -477,6 +591,7 @@ export const App: React.FC = () => {
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
     setIsDrawerOpen(true);
+    saveTabToDb(newTab);
 
     runStreamJob({
       jobId,
@@ -486,24 +601,14 @@ export const App: React.FC = () => {
       workingDir: app.workspacePath,
       lockType: 'LocalBackupIo',
       onLine: (line) => {
-        setTerminalTabs((prev) =>
-          prev.map((t) => (t.id === jobId ? { ...t, lines: [...t.lines, line] } : t))
-        );
+        appendTerminalLine(jobId, line);
       },
       onComplete: (exitCode) => {
-        setTerminalTabs((prev) =>
-          prev.map((t) => (t.id === jobId ? { ...t, isRunning: false, exitCode } : t))
-        );
+        finalizeTerminalJob(jobId, exitCode);
         refreshBackupLedger();
       },
       onError: (err) => {
-        setTerminalTabs((prev) =>
-          prev.map((t) =>
-            t.id === jobId
-              ? { ...t, isRunning: false, lines: [...t.lines, `[ERROR] Backup failed: ${err}`] }
-              : t
-          )
-        );
+        failTerminalJob(jobId, `Backup failed: ${err}`);
       },
     });
   };
@@ -519,6 +624,7 @@ export const App: React.FC = () => {
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
     setIsDrawerOpen(true);
+    saveTabToDb(newTab);
 
     runStreamJob({
       jobId,
@@ -537,24 +643,14 @@ export const App: React.FC = () => {
       workingDir: app.workspacePath,
       lockType: 'None',
       onLine: (line) => {
-        setTerminalTabs((prev) =>
-          prev.map((t) => (t.id === jobId ? { ...t, lines: [...t.lines, line] } : t))
-        );
+        appendTerminalLine(jobId, line);
       },
       onComplete: (exitCode) => {
-        setTerminalTabs((prev) =>
-          prev.map((t) => (t.id === jobId ? { ...t, isRunning: false, exitCode } : t))
-        );
+        finalizeTerminalJob(jobId, exitCode);
         refreshDevServers();
       },
       onError: (err) => {
-        setTerminalTabs((prev) =>
-          prev.map((t) =>
-            t.id === jobId
-              ? { ...t, isRunning: false, lines: [...t.lines, `[ERROR] Apply local failed: ${err}`] }
-              : t
-          )
-        );
+        failTerminalJob(jobId, `Apply local failed: ${err}`);
       },
     });
   };
@@ -573,6 +669,7 @@ export const App: React.FC = () => {
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
     setIsDrawerOpen(true);
+    saveTabToDb(newTab);
 
     runStreamJob({
       jobId,
@@ -591,25 +688,15 @@ export const App: React.FC = () => {
       workingDir: app.workspacePath,
       lockType: 'WshRemoteMutation',
       onLine: (line) => {
-        setTerminalTabs((prev) =>
-          prev.map((t) => (t.id === jobId ? { ...t, lines: [...t.lines, line] } : t))
-        );
+        appendTerminalLine(jobId, line);
       },
       onComplete: (exitCode) => {
-        setTerminalTabs((prev) =>
-          prev.map((t) => (t.id === jobId ? { ...t, isRunning: false, exitCode } : t))
-        );
+        finalizeTerminalJob(jobId, exitCode);
         syncFullTelemetry(false);
         refreshBackupLedger();
       },
       onError: (err) => {
-        setTerminalTabs((prev) =>
-          prev.map((t) =>
-            t.id === jobId
-              ? { ...t, isRunning: false, lines: [...t.lines, `[ERROR] Restore remote failed: ${err}`] }
-              : t
-          )
-        );
+        failTerminalJob(jobId, `Restore remote failed: ${err}`);
       },
     });
   };
@@ -641,6 +728,7 @@ export const App: React.FC = () => {
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
     setIsDrawerOpen(true);
+    saveTabToDb(newTab);
 
     runStreamJob({
       jobId,
@@ -650,24 +738,14 @@ export const App: React.FC = () => {
       workingDir: cmdSpec.workingDir,
       lockType: 'WshRemoteMutation',
       onLine: (line) => {
-        setTerminalTabs((prev) =>
-          prev.map((t) => (t.id === jobId ? { ...t, lines: [...t.lines, line] } : t))
-        );
+        appendTerminalLine(jobId, line);
       },
       onComplete: (exitCode) => {
-        setTerminalTabs((prev) =>
-          prev.map((t) => (t.id === jobId ? { ...t, isRunning: false, exitCode } : t))
-        );
+        finalizeTerminalJob(jobId, exitCode);
         refreshSslStatus();
       },
       onError: (err) => {
-        setTerminalTabs((prev) =>
-          prev.map((t) =>
-            t.id === jobId
-              ? { ...t, isRunning: false, lines: [...t.lines, `[ERROR] SSL renewal failed: ${err}`] }
-              : t
-          )
-        );
+        failTerminalJob(jobId, `SSL renewal failed: ${err}`);
       },
     });
   };
@@ -684,6 +762,7 @@ export const App: React.FC = () => {
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
     setIsDrawerOpen(true);
+    saveTabToDb(newTab);
 
     const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', './deploy-docker.ps1'];
     if (bump !== 'none') {
@@ -701,24 +780,14 @@ export const App: React.FC = () => {
       workingDir: app.workspacePath,
       lockType: 'WshRemoteMutation',
       onLine: (line) => {
-        setTerminalTabs((prev) =>
-          prev.map((t) => (t.id === jobId ? { ...t, lines: [...t.lines, line] } : t))
-        );
+        appendTerminalLine(jobId, line);
       },
       onComplete: (exitCode) => {
-        setTerminalTabs((prev) =>
-          prev.map((t) => (t.id === jobId ? { ...t, isRunning: false, exitCode } : t))
-        );
+        finalizeTerminalJob(jobId, exitCode);
         syncFullTelemetry(false);
       },
       onError: (err) => {
-        setTerminalTabs((prev) =>
-          prev.map((t) =>
-            t.id === jobId
-              ? { ...t, isRunning: false, lines: [...t.lines, `[ERROR] Deploy failed: ${err}`] }
-              : t
-          )
-        );
+        failTerminalJob(jobId, `Deploy failed: ${err}`);
       },
     });
   };
@@ -744,8 +813,61 @@ export const App: React.FC = () => {
     }
   };
 
+  // Helper to append a line to a terminal tab and schedule DB persistence
+  const appendTerminalLine = useCallback((jobId: string, line: string) => {
+    setTerminalTabs((prev) =>
+      prev.map((t) => {
+        if (t.id === jobId) {
+          const updated = { ...t, lines: [...t.lines, line] };
+          return updated;
+        }
+        return t;
+      })
+    );
+  }, []);
+
+  const finalizeTerminalJob = useCallback(
+    (jobId: string, exitCode: number) => {
+      setTerminalTabs((prev) =>
+        prev.map((t) => {
+          if (t.id === jobId) {
+            const updated = { ...t, isRunning: false, exitCode };
+            saveTabToDb(updated);
+            return updated;
+          }
+          return t;
+        })
+      );
+    },
+    [saveTabToDb]
+  );
+
+  const failTerminalJob = useCallback(
+    (jobId: string, errMsg: string) => {
+      setTerminalTabs((prev) =>
+        prev.map((t) => {
+          if (t.id === jobId) {
+            const updated = {
+              ...t,
+              isRunning: false,
+              lines: [...t.lines, `[ERROR] ${errMsg}`],
+              exitCode: -1,
+            };
+            saveTabToDb(updated);
+            return updated;
+          }
+          return t;
+        })
+      );
+    },
+    [saveTabToDb]
+  );
+
   const handleCloseTab = (id: string) => {
     setTerminalTabs((prev) => prev.filter((t) => t.id !== id));
+    invoke('delete_console_session', { id }).catch((e) =>
+      console.warn('Failed to delete console session from DB:', e)
+    );
     if (activeTerminalTabId === id) {
       const remaining = terminalTabs.filter((t) => t.id !== id);
       if (remaining.length > 0) {
@@ -758,7 +880,23 @@ export const App: React.FC = () => {
 
   const handleClearTab = (id: string) => {
     setTerminalTabs((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, lines: [] } : t))
+      prev.map((t) => {
+        if (t.id === id) {
+          const updated = { ...t, lines: [] };
+          saveTabToDb(updated);
+          return updated;
+        }
+        return t;
+      })
+    );
+  };
+
+  const handlePurgeAllTabs = () => {
+    setTerminalTabs([]);
+    setActiveTerminalTabId('');
+    setIsDrawerOpen(false);
+    invoke('delete_all_console_sessions').catch((e) =>
+      console.warn('Failed to purge all console sessions from DB:', e)
     );
   };
 
@@ -786,30 +924,6 @@ export const App: React.FC = () => {
           isSyncing={isManualSyncing}
           onRefresh={() => syncFullTelemetry(true)}
         />
-
-        {/* Global Action Feedback Notification Banner */}
-        {actionFeedback && (
-          <div
-            className={`px-4 py-2 text-xs font-mono flex items-center justify-between border-b transition-all ${
-              actionFeedback.type === 'pending'
-                ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800 animate-pulse'
-                : actionFeedback.type === 'error'
-                ? 'bg-rose-950/90 text-rose-300 border-rose-800'
-                : 'bg-emerald-900/60 text-emerald-200 border-emerald-700'
-            }`}
-          >
-            <div className="flex items-center space-x-2">
-              <span className="w-2 h-2 rounded-full bg-current animate-ping" />
-              <span>{actionFeedback.message}</span>
-            </div>
-            <button
-              onClick={() => setActionFeedback(null)}
-              className="text-slate-400 hover:text-white text-xs px-1"
-            >
-              ×
-            </button>
-          </div>
-        )}
 
         <div className="flex-1 overflow-y-auto">
           {activeTab === 'hud' && (
@@ -855,6 +969,7 @@ export const App: React.FC = () => {
                 setTerminalTabs((prev) => [...prev, newTab]);
                 setActiveTerminalTabId(jobId);
                 setIsDrawerOpen(true);
+                saveTabToDb(newTab);
 
                 runStreamJob({
                   jobId,
@@ -863,24 +978,14 @@ export const App: React.FC = () => {
                   args,
                   lockType: 'None',
                   onLine: (line) => {
-                    setTerminalTabs((prev) =>
-                      prev.map((t) => (t.id === jobId ? { ...t, lines: [...t.lines, line] } : t))
-                    );
+                    appendTerminalLine(jobId, line);
                   },
                   onComplete: (exitCode) => {
-                    setTerminalTabs((prev) =>
-                      prev.map((t) => (t.id === jobId ? { ...t, isRunning: false, exitCode } : t))
-                    );
+                    finalizeTerminalJob(jobId, exitCode);
                     refreshWshTelemetry();
                   },
                   onError: (err) => {
-                    setTerminalTabs((prev) =>
-                      prev.map((t) =>
-                        t.id === jobId
-                          ? { ...t, isRunning: false, lines: [...t.lines, `[ERROR] Execution failed: ${err}`] }
-                          : t
-                      )
-                    );
+                    failTerminalJob(jobId, `Execution failed: ${err}`);
                   },
                 });
               }}
@@ -890,6 +995,7 @@ export const App: React.FC = () => {
           {activeTab === 'releases' && (
             <ReleasePipelineView
               apps={apps}
+              terminalTabs={terminalTabs}
               onTriggerDeploy={executeAppDeploy}
               onTriggerDeployAll={handleDeployAllApps}
               onTriggerRollback={(app, tag) => {
@@ -903,6 +1009,7 @@ export const App: React.FC = () => {
                 setTerminalTabs((prev) => [...prev, newTab]);
                 setActiveTerminalTabId(jobId);
                 setIsDrawerOpen(true);
+                saveTabToDb(newTab);
 
                 runStreamJob({
                   jobId,
@@ -912,24 +1019,14 @@ export const App: React.FC = () => {
                   workingDir: app.workspacePath,
                   lockType: 'WshRemoteMutation',
                   onLine: (line) => {
-                    setTerminalTabs((prev) =>
-                      prev.map((t) => (t.id === jobId ? { ...t, lines: [...t.lines, line] } : t))
-                    );
+                    appendTerminalLine(jobId, line);
                   },
                   onComplete: (exitCode) => {
-                    setTerminalTabs((prev) =>
-                      prev.map((t) => (t.id === jobId ? { ...t, isRunning: false, exitCode } : t))
-                    );
+                    finalizeTerminalJob(jobId, exitCode);
                     syncFullTelemetry(false);
                   },
                   onError: (err) => {
-                    setTerminalTabs((prev) =>
-                      prev.map((t) =>
-                        t.id === jobId
-                          ? { ...t, isRunning: false, lines: [...t.lines, `[ERROR] Rollback failed: ${err}`] }
-                          : t
-                      )
-                    );
+                    failTerminalJob(jobId, `Rollback failed: ${err}`);
                   },
                 });
               }}
@@ -953,6 +1050,7 @@ export const App: React.FC = () => {
                 setTerminalTabs((prev) => [...prev, newTab]);
                 setActiveTerminalTabId(jobId);
                 setIsDrawerOpen(true);
+                saveTabToDb(newTab);
 
                 runStreamJob({
                   jobId,
@@ -968,24 +1066,14 @@ export const App: React.FC = () => {
                   ],
                   lockType: 'LocalBackupIo',
                   onLine: (line) => {
-                    setTerminalTabs((prev) =>
-                      prev.map((t) => (t.id === jobId ? { ...t, lines: [...t.lines, line] } : t))
-                    );
+                    appendTerminalLine(jobId, line);
                   },
                   onComplete: (exitCode) => {
-                    setTerminalTabs((prev) =>
-                      prev.map((t) => (t.id === jobId ? { ...t, isRunning: false, exitCode } : t))
-                    );
+                    finalizeTerminalJob(jobId, exitCode);
                     refreshBackupLedger();
                   },
                   onError: (err) => {
-                    setTerminalTabs((prev) =>
-                      prev.map((t) =>
-                        t.id === jobId
-                          ? { ...t, isRunning: false, lines: [...t.lines, `[ERROR] GFS backup failed: ${err}`] }
-                          : t
-                      )
-                    );
+                    failTerminalJob(jobId, `GFS backup failed: ${err}`);
                   },
                 });
               }}
@@ -1021,8 +1109,8 @@ export const App: React.FC = () => {
             )}
         </div>
 
-        {/* Global SRE Terminal Drawer for Streaming Process Operations */}
-        <SreTerminalDrawer
+        {/* Global SRE Unified Console & Events Panel (Flush to bottom-0, zero gap) */}
+        <SreEventsConsolePanel
           isOpen={isDrawerOpen}
           onClose={() => setIsDrawerOpen(false)}
           tabs={terminalTabs}
@@ -1030,7 +1118,13 @@ export const App: React.FC = () => {
           onSelectTab={setActiveTerminalTabId}
           onCloseTab={handleCloseTab}
           onClearTab={handleClearTab}
+          onPurgeAllTabs={handlePurgeAllTabs}
           onAbortJob={handleAbortJob}
+          actionFeedback={actionFeedback}
+          eventsHistory={eventsHistory}
+          onClearEvents={() => setEventsHistory([])}
+          runningJobsCount={terminalTabs.filter((t) => t.isRunning).length}
+          onToggleDrawer={() => setIsDrawerOpen((prev) => !prev)}
         />
       </main>
     </div>

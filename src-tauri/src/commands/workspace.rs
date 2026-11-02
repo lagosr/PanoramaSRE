@@ -2,6 +2,18 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+#[tauri::command]
+pub async fn exit_app_completely(
+    app: tauri::AppHandle,
+    dev_supervisor: tauri::State<'_, std::sync::Arc<crate::dev_supervisor::DevSupervisor>>,
+    job_manager: tauri::State<'_, std::sync::Arc<crate::job_manager::JobManager>>,
+) -> Result<(), String> {
+    dev_supervisor.stop_all();
+    job_manager.abort_all().await;
+    app.exit(0);
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppManifestDto {
     pub schema_version: Option<i32>,

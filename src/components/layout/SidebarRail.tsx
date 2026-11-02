@@ -47,7 +47,7 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
   ];
 
   return (
-    <aside className="w-16 md:w-56 bg-slate-950 border-r border-slate-800 flex flex-col justify-between select-none">
+    <aside className="w-16 md:w-64 bg-slate-950 border-r border-slate-800 flex flex-col justify-between select-none shrink-0">
       <div>
         {/* App Title / Header */}
         <div className="h-14 flex items-center px-4 border-b border-slate-800 space-x-3">
@@ -79,10 +79,16 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
                 title={item.label}
               >
                 <Icon className={`w-5 h-5 shrink-0 transition-colors ${isActive ? 'text-emerald-400' : 'text-slate-400 group-hover:text-slate-200'}`} />
-                <span className="ml-3 hidden md:inline truncate">{item.label}</span>
+                <span className="ml-3 hidden md:inline whitespace-nowrap">{item.label}</span>
 
                 {item.badge !== undefined && item.badge > 0 && (
-                  <span className={`hidden md:flex ml-auto text-[10px] px-1.5 py-0.5 rounded-full text-white font-bold shrink-0 ${item.badgeColor || 'bg-slate-700'}`}>
+                  <span className={`hidden md:inline-flex items-center justify-center ml-auto px-2 py-0.5 rounded-full text-[11px] font-mono font-semibold shrink-0 ${
+                    item.id === 'local-dev'
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                      : item.id === 'hud'
+                      ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                      : (item.badgeColor || 'bg-slate-700 text-white')
+                  }`}>
                     {item.badge}
                   </span>
                 )}
@@ -90,33 +96,6 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
             );
           })}
         </nav>
-      </div>
-
-      {/* Footer Host Indicator & Version Stamp */}
-      <div className="p-3 border-t border-slate-800 hidden md:block space-y-2">
-        <div className="bg-slate-900/60 border border-slate-800 rounded-lg p-2.5">
-          <div className="flex items-center space-x-2">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-            <span className="text-xs font-mono text-slate-300 truncate">wsh.panoramadr.com</span>
-          </div>
-          <p className="text-[10px] text-slate-500 mt-0.5">LAN Direct (Split-DNS)</p>
-        </div>
-
-        {/* Version Badge Widget */}
-        <div className="flex flex-col space-y-1 px-1 text-[11px] font-mono text-slate-400">
-          <div className="flex items-center justify-between">
-            <span className="text-slate-400">Version</span>
-            <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-              v{APP_VERSION_INFO.version}
-            </span>
-          </div>
-          <div className="flex items-center justify-between text-[10px] text-slate-500">
-            <span>Build</span>
-            <span className="font-mono text-slate-400" title={`Commit: ${APP_VERSION_INFO.buildHash}`}>
-              {APP_VERSION_INFO.buildStamp}
-            </span>
-          </div>
-        </div>
       </div>
     </aside>
   );

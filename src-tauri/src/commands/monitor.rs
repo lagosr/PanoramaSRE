@@ -15,15 +15,15 @@ pub enum NetworkPosture {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReleaseInfo {
-    pub release_id: String,
-    pub semver: String,
-    pub image_tag: String,
-    pub commit_sha: String,
-    pub commit_short: String,
-    pub commit_subject: String,
-    pub branch: String,
-    pub dirty: bool,
-    pub deployed_at: String,
+    pub release_id: Option<String>,
+    pub semver: Option<String>,
+    pub image_tag: Option<String>,
+    pub commit_sha: Option<String>,
+    pub commit_short: Option<String>,
+    pub commit_subject: Option<String>,
+    pub branch: Option<String>,
+    pub dirty: Option<bool>,
+    pub deployed_at: Option<String>,
     pub deps_lock_sha256: Option<String>,
 }
 
@@ -34,7 +34,7 @@ pub struct AppHealthResponse {
     pub deployed_at: Option<String>,
     pub database: Option<String>,
     pub timestamp: Option<String>,
-    pub release: Option<ReleaseInfo>,
+    pub release: Option<serde_json::Value>,
     pub metrics: Option<HashMap<String, serde_json::Value>>,
 }
 

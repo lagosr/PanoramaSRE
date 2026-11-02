@@ -83,7 +83,12 @@ pub fn run() {
             read_backup_ledger,
             get_ssl_fleet_status,
             get_system_logs,
-            clear_system_logs
+            clear_system_logs,
+            save_console_session,
+            get_saved_console_sessions,
+            delete_console_session,
+            delete_all_console_sessions,
+            exit_app_completely
         ])
         .setup(move |app| {
             // Setup System Tray
@@ -96,16 +101,11 @@ pub fn run() {
 
             // Window close-to-tray handler per ADR-01
             if let Some(window) = app.get_webview_window("main") {
-                let window_clone = window.clone();
                 let jm = Arc::clone(&job_manager_clone);
                 let ds = Arc::clone(&dev_supervisor_clone);
 
                 window.on_window_event(move |event| {
                     match event {
-                        tauri::WindowEvent::CloseRequested { api, .. } => {
-                            api.prevent_close();
-                            let _ = window_clone.hide();
-                        }
                         tauri::WindowEvent::Destroyed => {
                             ds.stop_all();
                             let jm_task = Arc::clone(&jm);

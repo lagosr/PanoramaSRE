@@ -73,8 +73,85 @@ impl SreDatabase {
                 started_at TEXT NOT NULL,
                 completed_at TEXT,
                 log_path TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS console_sessions (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                lines_json TEXT NOT NULL,
+                is_running INTEGER NOT NULL DEFAULT 0,
+                exit_code INTEGER,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );"
         )?;
+
+        // Auto-purge console sessions and system logs older than 28 days
+        self.purge_old_entries(28).ok();
+
+        Ok(())
+    }
+
+    pub fn purge_old_entries(&self, days: i64) -> Result<()> {
+        let modifier = format!("-{} days", days);
+        self.conn.execute(
+            "DELETE FROM console_sessions WHERE created_at < datetime('now', ?1)",
+            params![modifier],
+        )?;
+        self.conn.execute(
+            "DELETE FROM system_logs WHERE created_at < datetime('now', ?1)",
+            params![modifier],
+        )?;
+        Ok(())
+    }
+
+    pub fn save_console_session(&self, id: &str, title: &str, lines: &[String], is_running: bool, exit_code: Option<i32>) -> Result<()> {
+        let lines_json = serde_json::to_string(lines).unwrap_or_else(|_| "[]".to_string());
+        self.conn.execute(
+            "INSERT INTO console_sessions (id, title, lines_json, is_running, exit_code, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP)
+             ON CONFLICT(id) DO UPDATE SET
+                title = excluded.title,
+                lines_json = excluded.lines_json,
+                is_running = excluded.is_running,
+                exit_code = excluded.exit_code,
+                updated_at = CURRENT_TIMESTAMP",
+            params![id, title, lines_json, if is_running { 1 } else { 0 }, exit_code],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_saved_console_sessions(&self) -> Result<Vec<(String, String, Vec<String>, bool, Option<i32>)>> {
+        // Auto-purge > 28 days first
+        let _ = self.purge_old_entries(28);
+
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, lines_json, is_running, exit_code FROM console_sessions ORDER BY datetime(created_at) ASC"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let id: String = row.get(0)?;
+            let title: String = row.get(1)?;
+            let lines_raw: String = row.get(2)?;
+            let is_running_int: i32 = row.get(3)?;
+            let exit_code: Option<i32> = row.get(4)?;
+            let lines: Vec<String> = serde_json::from_str(&lines_raw).unwrap_or_default();
+            Ok((id, title, lines, is_running_int == 1, exit_code))
+        })?;
+
+        let mut res = Vec::new();
+        for r in rows {
+            res.push(r?);
+        }
+        Ok(res)
+    }
+
+    pub fn delete_console_session(&self, id: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM console_sessions WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn delete_all_console_sessions(&self) -> Result<()> {
+        self.conn.execute("DELETE FROM console_sessions", [])?;
         Ok(())
     }
 
