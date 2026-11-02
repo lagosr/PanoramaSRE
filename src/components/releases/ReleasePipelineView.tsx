@@ -17,7 +17,8 @@ import {
   ArrowRight,
   Loader2,
   Container,
-  Check
+  Check,
+  Square
 } from 'lucide-react';
 import { ConfirmDangerModal } from '../ui/ConfirmDangerModal';
 import { formatLocalDateTime, formatRelativeTime } from '../../lib/formatters';
@@ -29,6 +30,8 @@ interface ReleasePipelineViewProps {
   onTriggerDeploy: (app: DiscoveredApp, bump: string, allowDirty: boolean) => void;
   onTriggerDeployAll: (apps: DiscoveredApp[], bump: string, allowDirty: boolean) => void;
   onTriggerRollback: (app: DiscoveredApp, tag: string) => void;
+  isDeployingAll?: boolean;
+  onHaltDeployments?: () => void;
 }
 
 export function ReleasePipelineView({
@@ -37,6 +40,8 @@ export function ReleasePipelineView({
   onTriggerDeploy,
   onTriggerDeployAll,
   onTriggerRollback,
+  isDeployingAll = false,
+  onHaltDeployments,
 }: ReleasePipelineViewProps) {
   const [selectedAppSlug, setSelectedAppSlug] = useState<string>(apps[0]?.manifest.slug || '');
   const [bumpVersion, setBumpVersion] = useState<string>('none');
@@ -142,13 +147,26 @@ export function ReleasePipelineView({
           </p>
         </div>
 
-        <button
-          onClick={() => setShowDeployAllModal(true)}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg transition-all"
-        >
-          <Layers className="w-4 h-4" />
-          <span>Deploy All Suite Apps ({apps.length})</span>
-        </button>
+        <div className="flex items-center gap-2">
+          {isDeployingAll && onHaltDeployments ? (
+            <button
+              onClick={onHaltDeployments}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white shadow-lg transition-all animate-pulse"
+              title="Immediately halt suite deployments and abort any running deployment job"
+            >
+              <Square className="w-3.5 h-3.5 fill-current" />
+              <span>Halt All Deployments</span>
+            </button>
+          ) : (
+            <button
+              onClick={() => setShowDeployAllModal(true)}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg transition-all"
+            >
+              <Layers className="w-4 h-4" />
+              <span>Deploy All Suite Apps ({apps.length})</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Suite Release Status & Drift Overview Dashboard */}

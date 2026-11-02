@@ -51,6 +51,9 @@ export const App: React.FC = () => {
   const [terminalTabs, setTerminalTabs] = useState<TerminalTab[]>([]);
   const [activeTerminalTabId, setActiveTerminalTabId] = useState<string>('');
   const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(false);
+  const [isDeployingAll, setIsDeployingAll] = useState<boolean>(false);
+  const haltDeploymentsRef = useRef<boolean>(false);
+  const currentRunningDeployJobIdRef = useRef<string | null>(null);
 
   // Load saved console sessions from SQLite database on mount
   useEffect(() => {
@@ -794,8 +797,9 @@ export const App: React.FC = () => {
   };
 
   // Deployment Execution Helpers
-  const executeAppDeploy = (app: DiscoveredApp, bump: string, allowDirty: boolean): Promise<any> => {
+  const executeAppDeploy = (app: DiscoveredApp, bump: string, allowDirty: boolean): Promise<number> => {
     const jobId = `deploy-${app.manifest.slug}-${Date.now()}`;
+    currentRunningDeployJobIdRef.current = jobId;
     const newTab: TerminalTab = {
       id: jobId,
       title: `Deploy: ${app.manifest.displayName}`,
@@ -826,27 +830,100 @@ export const App: React.FC = () => {
         appendTerminalLine(jobId, line);
       },
       onComplete: (exitCode) => {
+        if (currentRunningDeployJobIdRef.current === jobId) {
+          currentRunningDeployJobIdRef.current = null;
+        }
         finalizeTerminalJob(jobId, exitCode);
         syncFullTelemetry(false);
       },
       onError: (err) => {
+        if (currentRunningDeployJobIdRef.current === jobId) {
+          currentRunningDeployJobIdRef.current = null;
+        }
         failTerminalJob(jobId, `Deploy failed: ${err}`);
       },
     });
   };
 
   const handleDeployAllApps = async (appsToDeploy: DiscoveredApp[], bump: string, allowDirty: boolean) => {
-    // 1. Deploy PanoramaAuth first if present (IdP must always lead)
-    const authApp = appsToDeploy.find((a) => a.manifest.slug === 'auth');
-    if (authApp) {
-      await executeAppDeploy(authApp, bump, allowDirty);
-    }
+    setIsDeployingAll(true);
+    haltDeploymentsRef.current = false;
 
-    // 2. Deploy remaining child applications sequentially through the FIFO runner
-    const childApps = appsToDeploy.filter((a) => a.manifest.slug !== 'auth');
-    for (const app of childApps) {
-      await executeAppDeploy(app, bump, allowDirty);
+    try {
+      // 1. Order applications: PanoramaAuth (IdP) MUST lead if present
+      const sortedApps = [
+        ...appsToDeploy.filter((a) => a.manifest.slug === 'auth'),
+        ...appsToDeploy.filter((a) => a.manifest.slug !== 'auth'),
+      ];
+
+      for (let i = 0; i < sortedApps.length; i++) {
+        // Check if user clicked Halt
+        if (haltDeploymentsRef.current) {
+          const remainingNames = sortedApps.slice(i).map((a) => a.manifest.displayName).join(', ');
+          setActionFeedback({
+            message: `Deployments halted by user. Cancelled remaining: ${remainingNames}`,
+            type: 'error',
+          });
+          break;
+        }
+
+        const app = sortedApps[i];
+        let exitCode: number = -1;
+        try {
+          exitCode = await executeAppDeploy(app, bump, allowDirty);
+        } catch (err: any) {
+          exitCode = -1;
+        }
+
+        // Check if deployment failed (exit code != 0)
+        if (exitCode !== 0) {
+          const failedApp = app.manifest.displayName;
+          const remaining = sortedApps.slice(i + 1);
+          if (remaining.length > 0) {
+            const skippedNames = remaining.map((a) => a.manifest.displayName).join(', ');
+            setActionFeedback({
+              message: `Deployment of ${failedApp} failed (exit code ${exitCode}). Immediately halted ${remaining.length} remaining deployments: ${skippedNames}`,
+              type: 'error',
+            });
+            // Append explicit safety notification to active console
+            if (activeTerminalTabId) {
+              appendTerminalLine(
+                activeTerminalTabId,
+                `\n[CRITICAL SAFETY GATE] Deployment failed for ${failedApp}. Automatically halted remaining pending deployments: ${skippedNames}.\n`
+              );
+            }
+          } else {
+            setActionFeedback({
+              message: `Deployment of ${failedApp} failed (exit code ${exitCode}).`,
+              type: 'error',
+            });
+          }
+          break; // Hard stop all further deployments
+        }
+      }
+    } finally {
+      setIsDeployingAll(false);
+      haltDeploymentsRef.current = false;
+      currentRunningDeployJobIdRef.current = null;
     }
+  };
+
+  const handleHaltDeployments = async () => {
+    haltDeploymentsRef.current = true;
+    const activeJobId = currentRunningDeployJobIdRef.current;
+    if (activeJobId) {
+      try {
+        await invoke('abort_process', { jobId: activeJobId });
+        appendTerminalLine(activeJobId, '\n[PanoramaSRE] Deployment aborted by user request.\n');
+      } catch (err) {
+        console.error('Failed to abort running deploy job:', err);
+      }
+    }
+    setIsDeployingAll(false);
+    setActionFeedback({
+      message: 'Suite deployments successfully halted.',
+      type: 'error',
+    });
   };
   const handleAbortJob = async (id: string) => {
     try {
@@ -1042,6 +1119,8 @@ export const App: React.FC = () => {
               terminalTabs={terminalTabs}
               onTriggerDeploy={executeAppDeploy}
               onTriggerDeployAll={handleDeployAllApps}
+              isDeployingAll={isDeployingAll}
+              onHaltDeployments={handleHaltDeployments}
               onTriggerRollback={(app, tag) => {
                 const jobId = `rollback-${app.manifest.slug}-${Date.now()}`;
                 const newTab: TerminalTab = {
