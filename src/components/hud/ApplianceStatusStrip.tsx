@@ -19,7 +19,7 @@ export function ApplianceStatusStrip({ appliances, sslFleet }: ApplianceStatusSt
         </span>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 w-full min-w-0">
         {appliances.map((appliance) => {
           const isOnline = appliance.status === 'ONLINE';
           const sslItem = sslFleet?.items.find(

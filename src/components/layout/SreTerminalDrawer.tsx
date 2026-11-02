@@ -8,7 +8,9 @@ import {
   StopCircle, 
   Loader2, 
   CheckCircle2, 
-  AlertCircle 
+  AlertCircle,
+  Copy,
+  Check 
 } from 'lucide-react';
 import { formatConsoleLine } from './ConsoleColorizer';
 
@@ -49,6 +51,7 @@ export const SreTerminalDrawer: React.FC<SreTerminalDrawerProps> = ({
   actionFeedback,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
+  const [copiedState, setCopiedState] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
@@ -132,6 +135,34 @@ export const SreTerminalDrawer: React.FC<SreTerminalDrawerProps> = ({
 
         {/* Window controls */}
         <div className="flex items-center space-x-1.5 shrink-0">
+          {activeTab && activeTab.lines.length > 0 && (
+            <button
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(activeTab.lines.join('\n'));
+                  setCopiedState(true);
+                  setTimeout(() => setCopiedState(false), 2000);
+                } catch (err) {
+                  console.warn('Failed to copy console lines:', err);
+                }
+              }}
+              className="flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-mono bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors"
+              title="Copy all output from current tab to clipboard"
+            >
+              {copiedState ? (
+                <>
+                  <Check className="w-3 h-3 text-emerald-400" />
+                  <span className="text-emerald-400">Copied!</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3 h-3 text-slate-400" />
+                  <span>Copy</span>
+                </>
+              )}
+            </button>
+          )}
+
           {activeTab?.isRunning && (
             <button
               onClick={() => onAbortJob(activeTab.id)}

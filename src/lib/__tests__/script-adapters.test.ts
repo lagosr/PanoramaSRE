@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildDeployCommand, buildDbManagerCommand, buildSslCertCommand } from '../script-adapters';
+import { buildDeployCommand, buildDbManagerCommand, buildSslCertCommand, buildCloudflareTunnelCommand } from '../script-adapters';
 
 describe('script-adapters CLI builders', () => {
   it('correctly constructs deploy-docker arguments with test and allowDirty flags', () => {
@@ -44,5 +44,21 @@ describe('script-adapters CLI builders', () => {
     expect(cmd.args).toContain('-Unattended');
     expect(cmd.args).toContain('-ForceRenewal');
     expect(cmd.args).toContain('WebServicesHost,Genmon');
+  });
+
+  it('correctly constructs deploy-cloudflare-tunnel arguments', () => {
+    const checkCmd = buildCloudflareTunnelCommand('C:\\AG Projects\\PanoramaDrSuite\\tools', 'check_update');
+    expect(checkCmd.command).toBe('powershell.exe');
+    expect(checkCmd.args).toContain('-CheckUpdate');
+    expect(checkCmd.lockType).toBe('None');
+
+    const updateCmd = buildCloudflareTunnelCommand('C:\\AG Projects\\PanoramaDrSuite\\tools', 'update');
+    expect(updateCmd.args).toContain('-Update');
+    expect(updateCmd.lockType).toBe('WshRemoteMutation');
+
+    const forceCmd = buildCloudflareTunnelCommand('C:\\AG Projects\\PanoramaDrSuite\\tools', 'update_force');
+    expect(forceCmd.args).toContain('-Update');
+    expect(forceCmd.args).toContain('-Force');
+    expect(forceCmd.lockType).toBe('WshRemoteMutation');
   });
 });

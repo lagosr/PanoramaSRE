@@ -26,7 +26,7 @@ import {
   BackupLedgerSummary,
   SslFleetSummary,
 } from './lib/types';
-import { buildSslCertCommand } from './lib/script-adapters';
+import { buildSslCertCommand, buildCloudflareTunnelCommand } from './lib/script-adapters';
 
 const DEFAULT_APPLIANCES = [
   { key: 'ui', name: 'UniFi CloudKey', host: 'ui.panoramadr.com' },
@@ -751,6 +751,48 @@ export const App: React.FC = () => {
     });
   };
 
+  // Cloudflare Tunnel Management via deploy-cloudflare-tunnel.ps1
+  const handleTriggerTunnelAction = (action: 'status' | 'check_update' | 'update' | 'update_force') => {
+    const suiteToolsPath = 'C:\\Users\\rodrigo\\Documents\\AG Projects\\PanoramaDrSuite\\tools';
+    const cmdSpec = buildCloudflareTunnelCommand(suiteToolsPath, action);
+    const jobId = `cf-tunnel-${action}-${Date.now()}`;
+    const title = action === 'update' || action === 'update_force'
+      ? 'Update Cloudflare Tunnel'
+      : action === 'check_update'
+      ? 'Check Tunnel Updates'
+      : 'Cloudflare Tunnel Status';
+
+    const newTab: TerminalTab = {
+      id: jobId,
+      title,
+      lines: [`[PanoramaSRE] Invoking deploy-cloudflare-tunnel.ps1 -${action}...`],
+      isRunning: true,
+    };
+    setTerminalTabs((prev) => [...prev, newTab]);
+    setActiveTerminalTabId(jobId);
+    setIsDrawerOpen(true);
+    saveTabToDb(newTab);
+
+    runStreamJob({
+      jobId,
+      label: title,
+      command: cmdSpec.command,
+      args: cmdSpec.args,
+      workingDir: cmdSpec.workingDir,
+      lockType: cmdSpec.lockType,
+      onLine: (line) => {
+        appendTerminalLine(jobId, line);
+      },
+      onComplete: (exitCode) => {
+        finalizeTerminalJob(jobId, exitCode);
+        syncFullTelemetry(false);
+      },
+      onError: (err) => {
+        failTerminalJob(jobId, `Cloudflare Tunnel execution failed: ${err}`);
+      },
+    });
+  };
+
   // Deployment Execution Helpers
   const executeAppDeploy = (app: DiscoveredApp, bump: string, allowDirty: boolean): Promise<any> => {
     const jobId = `deploy-${app.manifest.slug}-${Date.now()}`;
@@ -1092,6 +1134,7 @@ export const App: React.FC = () => {
               isLoadingSsl={isLoadingSsl}
               onRefreshSsl={refreshSslStatus}
               onTriggerRenewal={handleTriggerSslRenewal}
+              onTriggerTunnelAction={handleTriggerTunnelAction}
             />
           )}
 

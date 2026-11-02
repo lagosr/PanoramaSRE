@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener';
 import { BackupLedgerSummary, BackupRecord, DiscoveredApp, LocalBackupArchive } from '../../lib/types';
 import { CustomSelect } from '../ui/CustomSelect';
 import { ConfirmDangerModal } from '../ui/ConfirmDangerModal';
@@ -17,8 +18,9 @@ import {
   DownloadCloud, 
   Server, 
   Laptop, 
-  FileArchive, 
-  Activity 
+  Activity,
+  FolderOpen,
+  ExternalLink
 } from 'lucide-react';
 
 interface BackupsRecoveryViewProps {
@@ -150,9 +152,23 @@ export function BackupsRecoveryView({
           <p className="text-xl font-bold text-slate-900 dark:text-slate-100 mt-1 font-mono">
             {ledger?.total_runs || 0}
           </p>
-          <p className="text-[11px] text-slate-400 mt-0.5 truncate font-mono">
-            {ledger?.ledger_source_path ? ledger.ledger_source_path.split('\\').pop() : 'backup_history.json'}
-          </p>
+          <button
+            onClick={async () => {
+              if (ledger?.ledger_source_path) {
+                try {
+                  await revealItemInDir(ledger.ledger_source_path);
+                } catch (err) {
+                  console.warn('Failed to reveal ledger file:', err);
+                }
+              }
+            }}
+            disabled={!ledger?.ledger_source_path}
+            className="text-[11px] text-slate-400 mt-0.5 truncate font-mono hover:text-emerald-400 hover:underline cursor-pointer flex items-center gap-1 text-left w-full disabled:cursor-default disabled:hover:no-underline"
+            title={`Click to reveal ledger in folder: ${ledger?.ledger_source_path || ''}`}
+          >
+            <span className="truncate">{ledger?.ledger_source_path ? ledger.ledger_source_path.split('\\').pop() : 'backup_history.json'}</span>
+            <ExternalLink className="w-2.5 h-2.5 shrink-0 text-slate-500" />
+          </button>
         </div>
 
         <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm">
@@ -224,11 +240,32 @@ export function BackupsRecoveryView({
 
         {/* Directory & Environment Banner */}
         <div className="flex flex-wrap items-center justify-between gap-3 text-xs bg-slate-50 dark:bg-slate-950/60 p-3 rounded-lg border border-slate-100 dark:border-slate-800/80 font-mono">
-          <div className="flex items-center gap-2 text-slate-400 truncate max-w-xl">
-            <FileArchive className="w-4 h-4 text-emerald-400 shrink-0" />
-            <span className="text-slate-300 font-semibold">Backup Directory:</span>
-            <span className="truncate">{backupDir || 'Resolving...'}</span>
-          </div>
+          <button
+            onClick={async () => {
+              if (backupDir) {
+                try {
+                  await invoke('open_in_file_manager', { path: backupDir });
+                } catch (invokeErr) {
+                  console.warn('Native open_in_file_manager failed, falling back to openPath:', invokeErr);
+                  try {
+                    await openPath(backupDir);
+                  } catch (err) {
+                    console.error('Failed to open backup directory:', err);
+                  }
+                }
+              }
+            }}
+            disabled={!backupDir}
+            className="flex items-center gap-2 text-slate-400 hover:text-emerald-400 transition-colors group cursor-pointer truncate max-w-xl text-left disabled:cursor-default"
+            title="Click to open directory in File Explorer"
+          >
+            <FolderOpen className="w-4 h-4 text-emerald-400 shrink-0 group-hover:scale-110 transition-transform" />
+            <span className="text-slate-300 font-semibold shrink-0">Backup Directory:</span>
+            <span className="truncate underline decoration-dotted decoration-slate-600 underline-offset-4 group-hover:decoration-emerald-400">
+              {backupDir || 'Resolving...'}
+            </span>
+            <ExternalLink className="w-3.5 h-3.5 text-slate-500 shrink-0 group-hover:text-emerald-400" />
+          </button>
           <div className="flex items-center gap-4 text-slate-400">
             <span>
               Local SQLite PRAGMA:{' '}
@@ -256,16 +293,16 @@ export function BackupsRecoveryView({
             No backup archives (.tar.gz) found for this application.
           </div>
         ) : (
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
             <table className="w-full text-left text-xs font-mono">
-              <thead>
-                <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-500">
-                  <th className="pb-2.5">Date of Backup</th>
-                  <th className="pb-2.5">Archive Filename</th>
-                  <th className="pb-2.5">Schema</th>
-                  <th className="pb-2.5">Size</th>
-                  <th className="pb-2.5">Verified Health</th>
-                  <th className="pb-2.5 text-right">Hydration Actions</th>
+              <thead className="bg-slate-50 dark:bg-slate-950/60 border-b border-slate-200 dark:border-slate-800 text-slate-500 text-[11px] uppercase tracking-wider">
+                <tr>
+                  <th className="py-2.5 px-3 font-semibold">Date of Backup</th>
+                  <th className="py-2.5 px-3 font-semibold">Archive Filename</th>
+                  <th className="py-2.5 px-3 font-semibold">Schema</th>
+                  <th className="py-2.5 px-3 font-semibold">Size</th>
+                  <th className="py-2.5 px-3 font-semibold">Verified Health</th>
+                  <th className="py-2.5 px-3 text-right font-semibold">Hydration Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -277,7 +314,7 @@ export function BackupsRecoveryView({
                   return (
                     <tr key={archive.file_name} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
                       {/* Date of Backup Column */}
-                      <td className="py-3 text-slate-200 font-semibold whitespace-nowrap">
+                      <td className="py-3 px-3 text-slate-200 font-semibold whitespace-nowrap">
                         <div className="flex items-center gap-1.5">
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
                           <span>{archive.date_str}</span>
@@ -287,13 +324,26 @@ export function BackupsRecoveryView({
                         </span>
                       </td>
 
-                      {/* Archive Filename */}
-                      <td className="py-3 text-slate-300 truncate max-w-xs" title={archive.full_path}>
-                        {archive.file_name}
+                      {/* Archive Filename with Reveal in Explorer */}
+                      <td className="py-3 px-3 text-slate-300 max-w-xs">
+                        <button
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            try {
+                              await revealItemInDir(archive.full_path);
+                            } catch (err) {
+                              console.warn('Failed to reveal archive file:', err);
+                            }
+                          }}
+                          className="truncate block hover:text-emerald-300 hover:underline cursor-pointer text-left w-full"
+                          title={`Click to reveal file in folder: ${archive.full_path}`}
+                        >
+                          {archive.file_name}
+                        </button>
                       </td>
 
                       {/* Schema Version */}
-                      <td className="py-3">
+                      <td className="py-3 px-3 whitespace-nowrap">
                         <span
                           className={`inline-block px-2 py-0.5 rounded text-[11px] font-semibold ${
                             isSchemaMismatch
@@ -306,10 +356,10 @@ export function BackupsRecoveryView({
                       </td>
 
                       {/* Size */}
-                      <td className="py-3 text-slate-400">{formatBytes(archive.size_bytes)}</td>
+                      <td className="py-3 px-3 text-slate-400 font-mono whitespace-nowrap">{formatBytes(archive.size_bytes)}</td>
 
                       {/* Health Snapshot */}
-                      <td className="py-3">
+                      <td className="py-3 px-3 whitespace-nowrap">
                         {health ? (
                           <div className="flex items-center gap-1.5">
                             <span

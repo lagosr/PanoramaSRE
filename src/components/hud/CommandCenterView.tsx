@@ -28,14 +28,14 @@ export function CommandCenterView({ apps, appliances, sslFleet, isLoading }: Com
   };
 
   return (
-    <div className="p-8 max-w-7xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 md:p-8 max-w-7xl mx-auto w-full min-w-0 space-y-6 overflow-hidden">
       {/* Home Lab Appliances Status Banner */}
       <ApplianceStatusStrip appliances={appliances} sslFleet={sslFleet} />
 
       {/* Fleet Overview Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100 truncate">
             Panorama Suite Applications
           </h2>
           <p className="text-sm text-slate-500 mt-0.5">
@@ -43,7 +43,7 @@ export function CommandCenterView({ apps, appliances, sslFleet, isLoading }: Com
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 shrink-0">
           <span className="text-xs font-mono text-slate-400">
             {apps.length} Applications Registered
           </span>
@@ -52,7 +52,7 @@ export function CommandCenterView({ apps, appliances, sslFleet, isLoading }: Com
 
       {/* Loading Skeleton or Cards Grid */}
       {isLoading && apps.length === 0 ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5 w-full min-w-0">
           {[1, 2, 3, 4, 5].map((i) => (
             <div
               key={i}
@@ -61,7 +61,7 @@ export function CommandCenterView({ apps, appliances, sslFleet, isLoading }: Com
           ))}
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5 w-full min-w-0">
           {apps.map((app) => (
             <FleetAppCard
               key={app.manifest.slug}

@@ -12,7 +12,9 @@ import {
   Bell,
   Clock,
   Radio,
-  ChevronDown
+  ChevronDown,
+  Copy,
+  Check
 } from 'lucide-react';
 import { formatConsoleLine } from './ConsoleColorizer';
 
@@ -69,6 +71,7 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const [activeMainSection, setActiveMainSection] = useState<'console' | 'events'>('console');
+  const [copiedState, setCopiedState] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
@@ -304,6 +307,34 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
           </div>
 
           <div className="flex items-center space-x-1.5 shrink-0 pl-2">
+            {activeTab && activeTab.lines.length > 0 && (
+              <button
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(activeTab.lines.join('\n'));
+                    setCopiedState(true);
+                    setTimeout(() => setCopiedState(false), 2000);
+                  } catch (err) {
+                    console.warn('Failed to copy console lines:', err);
+                  }
+                }}
+                className="flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-mono bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors"
+                title="Copy all output from current tab to clipboard"
+              >
+                {copiedState ? (
+                  <>
+                    <Check className="w-3 h-3 text-emerald-400" />
+                    <span className="text-emerald-400">Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3 h-3 text-slate-400" />
+                    <span>Copy</span>
+                  </>
+                )}
+              </button>
+            )}
+
             {activeTab?.isRunning && (
               <button
                 onClick={() => onAbortJob(activeTab.id)}

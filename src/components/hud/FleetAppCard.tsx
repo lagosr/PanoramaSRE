@@ -13,25 +13,25 @@ export function FleetAppCard({ app, onOpenApp, onInspectComposition }: FleetAppC
   const latency = app.latencyMs ?? 0;
 
   return (
-    <article className="flex flex-col justify-between rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm hover:border-slate-300 dark:hover:border-slate-700 transition-all">
-      <div>
+    <article className="flex flex-col justify-between rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm hover:border-slate-300 dark:hover:border-slate-700 transition-all w-full min-w-0 overflow-hidden">
+      <div className="min-w-0">
         {/* Card Header: Icon, Title, Status & Provenance */}
         <div className="flex items-start justify-between gap-3 mb-3">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 font-bold text-base">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 font-bold text-base shrink-0">
               {app.manifest.displayName.substring(0, 2).toUpperCase()}
             </div>
-            <div>
-              <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm">
+            <div className="min-w-0">
+              <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm truncate">
                 {app.manifest.displayName}
               </h3>
-              <p className="text-xs text-slate-500 font-mono">
+              <p className="text-xs text-slate-500 font-mono truncate">
                 Port {app.manifest.port} • {app.manifest.basePath}
               </p>
             </div>
           </div>
 
-          <div className="flex flex-col items-end gap-1.5">
+          <div className="flex flex-col items-end gap-1.5 shrink-0">
             <ProvenanceBadge
               state={app.provenanceState}
               aheadCount={app.composition?.ahead_count}
@@ -57,17 +57,17 @@ export function FleetAppCard({ app, onOpenApp, onInspectComposition }: FleetAppC
         </p>
 
         {/* Release & Live Deployment Telemetry */}
-        <div className="rounded-lg bg-slate-50 dark:bg-slate-950/60 border border-slate-100 dark:border-slate-800/80 p-3 mb-4 space-y-1.5 text-xs">
-          <div className="flex items-center justify-between">
-            <span className="text-slate-500">Live Release:</span>
-            <span className="font-mono text-slate-800 dark:text-slate-200">
+        <div className="rounded-lg bg-slate-50 dark:bg-slate-950/60 border border-slate-100 dark:border-slate-800/80 p-3 mb-4 space-y-1.5 text-xs min-w-0 overflow-hidden">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-slate-500 shrink-0">Live Release:</span>
+            <span className="font-mono text-slate-800 dark:text-slate-200 truncate text-right">
               {release ? release.release_id : app.health?.version ? `v${app.health.version} (Legacy)` : 'Unreachable'}
             </span>
           </div>
 
-          <div className="flex items-center justify-between">
-            <span className="text-slate-500">Local HEAD:</span>
-            <span className="font-mono text-slate-800 dark:text-slate-200">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-slate-500 shrink-0">Local HEAD:</span>
+            <span className="font-mono text-slate-800 dark:text-slate-200 truncate text-right">
               {app.composition ? `${app.composition.local_branch} @ ${app.composition.local_head_short}` : 'Scanning...'}
             </span>
           </div>

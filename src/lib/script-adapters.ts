@@ -97,3 +97,26 @@ export function buildSslCertCommand(
     workingDir: `${toolsPath}\\ssl-cert-manager`,
   };
 }
+
+export function buildCloudflareTunnelCommand(
+  toolsPath: string,
+  action: 'status' | 'check_update' | 'update' | 'update_force' | 'test'
+): ScriptActionExecution {
+  const scriptPath = `${toolsPath}\\cloudflare-tunnel\\deploy-cloudflare-tunnel.ps1`;
+  const args: string[] = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath];
+
+  if (action === 'status') args.push('-Status');
+  if (action === 'check_update') args.push('-CheckUpdate');
+  if (action === 'update') args.push('-Update');
+  if (action === 'update_force') args.push('-Update', '-Force');
+  if (action === 'test') args.push('-Test');
+
+  return {
+    scriptPath,
+    command: 'powershell.exe',
+    args,
+    lockType: action === 'update' || action === 'update_force' ? 'WshRemoteMutation' : 'None',
+    elevated: false,
+    workingDir: `${toolsPath}\\cloudflare-tunnel`,
+  };
+}

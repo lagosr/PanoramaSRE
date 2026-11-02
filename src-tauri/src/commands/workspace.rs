@@ -14,6 +14,36 @@ pub async fn exit_app_completely(
     Ok(())
 }
 
+#[tauri::command]
+pub fn open_in_file_manager(path: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if !p.exists() {
+        return Err(format!("Path does not exist: {}", path));
+    }
+
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        if p.is_dir() {
+            Command::new("explorer")
+                .arg(&path)
+                .spawn()
+                .map_err(|e| format!("Failed to open directory in Explorer: {}", e))?;
+        } else {
+            Command::new("explorer")
+                .arg(format!("/select,{}", path))
+                .spawn()
+                .map_err(|e| format!("Failed to reveal file in Explorer: {}", e))?;
+        }
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    {
+        Err("Unsupported operating system for file manager command".to_string())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppManifestDto {
     pub schema_version: Option<i32>,

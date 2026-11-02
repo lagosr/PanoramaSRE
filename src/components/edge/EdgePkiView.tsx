@@ -12,6 +12,8 @@ import {
   AlertTriangle,
   RotateCw,
   CheckCircle2,
+  Copy,
+  Check,
 } from 'lucide-react';
 
 interface EdgePkiViewProps {
@@ -26,6 +28,7 @@ interface EdgePkiViewProps {
     deployTargets?: string[];
     targetDevice?: string;
   }) => void;
+  onTriggerTunnelAction?: (action: 'status' | 'check_update' | 'update' | 'update_force') => void;
 }
 
 export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
@@ -34,8 +37,10 @@ export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
   isLoadingSsl = false,
   onRefreshSsl,
   onTriggerRenewal,
+  onTriggerTunnelAction,
 }) => {
   const [isForceModalOpen, setIsForceModalOpen] = useState(false);
+  const [copiedTunnelLogs, setCopiedTunnelLogs] = useState(false);
 
   const totalDomains = sslFleet?.total_domains ?? 5;
   const healthyCount = sslFleet?.healthy_count ?? 0;
@@ -200,8 +205,6 @@ export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
         const versionRaw = snapshot?.cloudflared?.version_raw || '';
         const versionMatch = versionRaw.match(/version\s+([0-9.]+)/i);
         const detectedVersion = versionMatch ? `v${versionMatch[1]}` : (versionRaw ? versionRaw : 'v2026.10.7');
-        const buildDateMatch = versionRaw.match(/built\s+([0-9-T: ]+(?:UTC)?)/i);
-        const buildInfo = buildDateMatch ? buildDateMatch[1] : '';
         const isUpToDate = !versionMatch || versionMatch[1] === '2026.10.7' || versionMatch[1] >= '2026.10.7';
         const tunnelLogs = (snapshot?.cloudflared?.recent_logs || '').trim();
         const logLines = tunnelLogs ? tunnelLogs.split('\n') : [];
@@ -216,7 +219,7 @@ export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
                     Cloudflare Zero Trust Tunnel
                   </h3>
                   <p className="text-xs text-slate-500 font-mono">
-                    {versionRaw || 'cloudflared daemon'} {buildInfo ? `• ${buildInfo}` : ''}
+                    {versionRaw || 'cloudflared daemon'}
                   </p>
                 </div>
               </div>
@@ -236,12 +239,69 @@ export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
                 <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
                   ACTIVE QUIC TUNNEL
                 </span>
+
+                {/* Automation actions backed by deploy-cloudflare-tunnel.ps1 */}
+                <div className="flex items-center gap-1.5 ml-1">
+                  <button
+                    onClick={() => onTriggerTunnelAction?.('check_update')}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors"
+                    title="Check upstream GitHub releases via deploy-cloudflare-tunnel.ps1 -CheckUpdate"
+                  >
+                    <RefreshCw className="w-3 h-3 text-sky-400" />
+                    Check Updates
+                  </button>
+                  <button
+                    onClick={() => onTriggerTunnelAction?.(isUpToDate ? 'update_force' : 'update')}
+                    className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
+                      isUpToDate
+                        ? 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700'
+                        : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm ring-1 ring-emerald-400'
+                    }`}
+                    title={
+                      isUpToDate
+                        ? 'Re-deploy and verify container via deploy-cloudflare-tunnel.ps1 -Update -Force'
+                        : 'Upgrade container to latest release via deploy-cloudflare-tunnel.ps1 -Update'
+                    }
+                  >
+                    <Cloud className="w-3 h-3" />
+                    {isUpToDate ? 'Re-Deploy Tunnel' : 'Update Tunnel Now'}
+                  </button>
+                </div>
               </div>
             </div>
 
             <div className="space-y-2">
               <div className="flex items-center justify-between text-xs font-mono text-slate-400">
-                <span>Recent Connection Logs:</span>
+                <div className="flex items-center gap-3">
+                  <span>Recent Connection Logs:</span>
+                  {logLines.length > 0 && (
+                    <button
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(logLines.join('\n'));
+                          setCopiedTunnelLogs(true);
+                          setTimeout(() => setCopiedTunnelLogs(false), 2000);
+                        } catch (err) {
+                          console.warn('Failed to copy tunnel logs:', err);
+                        }
+                      }}
+                      className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors"
+                      title="Copy all connection logs to clipboard"
+                    >
+                      {copiedTunnelLogs ? (
+                        <>
+                          <Check className="w-3 h-3 text-emerald-400" />
+                          <span className="text-emerald-400">Copied!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3 h-3 text-slate-400" />
+                          <span>Copy Logs</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
                 <span className="text-[11px] text-slate-500">
                   Upstream: <strong className="text-emerald-400">v2026.10.7</strong> (Verified latest upstream release)
                 </span>

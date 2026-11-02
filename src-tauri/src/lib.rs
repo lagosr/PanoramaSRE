@@ -88,6 +88,7 @@ pub fn run() {
             get_saved_console_sessions,
             delete_console_session,
             delete_all_console_sessions,
+            open_in_file_manager,
             exit_app_completely
         ])
         .setup(move |app| {
