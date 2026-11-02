@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Sliders, Shield, Terminal, Database, Check, RefreshCw } from 'lucide-react';
+import { Sliders, Shield, Terminal, Database, Check, RefreshCw, Info } from 'lucide-react';
 import { CustomSelect } from '../ui/CustomSelect';
+import { APP_VERSION_INFO } from '../../lib/version';
 
 type SettingsTab = 'general' | 'ssh' | 'logs' | 'database';
 
@@ -74,6 +75,37 @@ export const SettingsView: React.FC = () => {
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
         {activeTab === 'general' && (
           <div className="max-w-2xl space-y-6">
+            {/* Version & Build Provenance Card */}
+            <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-5 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <Info className="w-4 h-4 text-emerald-400" />
+                  <h3 className="text-sm font-semibold text-slate-200">PanoramaSRE Build Provenance</h3>
+                </div>
+                <span className="px-2 py-0.5 rounded text-xs font-mono font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                  {APP_VERSION_INFO.fullVersionString}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-800/80 font-mono text-xs">
+                <div>
+                  <span className="text-slate-500 block text-[11px]">Semantic Version:</span>
+                  <span className="text-slate-300 font-semibold">{APP_VERSION_INFO.version}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block text-[11px]">Git Commit SHA:</span>
+                  <span className="text-emerald-400 font-semibold">{APP_VERSION_INFO.buildHash}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block text-[11px]">Build Timestamp:</span>
+                  <span className="text-slate-300">{APP_VERSION_INFO.buildDate || 'Local Dev'}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block text-[11px]">Build Identifier:</span>
+                  <span className="text-slate-300">{APP_VERSION_INFO.buildNumber}</span>
+                </div>
+              </div>
+            </div>
+
             <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-5 space-y-4">
               <h3 className="text-sm font-semibold text-slate-200">System Tray & Window Lifecycle</h3>
               

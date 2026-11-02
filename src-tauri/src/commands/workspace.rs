@@ -82,6 +82,12 @@ pub fn discover_suite_apps(workspace_root: Option<String>) -> Result<Vec<Discove
                         let base_path = manifest_val["basePath"].as_str().unwrap_or("").to_string();
                         let port = manifest_val["port"].as_u64().unwrap_or(3000) as u16;
 
+                        // Exclude desktop control plane itself or non-web apps
+                        let app_id_str = manifest_val["appId"].as_str().unwrap_or(&slug);
+                        if slug == "sre" || app_id_str == "sre" {
+                            continue;
+                        }
+
                         if !slug.is_empty() {
                             let dto = AppManifestDto {
                                 schema_version: manifest_val["schemaVersion"].as_i64().map(|v| v as i32),

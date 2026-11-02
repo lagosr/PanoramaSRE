@@ -10,6 +10,7 @@ import {
   Settings as SettingsIcon,
   CircleDot
 } from 'lucide-react';
+import { APP_VERSION_INFO } from '../../lib/version';
 
 export type NavItem = 
   | 'hud'
@@ -55,7 +56,9 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
           </div>
           <div className="hidden md:block">
             <h1 className="text-sm font-bold tracking-tight text-slate-100">PanoramaSRE</h1>
-            <p className="text-[10px] text-slate-400 font-mono">Control Plane v1.0.0</p>
+            <p className="text-[10px] text-slate-400 font-mono" title={`Build: ${APP_VERSION_INFO.buildNumber}`}>
+              Control Plane {APP_VERSION_INFO.fullVersionString}
+            </p>
           </div>
         </div>
 
@@ -100,11 +103,19 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
         </div>
 
         {/* Version Badge Widget */}
-        <div className="flex items-center justify-between px-1 text-[11px] font-mono text-slate-400">
-          <span className="text-slate-400">Version</span>
-          <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-            v1.0.0
-          </span>
+        <div className="flex flex-col space-y-1 px-1 text-[11px] font-mono text-slate-400">
+          <div className="flex items-center justify-between">
+            <span className="text-slate-400">Version</span>
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+              v{APP_VERSION_INFO.version}
+            </span>
+          </div>
+          <div className="flex items-center justify-between text-[10px] text-slate-500">
+            <span>Build</span>
+            <span className="font-mono text-slate-400" title={`Commit: ${APP_VERSION_INFO.buildHash}`}>
+              {APP_VERSION_INFO.buildStamp}
+            </span>
+          </div>
         </div>
       </div>
     </aside>

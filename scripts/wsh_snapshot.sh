@@ -46,12 +46,13 @@ IMAGES_JSON=$(docker images --format '{{json .}}' 2>/dev/null | paste -sd "," - 
 CF_VERSION=$(docker exec cloudflared cloudflared --version 2>/dev/null | head -n 1 | json_escape || echo "")
 CF_LOGS=$(docker logs --tail 25 cloudflared 2>&1 | json_escape || echo "")
 
-# Full-mode heavy checks (APT upgradable list, volume sizes, release ledgers)
-APT_LINES=""
+# APT upgradable list (captured in all modes to ensure real-time accuracy)
+APT_LINES=$(apt list --upgradable 2>/dev/null | tail -n +2 | json_escape || echo "")
+
+# Full-mode heavy checks (volume sizes, docker system df)
 VOLUMES_LINES=""
 DOCKER_DF_JSON=""
 if [ "$MODE" = "--full" ]; then
-  APT_LINES=$(apt list --upgradable 2>/dev/null | tail -n +2 | json_escape || echo "")
   VOLUMES_LINES=$(du -sb /var/data/* 2>/dev/null | json_escape || echo "")
   DOCKER_DF_JSON=$(docker system df --format '{{json .}}' 2>/dev/null | paste -sd "," - || echo "")
 fi
