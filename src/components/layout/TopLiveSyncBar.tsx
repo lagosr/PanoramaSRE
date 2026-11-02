@@ -4,6 +4,7 @@ interface TopLiveSyncBarProps {
   networkPosture: NetworkPosture;
   devRunningCount: number;
   totalAppCount: number;
+  prodHealthyCount: number;
   lastSyncTime: string | null;
   isSyncing: boolean;
   onRefresh: () => void;
@@ -13,39 +14,52 @@ export function TopLiveSyncBar({
   networkPosture,
   devRunningCount,
   totalAppCount,
+  prodHealthyCount,
   lastSyncTime,
   isSyncing,
   onRefresh,
 }: TopLiveSyncBarProps) {
   return (
-    <header className="h-14 border-b border-slate-200 dark:border-slate-800 bg-white/50 dark:bg-slate-900/50 backdrop-blur-md px-6 flex items-center justify-between gap-4 z-10 select-none">
-      {/* Left: Network Posture Indicator */}
-      <div className="flex items-center gap-3">
-        <div className="flex items-center gap-2">
+    <header className="h-14 border-b border-slate-200 dark:border-slate-800 bg-white/50 dark:bg-slate-900/50 backdrop-blur-md px-6 flex items-center justify-between gap-3 z-10 select-none">
+      {/* Left: Network Posture Indicator & Fleet Counters */}
+      <div className="flex items-center gap-2.5 sm:gap-3 shrink-0 min-w-0">
+        <div className="flex items-center gap-2 shrink-0">
           {networkPosture === 'LAN_DIRECT' && (
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 whitespace-nowrap">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
               LAN DIRECT (172.20.20.9)
             </span>
           )}
           {networkPosture === 'WAN_CLOUDFLARE' && (
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold bg-amber-500/15 text-amber-400 border border-amber-500/30">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold bg-amber-500/15 text-amber-400 border border-amber-500/30 whitespace-nowrap">
               <span className="w-2 h-2 rounded-full bg-amber-400"></span>
-              WAN (Cloudflare Zero Trust)
+              WAN (Cloudflare)
             </span>
           )}
           {networkPosture === 'OFFLINE' && (
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold bg-rose-500/15 text-rose-400 border border-rose-500/30">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold bg-rose-500/15 text-rose-400 border border-rose-500/30 whitespace-nowrap">
               <span className="w-2 h-2 rounded-full bg-rose-400"></span>
               HOST OFFLINE
             </span>
           )}
         </div>
 
-        <div className="hidden sm:flex items-center gap-2 text-xs text-slate-400 border-l border-slate-200 dark:border-slate-800 pl-3">
-          <span>Dev Servers:</span>
-          <span className="font-mono font-medium text-slate-200">
-            {devRunningCount} / {totalAppCount} running
+        {/* Dev Servers Compact Counter */}
+        <div className="hidden sm:flex items-center gap-1.5 text-xs text-slate-400 border-l border-slate-200 dark:border-slate-800 pl-3 shrink-0 whitespace-nowrap">
+          <span>Dev:</span>
+          <span className={`font-mono font-medium ${devRunningCount === totalAppCount ? 'text-emerald-400' : devRunningCount > 0 ? 'text-amber-300' : 'text-slate-400'}`}>
+            {devRunningCount}/{totalAppCount} running
+          </span>
+        </div>
+
+        {/* Production Fleet Health Compact Counter */}
+        <div className="hidden md:flex items-center gap-1.5 text-xs text-slate-400 border-l border-slate-200 dark:border-slate-800 pl-3 shrink-0 whitespace-nowrap">
+          <span>Prod:</span>
+          <span className="inline-flex items-center gap-1">
+            <span className={`w-1.5 h-1.5 rounded-full ${prodHealthyCount === totalAppCount ? 'bg-emerald-400' : 'bg-rose-400 animate-pulse'}`} />
+            <span className={`font-mono font-medium ${prodHealthyCount === totalAppCount ? 'text-emerald-400' : 'text-rose-400'}`}>
+              {prodHealthyCount}/{totalAppCount} healthy
+            </span>
           </span>
         </div>
       </div>

@@ -30,7 +30,8 @@ pub struct AppManifestDto {
     pub local_sqlite_path: Option<String>,
     pub theme_color: Option<String>,
     pub icon: Option<String>,
-    pub has_database: Option<bool>,
+    #[serde(rename = "hasDatabase")]
+    pub has_database: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,7 +118,7 @@ pub fn discover_suite_apps(workspace_root: Option<String>) -> Result<Vec<Discove
                                 local_sqlite_path: manifest_val["localSqlitePath"].as_str().map(|s| s.to_string()),
                                 theme_color: manifest_val["themeColor"].as_str().map(|s| s.to_string()),
                                 icon: manifest_val["icon"].as_str().map(|s| s.to_string()),
-                                has_database: manifest_val["hasDatabase"].as_bool(),
+                                has_database: manifest_val.get("hasDatabase").and_then(|v| v.as_bool()).unwrap_or(true),
                             };
 
                             apps.push(DiscoveredAppDto {

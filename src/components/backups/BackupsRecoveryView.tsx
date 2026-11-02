@@ -44,7 +44,7 @@ export function BackupsRecoveryView({
   onRestoreRemoteBackup,
   isApplying = false,
 }: BackupsRecoveryViewProps) {
-  // Filter only applications backed by a database (exclude static resources or stateless microservices)
+  // Filter only applications backed by an operational database (declarative via panorama.app.json hasDatabase)
   const dbApps = apps.filter((a) => a.manifest.hasDatabase !== false);
   const [expandedRunIdx, setExpandedRunIdx] = useState<number | null>(null);
   const [selectedAppId, setSelectedAppId] = useState<string>(dbApps[0]?.manifest.appId || '');
@@ -114,10 +114,10 @@ export function BackupsRecoveryView({
         <div>
           <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
             <HardDrive className="w-5 h-5 text-emerald-400" />
-            Backups & Disaster Recovery Management
+            Database Backups & Disaster Recovery Management
           </h2>
           <p className="text-sm text-slate-500 mt-0.5">
-            Single control plane to inspect snapshots, trigger GFS runs, and apply backups to Local Dev or Production
+            Single control plane to inspect SQLite database snapshots, trigger automated GFS runs, and hydrate data across environments
           </p>
         </div>
 
@@ -138,7 +138,7 @@ export function BackupsRecoveryView({
             className="flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition-colors"
           >
             <Archive className="w-3.5 h-3.5" />
-            Trigger Full GFS Backup
+            Trigger Full GFS DB Backup
           </button>
         </div>
       </div>
@@ -196,10 +196,10 @@ export function BackupsRecoveryView({
           <div>
             <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
               <Laptop className="w-5 h-5 text-emerald-400" />
-              Application Backup Management & Hydration Engine
+              SQLite Database Snapshot & Hydration Engine
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              Select an application to inspect its available archives and restore data to either Local Development or Production.
+              Select a database-backed application to inspect its available SQLite archives (.tar.gz) and restore data to Local Dev or Production (binaries and source code remain in Git).
             </p>
           </div>
 
@@ -368,10 +368,10 @@ export function BackupsRecoveryView({
         <div className="flex items-center justify-between">
           <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm flex items-center gap-2">
             <Layers className="w-4 h-4 text-emerald-400" />
-            Suite Participants Backup Inventory (Latest GFS Run)
+            Suite Database Backup Inventory (Latest GFS Run)
           </h3>
           <span className="text-xs text-slate-500 font-mono">
-            {ledger?.latest_app_details?.length || 0} Registered Suite Applications
+            {ledger?.latest_app_details?.length || 0} Registered Databases
           </span>
         </div>
 
@@ -437,7 +437,7 @@ export function BackupsRecoveryView({
       {/* SECTION 3: RECENT GFS AUDIT HISTORY LEDGER */}
       <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4">
         <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm">
-          Recent GFS Automated Backup Runs & Retention History
+          Recent GFS Automated Database Backup Runs & Retention History
         </h3>
 
         {(!ledger?.recent_records || ledger.recent_records.length === 0) ? (
@@ -454,7 +454,7 @@ export function BackupsRecoveryView({
                   <th className="py-2.5 px-3 font-semibold">Time (UTC)</th>
                   <th className="py-2.5 px-3 font-semibold">Status</th>
                   <th className="py-2.5 px-3 font-semibold">Type</th>
-                  <th className="py-2.5 px-3 font-semibold">Apps Covered</th>
+                  <th className="py-2.5 px-3 font-semibold">Databases Covered</th>
                   <th className="py-2.5 px-3 font-semibold">Total Archive Size</th>
                   <th className="py-2.5 px-3 font-semibold">Destination</th>
                 </tr>

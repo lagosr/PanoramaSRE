@@ -246,13 +246,53 @@ export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
                   Upstream: <strong className="text-emerald-400">v2026.10.7</strong> (Verified latest upstream release)
                 </span>
               </div>
-              <div className="font-mono text-xs bg-slate-950 p-3 rounded-lg border border-slate-800 overflow-x-auto max-h-48 space-y-1">
+              <div className="font-mono text-xs bg-slate-950 p-3 rounded-lg border border-slate-800 overflow-x-auto max-h-56 space-y-1">
                 {logLines.length > 0 ? (
-                  logLines.map((line, idx) => (
-                    <div key={idx} className="leading-relaxed whitespace-pre-wrap break-all">
-                      {formatConsoleLine(line)}
-                    </div>
-                  ))
+                  logLines.map((line, idx) => {
+                    const match = line.match(/^(\S+)\s+(ERR|WRN|INF|DBG)\s+(.*)$/);
+                    if (match) {
+                      const [, timestamp, level, rest] = match;
+                      const isErr = level === 'ERR';
+                      const isWrn = level === 'WRN';
+
+                      return (
+                        <div
+                          key={idx}
+                          className={`flex items-start gap-2.5 px-2.5 py-1 rounded text-xs font-mono transition-colors ${
+                            isErr
+                              ? 'bg-rose-500/15 border border-rose-500/30 text-rose-300 shadow-sm'
+                              : isWrn
+                              ? 'bg-amber-500/10 border border-amber-500/20 text-amber-300'
+                              : 'hover:bg-slate-900/60 text-slate-300'
+                          }`}
+                        >
+                          <span className="text-[11px] text-slate-500 shrink-0 select-none">
+                            {timestamp}
+                          </span>
+                          <span
+                            className={`px-1.5 py-0.2 rounded text-[10px] font-bold shrink-0 tracking-wider uppercase ${
+                              isErr
+                                ? 'bg-rose-500/30 text-rose-200 border border-rose-500/50'
+                                : isWrn
+                                ? 'bg-amber-500/25 text-amber-200 border border-amber-500/40'
+                                : 'bg-sky-500/15 text-sky-300 border border-sky-500/30'
+                            }`}
+                          >
+                            {level}
+                          </span>
+                          <span className={`break-all leading-relaxed ${isErr ? 'text-rose-200 font-semibold' : isWrn ? 'text-amber-200' : 'text-slate-300'}`}>
+                            {rest}
+                          </span>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div key={idx} className="leading-relaxed whitespace-pre-wrap break-all px-2 py-0.5">
+                        {formatConsoleLine(line)}
+                      </div>
+                    );
+                  })
                 ) : (
                   <span className="text-slate-500">No recent log stream captured.</span>
                 )}

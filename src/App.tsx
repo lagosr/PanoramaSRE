@@ -300,7 +300,7 @@ export const App: React.FC = () => {
             localSqlitePath: item.manifest.local_sqlite_path || '',
             themeColor: item.manifest.theme_color || 'emerald',
             icon: item.manifest.icon || 'Layers',
-            hasDatabase: item.manifest.has_database ?? true,
+            hasDatabase: item.manifest.hasDatabase ?? item.manifest.has_database ?? true,
             portalOrder: 1,
             roles: ['admin'],
             sre: {
@@ -906,13 +906,13 @@ export const App: React.FC = () => {
   ).length;
 
   const unhealthyCount = apps.filter((a) => a.health && a.health.status !== 'healthy').length;
+  const prodHealthyCount = apps.filter((a) => a.health?.status === 'healthy').length;
 
   return (
     <div className="flex h-screen w-screen bg-[#050b14] text-slate-100 overflow-hidden font-sans">
       <SidebarRail
         activeTab={activeTab}
         onSelectTab={setActiveTab}
-        devRunningCount={devRunningCount}
         unhealthyCount={unhealthyCount}
       />
 
@@ -921,6 +921,7 @@ export const App: React.FC = () => {
           networkPosture={networkPosture}
           devRunningCount={devRunningCount}
           totalAppCount={apps.length}
+          prodHealthyCount={prodHealthyCount}
           lastSyncTime={lastSyncTime}
           isSyncing={isManualSyncing}
           onRefresh={() => syncFullTelemetry(true)}

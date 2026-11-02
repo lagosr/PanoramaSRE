@@ -25,24 +25,22 @@ export type NavItem =
 interface SidebarRailProps {
   activeTab: NavItem;
   onSelectTab: (tab: NavItem) => void;
-  devRunningCount: number;
   unhealthyCount: number;
 }
 
 export const SidebarRail: React.FC<SidebarRailProps> = ({
   activeTab,
   onSelectTab,
-  devRunningCount,
   unhealthyCount,
 }) => {
   const navItems: { id: NavItem; label: string; icon: React.ComponentType<{ className?: string }>; badge?: number; badgeColor?: string }[] = [
     { id: 'hud', label: 'Command HUD', icon: Activity, badge: unhealthyCount, badgeColor: 'bg-red-500' },
-    { id: 'local-dev', label: 'Local Dev Supervisor', icon: Terminal, badge: devRunningCount, badgeColor: 'bg-emerald-500' },
+    { id: 'local-dev', label: 'Local Dev Supervisor', icon: Terminal },
     { id: 'releases', label: 'Releases & Drift', icon: GitBranch },
     { id: 'topology', label: 'Topology & Stacks', icon: Network },
     { id: 'dietpi', label: 'DietPi Host', icon: Server },
     { id: 'edge', label: 'Edge & PKI', icon: ShieldCheck },
-    { id: 'backups', label: 'Backups & DR', icon: HardDrive },
+    { id: 'backups', label: 'Database Backups & DR', icon: HardDrive },
     { id: 'settings', label: 'Settings', icon: SettingsIcon },
   ];
 
