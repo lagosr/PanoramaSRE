@@ -27,6 +27,7 @@ export interface AppManifest {
     requiresAuthInDev: boolean;
     automatedBackupDefault: boolean;
     exposeInRemotePortal: boolean;
+    syncManifestOnDeploy?: boolean;
   };
 }
 
