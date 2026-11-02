@@ -17,8 +17,8 @@ try {
   commitDate = new Date().toISOString().slice(0, 10).replace(/-/g, '');
 }
 
-const buildStamp = `${commitHash}${commitDate ? ` (${commitDate})` : ''}`;
-const fullTitle = `PanoramaSRE Control Plane v1.0.0+${buildStamp}`;
+const buildIdentifier = commitDate ? `Build ${commitDate}` : `Build ${new Date().toISOString().slice(0, 10).replace(/-/g, '')}`;
+const fullTitle = `PanoramaSRE Control Plane v1.0.0 (${buildIdentifier})`;
 
 const tauriConfPath = path.resolve(__dirname, '../src-tauri/tauri.conf.json');
 try {

@@ -3,6 +3,7 @@ pub mod commands {
     pub mod git_ops;
     pub mod ledger;
     pub mod local_backups;
+    pub mod log_ops;
     pub mod monitor;
     pub mod runner;
     pub mod ssl_ops;
@@ -20,14 +21,16 @@ use commands::dietpi_ops::*;
 use commands::git_ops::*;
 use commands::ledger::*;
 use commands::local_backups::*;
+use commands::log_ops::*;
 use commands::monitor::*;
 use commands::runner::*;
 use commands::ssl_ops::*;
 use commands::workspace::*;
+use db::SreDatabase;
 use dev_supervisor::{get_dev_servers_status, start_dev_server, stop_dev_server, DevSupervisor};
 use job_manager::JobManager;
 use scheduler::TelemetryScheduler;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -39,6 +42,19 @@ pub fn run() {
     let scheduler = Arc::new(TelemetryScheduler::new());
     let scheduler_clone = Arc::clone(&scheduler);
 
+    // Initialize SQLite DB in data/sre.sqlite
+    let sre_db = Arc::new(Mutex::new(
+        SreDatabase::new("data/sre.sqlite").unwrap_or_else(|_| {
+            SreDatabase::new("sre.sqlite").expect("Failed to initialize SQLite database")
+        })
+    ));
+
+    {
+        if let Ok(guard) = sre_db.lock() {
+            let _ = guard.log_action("SYSTEM", "INFO", "PanoramaSRE Control Plane Initialized", None);
+        }
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
@@ -49,6 +65,7 @@ pub fn run() {
         .manage(job_manager)
         .manage(dev_supervisor)
         .manage(scheduler)
+        .manage(sre_db)
         .invoke_handler(tauri::generate_handler![
             discover_suite_apps,
             run_process_stream,
@@ -64,7 +81,9 @@ pub fn run() {
             scan_local_backups,
             fetch_wsh_snapshot,
             read_backup_ledger,
-            get_ssl_fleet_status
+            get_ssl_fleet_status,
+            get_system_logs,
+            clear_system_logs
         ])
         .setup(move |app| {
             // Setup System Tray

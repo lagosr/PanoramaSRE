@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { runStreamJob } from './lib/process-runner';
 import { SidebarRail, NavItem } from './components/layout/SidebarRail';
 import { TopLiveSyncBar } from './components/layout/TopLiveSyncBar';
 import { SreTerminalDrawer, TerminalTab } from './components/layout/SreTerminalDrawer';
@@ -48,6 +49,21 @@ export const App: React.FC = () => {
   const [terminalTabs, setTerminalTabs] = useState<TerminalTab[]>([]);
   const [activeTerminalTabId, setActiveTerminalTabId] = useState<string>('');
   const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(false);
+
+  // Universal Action Feedback State
+  const [actionFeedback, setActionFeedback] = useState<{
+    message: string;
+    type: 'pending' | 'success' | 'error';
+  } | null>(null);
+
+  const showActionFeedback = useCallback((message: string, type: 'pending' | 'success' | 'error', durationMs?: number) => {
+    setActionFeedback({ message, type });
+    if (durationMs && durationMs > 0) {
+      setTimeout(() => {
+        setActionFeedback((current) => (current?.message === message ? null : current));
+      }, durationMs);
+    }
+  }, []);
 
   // Keep ref to current apps to update granular sub-properties without full component tree thrashing
   const appsRef = useRef<DiscoveredApp[]>([]);
@@ -329,18 +345,22 @@ export const App: React.FC = () => {
   // Dev Server Actions
   const handleStartDevServer = async (appId: string, workspacePath: string, devCommand: string) => {
     try {
+      showActionFeedback(`Starting ${appId}...`, 'pending');
       await invoke('start_dev_server', {
         appId,
         workspacePath,
         devCommand,
       });
+      showActionFeedback(`Dev server ${appId} started`, 'success', 3000);
       refreshDevServers();
     } catch (err) {
       console.error('Failed to start dev server:', err);
+      showActionFeedback(`Failed to start ${appId}: ${err}`, 'error', 5000);
     }
   };
 
   const handleStartAuthAndApp = async (appId: string, workspacePath: string, devCommand: string) => {
+    showActionFeedback(`Starting PanoramaAuth and ${appId}...`, 'pending');
     const authApp = apps.find((a) => a.manifest.slug === 'auth');
     if (authApp) {
       await handleStartDevServer(
@@ -354,16 +374,20 @@ export const App: React.FC = () => {
 
   const handleStopDevServer = async (appId: string, port?: number) => {
     try {
+      showActionFeedback(`Stopping ${appId}...`, 'pending');
       await invoke('stop_dev_server', { appId, port });
+      showActionFeedback(`Dev server ${appId} stopped`, 'success', 3000);
       // Short delay to allow Windows process termination and port release
       setTimeout(() => refreshDevServers(), 600);
     } catch (err) {
       console.error('Failed to stop dev server:', err);
+      showActionFeedback(`Failed to stop ${appId}: ${err}`, 'error', 5000);
     }
   };
 
   const handleRestartDevServer = async (appId: string, workspacePath: string, devCommand: string, port?: number) => {
     try {
+      showActionFeedback(`Restarting ${appId}...`, 'pending');
       await invoke('stop_dev_server', { appId, port });
       setTimeout(async () => {
         try {
@@ -372,17 +396,21 @@ export const App: React.FC = () => {
             workspacePath,
             devCommand,
           });
+          showActionFeedback(`Dev server ${appId} restarted`, 'success', 3000);
           refreshDevServers();
         } catch (startErr) {
           console.error('Failed to start during restart:', startErr);
+          showActionFeedback(`Failed to restart ${appId}: ${startErr}`, 'error', 5000);
         }
       }, 700);
     } catch (err) {
       console.error('Failed to restart dev server:', err);
+      showActionFeedback(`Failed to restart ${appId}: ${err}`, 'error', 5000);
     }
   };
 
   const handleStartAllDevServers = async () => {
+    showActionFeedback('Starting all dev servers (Auth first)...', 'pending');
     // 1. Start auth first if present
     const authApp = apps.find((a) => a.manifest.slug === 'auth');
     if (authApp && authApp.devServer?.status !== 'RUNNING_MANAGED' && authApp.devServer?.status !== 'RUNNING_EXTERNAL') {
@@ -415,10 +443,12 @@ export const App: React.FC = () => {
       })
     );
 
+    showActionFeedback('All dev servers launched', 'success', 3500);
     setTimeout(() => refreshDevServers(), 1000);
   };
 
   const handleStopAllDevServers = async () => {
+    showActionFeedback('Stopping all dev servers...', 'pending');
     await Promise.all(
       apps.map(async (app) => {
         try {
@@ -431,6 +461,7 @@ export const App: React.FC = () => {
         }
       })
     );
+    showActionFeedback('All dev servers stopped', 'success', 3500);
     setTimeout(() => refreshDevServers(), 800);
   };
 
@@ -447,13 +478,34 @@ export const App: React.FC = () => {
     setActiveTerminalTabId(jobId);
     setIsDrawerOpen(true);
 
-    invoke('run_process_stream', {
+    runStreamJob({
       jobId,
+      label: `Snapshot: ${app.manifest.displayName}`,
       command: 'powershell.exe',
       args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', './db-manager.ps1', 'Backup'],
       workingDir: app.workspacePath,
-      resourceLock: 'BACKUP_GFS_RUNNER',
-    }).then(() => refreshBackupLedger());
+      lockType: 'LocalBackupIo',
+      onLine: (line) => {
+        setTerminalTabs((prev) =>
+          prev.map((t) => (t.id === jobId ? { ...t, lines: [...t.lines, line] } : t))
+        );
+      },
+      onComplete: (exitCode) => {
+        setTerminalTabs((prev) =>
+          prev.map((t) => (t.id === jobId ? { ...t, isRunning: false, exitCode } : t))
+        );
+        refreshBackupLedger();
+      },
+      onError: (err) => {
+        setTerminalTabs((prev) =>
+          prev.map((t) =>
+            t.id === jobId
+              ? { ...t, isRunning: false, lines: [...t.lines, `[ERROR] Backup failed: ${err}`] }
+              : t
+          )
+        );
+      },
+    });
   };
 
   const handleApplyLocalBackup = (app: DiscoveredApp, archivePath: string) => {
@@ -468,8 +520,9 @@ export const App: React.FC = () => {
     setActiveTerminalTabId(jobId);
     setIsDrawerOpen(true);
 
-    invoke('run_process_stream', {
+    runStreamJob({
       jobId,
+      label: `ApplyLocal: ${app.manifest.displayName}`,
       command: 'powershell.exe',
       args: [
         '-NoProfile',
@@ -482,8 +535,28 @@ export const App: React.FC = () => {
         archivePath,
       ],
       workingDir: app.workspacePath,
-      resourceLock: 'DEV_PROCESS_SPAWN',
-    }).then(() => refreshDevServers());
+      lockType: 'None',
+      onLine: (line) => {
+        setTerminalTabs((prev) =>
+          prev.map((t) => (t.id === jobId ? { ...t, lines: [...t.lines, line] } : t))
+        );
+      },
+      onComplete: (exitCode) => {
+        setTerminalTabs((prev) =>
+          prev.map((t) => (t.id === jobId ? { ...t, isRunning: false, exitCode } : t))
+        );
+        refreshDevServers();
+      },
+      onError: (err) => {
+        setTerminalTabs((prev) =>
+          prev.map((t) =>
+            t.id === jobId
+              ? { ...t, isRunning: false, lines: [...t.lines, `[ERROR] Apply local failed: ${err}`] }
+              : t
+          )
+        );
+      },
+    });
   };
 
   const handleRestoreRemoteBackup = (app: DiscoveredApp, archivePath: string) => {
@@ -501,8 +574,9 @@ export const App: React.FC = () => {
     setActiveTerminalTabId(jobId);
     setIsDrawerOpen(true);
 
-    invoke('run_process_stream', {
+    runStreamJob({
       jobId,
+      label: `RestoreProd: ${app.manifest.displayName}`,
       command: 'powershell.exe',
       args: [
         '-NoProfile',
@@ -515,10 +589,28 @@ export const App: React.FC = () => {
         archivePath,
       ],
       workingDir: app.workspacePath,
-      resourceLock: 'WSH_REMOTE_MUTATION',
-    }).then(() => {
-      syncFullTelemetry(false);
-      refreshBackupLedger();
+      lockType: 'WshRemoteMutation',
+      onLine: (line) => {
+        setTerminalTabs((prev) =>
+          prev.map((t) => (t.id === jobId ? { ...t, lines: [...t.lines, line] } : t))
+        );
+      },
+      onComplete: (exitCode) => {
+        setTerminalTabs((prev) =>
+          prev.map((t) => (t.id === jobId ? { ...t, isRunning: false, exitCode } : t))
+        );
+        syncFullTelemetry(false);
+        refreshBackupLedger();
+      },
+      onError: (err) => {
+        setTerminalTabs((prev) =>
+          prev.map((t) =>
+            t.id === jobId
+              ? { ...t, isRunning: false, lines: [...t.lines, `[ERROR] Restore remote failed: ${err}`] }
+              : t
+          )
+        );
+      },
     });
   };
 
@@ -550,13 +642,34 @@ export const App: React.FC = () => {
     setActiveTerminalTabId(jobId);
     setIsDrawerOpen(true);
 
-    invoke('run_process_stream', {
+    runStreamJob({
       jobId,
+      label: title,
       command: cmdSpec.command,
       args: cmdSpec.args,
       workingDir: cmdSpec.workingDir,
-      resourceLock: 'WSH_REMOTE_MUTATION',
-    }).then(() => refreshSslStatus());
+      lockType: 'WshRemoteMutation',
+      onLine: (line) => {
+        setTerminalTabs((prev) =>
+          prev.map((t) => (t.id === jobId ? { ...t, lines: [...t.lines, line] } : t))
+        );
+      },
+      onComplete: (exitCode) => {
+        setTerminalTabs((prev) =>
+          prev.map((t) => (t.id === jobId ? { ...t, isRunning: false, exitCode } : t))
+        );
+        refreshSslStatus();
+      },
+      onError: (err) => {
+        setTerminalTabs((prev) =>
+          prev.map((t) =>
+            t.id === jobId
+              ? { ...t, isRunning: false, lines: [...t.lines, `[ERROR] SSL renewal failed: ${err}`] }
+              : t
+          )
+        );
+      },
+    });
   };
 
   // Deployment Execution Helpers
@@ -580,13 +693,34 @@ export const App: React.FC = () => {
       args.push('-AllowDirty');
     }
 
-    return invoke('run_process_stream', {
+    return runStreamJob({
       jobId,
+      label: `Deploy: ${app.manifest.displayName}`,
       command: 'powershell.exe',
       args,
       workingDir: app.workspacePath,
-      resourceLock: 'WSH_REMOTE_MUTATION',
-    }).then(() => syncFullTelemetry(false));
+      lockType: 'WshRemoteMutation',
+      onLine: (line) => {
+        setTerminalTabs((prev) =>
+          prev.map((t) => (t.id === jobId ? { ...t, lines: [...t.lines, line] } : t))
+        );
+      },
+      onComplete: (exitCode) => {
+        setTerminalTabs((prev) =>
+          prev.map((t) => (t.id === jobId ? { ...t, isRunning: false, exitCode } : t))
+        );
+        syncFullTelemetry(false);
+      },
+      onError: (err) => {
+        setTerminalTabs((prev) =>
+          prev.map((t) =>
+            t.id === jobId
+              ? { ...t, isRunning: false, lines: [...t.lines, `[ERROR] Deploy failed: ${err}`] }
+              : t
+          )
+        );
+      },
+    });
   };
 
   const handleDeployAllApps = async (appsToDeploy: DiscoveredApp[], bump: string, allowDirty: boolean) => {
@@ -643,7 +777,7 @@ export const App: React.FC = () => {
         unhealthyCount={unhealthyCount}
       />
 
-      <main className="flex-1 flex flex-col h-full overflow-hidden">
+      <main className="flex-1 flex flex-col h-full overflow-hidden relative">
         <TopLiveSyncBar
           networkPosture={networkPosture}
           devRunningCount={devRunningCount}
@@ -652,6 +786,30 @@ export const App: React.FC = () => {
           isSyncing={isManualSyncing}
           onRefresh={() => syncFullTelemetry(true)}
         />
+
+        {/* Global Action Feedback Notification Banner */}
+        {actionFeedback && (
+          <div
+            className={`px-4 py-2 text-xs font-mono flex items-center justify-between border-b transition-all ${
+              actionFeedback.type === 'pending'
+                ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800 animate-pulse'
+                : actionFeedback.type === 'error'
+                ? 'bg-rose-950/90 text-rose-300 border-rose-800'
+                : 'bg-emerald-900/60 text-emerald-200 border-emerald-700'
+            }`}
+          >
+            <div className="flex items-center space-x-2">
+              <span className="w-2 h-2 rounded-full bg-current animate-ping" />
+              <span>{actionFeedback.message}</span>
+            </div>
+            <button
+              onClick={() => setActionFeedback(null)}
+              className="text-slate-400 hover:text-white text-xs px-1"
+            >
+              ×
+            </button>
+          </div>
+        )}
 
         <div className="flex-1 overflow-y-auto">
           {activeTab === 'hud' && (
@@ -672,6 +830,8 @@ export const App: React.FC = () => {
               onRestart={handleRestartDevServer}
               onStartAll={handleStartAllDevServers}
               onStopAll={handleStopAllDevServers}
+              isActionPending={actionFeedback?.type === 'pending'}
+              actionMessage={actionFeedback?.message}
             />
           )}
 
@@ -695,12 +855,34 @@ export const App: React.FC = () => {
                 setTerminalTabs((prev) => [...prev, newTab]);
                 setActiveTerminalTabId(jobId);
                 setIsDrawerOpen(true);
-                invoke('run_process_stream', {
+
+                runStreamJob({
                   jobId,
+                  label: actionLabel,
                   command: cmd,
                   args,
-                  resourceLock: 'WSH_HOST_ACTION',
-                }).then(() => refreshWshTelemetry());
+                  lockType: 'None',
+                  onLine: (line) => {
+                    setTerminalTabs((prev) =>
+                      prev.map((t) => (t.id === jobId ? { ...t, lines: [...t.lines, line] } : t))
+                    );
+                  },
+                  onComplete: (exitCode) => {
+                    setTerminalTabs((prev) =>
+                      prev.map((t) => (t.id === jobId ? { ...t, isRunning: false, exitCode } : t))
+                    );
+                    refreshWshTelemetry();
+                  },
+                  onError: (err) => {
+                    setTerminalTabs((prev) =>
+                      prev.map((t) =>
+                        t.id === jobId
+                          ? { ...t, isRunning: false, lines: [...t.lines, `[ERROR] Execution failed: ${err}`] }
+                          : t
+                      )
+                    );
+                  },
+                });
               }}
             />
           )}
@@ -721,13 +903,35 @@ export const App: React.FC = () => {
                 setTerminalTabs((prev) => [...prev, newTab]);
                 setActiveTerminalTabId(jobId);
                 setIsDrawerOpen(true);
-                invoke('run_process_stream', {
+
+                runStreamJob({
                   jobId,
+                  label: `Rollback: ${app.manifest.displayName}`,
                   command: 'powershell.exe',
                   args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', './deploy-docker.ps1', '-RollbackToTag', tag],
                   workingDir: app.workspacePath,
-                  resourceLock: 'WSH_REMOTE_MUTATION',
-                }).then(() => syncFullTelemetry(false));
+                  lockType: 'WshRemoteMutation',
+                  onLine: (line) => {
+                    setTerminalTabs((prev) =>
+                      prev.map((t) => (t.id === jobId ? { ...t, lines: [...t.lines, line] } : t))
+                    );
+                  },
+                  onComplete: (exitCode) => {
+                    setTerminalTabs((prev) =>
+                      prev.map((t) => (t.id === jobId ? { ...t, isRunning: false, exitCode } : t))
+                    );
+                    syncFullTelemetry(false);
+                  },
+                  onError: (err) => {
+                    setTerminalTabs((prev) =>
+                      prev.map((t) =>
+                        t.id === jobId
+                          ? { ...t, isRunning: false, lines: [...t.lines, `[ERROR] Rollback failed: ${err}`] }
+                          : t
+                      )
+                    );
+                  },
+                });
               }}
             />
           )}
@@ -749,8 +953,10 @@ export const App: React.FC = () => {
                 setTerminalTabs((prev) => [...prev, newTab]);
                 setActiveTerminalTabId(jobId);
                 setIsDrawerOpen(true);
-                invoke('run_process_stream', {
+
+                runStreamJob({
                   jobId,
+                  label: 'GFS Full Backup',
                   command: 'powershell.exe',
                   args: [
                     '-NoProfile',
@@ -760,8 +966,28 @@ export const App: React.FC = () => {
                     'C:\\Users\\rodrigo\\Documents\\AG Projects\\PanoramaDrSuite\\tools\\backup-manager\\BackupManager.ps1',
                     'Backup',
                   ],
-                  resourceLock: 'BACKUP_GFS_RUNNER',
-                }).then(() => refreshBackupLedger());
+                  lockType: 'LocalBackupIo',
+                  onLine: (line) => {
+                    setTerminalTabs((prev) =>
+                      prev.map((t) => (t.id === jobId ? { ...t, lines: [...t.lines, line] } : t))
+                    );
+                  },
+                  onComplete: (exitCode) => {
+                    setTerminalTabs((prev) =>
+                      prev.map((t) => (t.id === jobId ? { ...t, isRunning: false, exitCode } : t))
+                    );
+                    refreshBackupLedger();
+                  },
+                  onError: (err) => {
+                    setTerminalTabs((prev) =>
+                      prev.map((t) =>
+                        t.id === jobId
+                          ? { ...t, isRunning: false, lines: [...t.lines, `[ERROR] GFS backup failed: ${err}`] }
+                          : t
+                      )
+                    );
+                  },
+                });
               }}
               onTriggerAppBackup={handleTriggerAppBackup}
               onApplyLocalBackup={handleApplyLocalBackup}

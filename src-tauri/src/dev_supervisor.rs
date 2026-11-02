@@ -90,7 +90,29 @@ impl DevSupervisor {
             use std::os::windows::process::CommandExt;
             const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-            // Run powershell to find listening PID on port and kill it tree-wide
+            // Strategy 1: Find listening PIDs directly via netstat and kill them forcefully with taskkill
+            if let Ok(output) = Command::new("netstat")
+                .args(["-ano"])
+                .creation_flags(CREATE_NO_WINDOW)
+                .output()
+            {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let target_port_pattern = format!(":{}", port);
+                for line in stdout.lines() {
+                    if line.contains("LISTENING") && line.contains(&target_port_pattern) {
+                        let parts: Vec<&str> = line.split_whitespace().collect();
+                        if let Some(pid_str) = parts.last() {
+                            if let Ok(pid) = pid_str.parse::<u32>() {
+                                if pid > 0 {
+                                    Self::kill_process_tree(pid);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Strategy 2: Backup PowerShell Get-NetTCPConnection cleanup
             let ps_cmd = format!(
                 "Get-NetTCPConnection -LocalPort {} -State Listen -ErrorAction SilentlyContinue | ForEach-Object {{ Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }}",
                 port
@@ -172,20 +194,26 @@ pub async fn get_dev_servers_status(
 #[tauri::command]
 pub async fn start_dev_server(
     supervisor: tauri::State<'_, Arc<DevSupervisor>>,
+    db: tauri::State<'_, Arc<Mutex<crate::db::SreDatabase>>>,
     app_id: String,
     workspace_path: String,
     dev_command: Option<String>,
 ) -> Result<u32, String> {
     let mut map = supervisor.managed_processes.lock().unwrap();
 
-    // Check if already managed
-    if let Some(child) = map.get(&app_id) {
-        return Ok(child.id());
+    // Check if already managed and still alive
+    if let Some(child) = map.get_mut(&app_id) {
+        if let Ok(None) = child.try_wait() {
+            let pid = child.id();
+            if let Ok(guard) = db.lock() {
+                let _ = guard.log_action("DEV_SUPERVISOR", "INFO", &format!("Dev server {} already running", app_id), Some(&format!("pid={}", pid)));
+            }
+            return Ok(pid);
+        }
     }
 
     let cmd_str = dev_command.unwrap_or_else(|| "npm run dev".to_string());
-    let parts: Vec<&str> = cmd_str.split_whitespace().collect();
-    if parts.is_empty() {
+    if cmd_str.trim().is_empty() {
         return Err("Empty dev command".into());
     }
 
@@ -193,6 +221,7 @@ pub async fn start_dev_server(
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+    // Use cmd /c with npm.cmd if invoking npm directly
     let mut cmd = Command::new("cmd");
     cmd.current_dir(&workspace_path)
         .args(["/c", &cmd_str]);
@@ -201,7 +230,11 @@ pub async fn start_dev_server(
 
     let child = cmd.spawn().map_err(|e| format!("Failed to spawn {}: {}", cmd_str, e))?;
     let pid = child.id();
-    map.insert(app_id, child);
+    map.insert(app_id.clone(), child);
+
+    if let Ok(guard) = db.lock() {
+        let _ = guard.log_action("DEV_SUPERVISOR", "INFO", &format!("Started dev server for {}", app_id), Some(&format!("pid={}, cmd={}, path={}", pid, cmd_str, workspace_path)));
+    }
 
     Ok(pid)
 }
@@ -209,6 +242,7 @@ pub async fn start_dev_server(
 #[tauri::command]
 pub async fn stop_dev_server(
     supervisor: tauri::State<'_, Arc<DevSupervisor>>,
+    db: tauri::State<'_, Arc<Mutex<crate::db::SreDatabase>>>,
     app_id: String,
     port: Option<u16>,
 ) -> Result<bool, String> {
@@ -226,6 +260,10 @@ pub async fn stop_dev_server(
     if let Some(p) = port {
         DevSupervisor::kill_by_port(p);
         stopped = true;
+    }
+
+    if let Ok(guard) = db.lock() {
+        let _ = guard.log_action("DEV_SUPERVISOR", "INFO", &format!("Stopped dev server for {}", app_id), Some(&format!("port={:?}", port)));
     }
 
     Ok(stopped)

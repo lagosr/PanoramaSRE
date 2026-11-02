@@ -1,7 +1,17 @@
-import React, { useState } from 'react';
-import { Sliders, Shield, Terminal, Database, Check, RefreshCw, Info } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Sliders, Shield, Terminal, Database, Check, RefreshCw, Info, Trash2, Search } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 import { CustomSelect } from '../ui/CustomSelect';
 import { APP_VERSION_INFO } from '../../lib/version';
+
+interface SystemLogEntry {
+  id: number;
+  category: string;
+  level: string;
+  message: string;
+  metadata: string | null;
+  created_at: string;
+}
 
 type SettingsTab = 'general' | 'ssh' | 'logs' | 'database';
 
@@ -11,6 +21,61 @@ export const SettingsView: React.FC = () => {
   const [toastAlerts, setToastAlerts] = useState(true);
   const [pollInterval, setPollInterval] = useState('15');
   const [isSaved, setIsSaved] = useState(false);
+
+  // Application Logs state
+  const [logs, setLogs] = useState<SystemLogEntry[]>([]);
+  const [isLoadingLogs, setIsLoadingLogs] = useState<boolean>(false);
+  const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [autoRefreshLogs, setAutoRefreshLogs] = useState<boolean>(true);
+
+  const fetchLogs = useCallback(async () => {
+    try {
+      setIsLoadingLogs(true);
+      const res = await invoke<SystemLogEntry[]>('get_system_logs', {
+        limit: 300,
+        category: selectedCategory === 'ALL' ? null : selectedCategory,
+      });
+      setLogs(res);
+    } catch (err) {
+      console.warn('Failed to load system logs:', err);
+    } finally {
+      setIsLoadingLogs(false);
+    }
+  }, [selectedCategory]);
+
+  useEffect(() => {
+    if (activeTab === 'logs') {
+      fetchLogs();
+    }
+  }, [activeTab, fetchLogs]);
+
+  useEffect(() => {
+    if (activeTab !== 'logs' || !autoRefreshLogs) return;
+    const interval = setInterval(() => {
+      fetchLogs();
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [activeTab, autoRefreshLogs, fetchLogs]);
+
+  const handleClearLogs = async () => {
+    try {
+      await invoke('clear_system_logs');
+      setLogs([]);
+    } catch (err) {
+      console.error('Failed to clear logs:', err);
+    }
+  };
+
+  const filteredLogs = logs.filter((log) => {
+    if (!searchQuery) return true;
+    const q = searchQuery.toLowerCase();
+    return (
+      log.message.toLowerCase().includes(q) ||
+      log.category.toLowerCase().includes(q) ||
+      (log.metadata && log.metadata.toLowerCase().includes(q))
+    );
+  });
 
   const handleSave = () => {
     setIsSaved(true);
@@ -168,11 +233,116 @@ export const SettingsView: React.FC = () => {
         )}
 
         {activeTab === 'logs' && (
-          <div className="bg-[#050b14] border border-slate-800 rounded-xl p-4 font-mono text-xs text-emerald-400 h-96 overflow-y-auto">
-            <div>[2026-11-01 12:59:00] [PANORAMA_SRE] Control Plane Initialized.</div>
-            <div>[2026-11-01 12:59:01] [DISCOVERY] Ingested 6 suite application manifests.</div>
-            <div>[2026-11-01 12:59:01] [DISCOVERY] Ingested 5 SRE tool manifests.</div>
-            <div>[2026-11-01 12:59:02] [MONITOR] Network Split-DNS: LAN_DIRECT (172.20.20.9).</div>
+          <div className="flex flex-col space-y-3 h-full">
+            {/* Log Controls Header */}
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-900/60 border border-slate-800 rounded-xl p-3">
+              <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+                <Search className="w-4 h-4 text-slate-500 shrink-0" />
+                <input
+                  type="text"
+                  placeholder="Filter logs or parameters..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="bg-transparent border-0 text-xs text-slate-200 placeholder-slate-500 focus:outline-none w-full"
+                />
+              </div>
+
+              <div className="flex items-center gap-2">
+                <div className="w-36">
+                  <CustomSelect
+                    value={selectedCategory}
+                    onChange={setSelectedCategory}
+                    options={[
+                      { value: 'ALL', label: 'All Categories' },
+                      { value: 'SYSTEM', label: 'SYSTEM' },
+                      { value: 'DEV_SUPERVISOR', label: 'DEV_SUPERVISOR' },
+                      { value: 'RUNNER', label: 'RUNNER' },
+                      { value: 'STREAM', label: 'STREAM' },
+                      { value: 'DEPLOY', label: 'DEPLOY' },
+                      { value: 'BACKUP', label: 'BACKUP' },
+                      { value: 'MONITOR', label: 'MONITOR' },
+                    ]}
+                  />
+                </div>
+
+                <button
+                  onClick={() => setAutoRefreshLogs(!autoRefreshLogs)}
+                  className={`px-2.5 py-1.5 rounded-lg text-xs font-mono font-medium transition-colors border ${
+                    autoRefreshLogs
+                      ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                      : 'bg-slate-800 text-slate-400 border-slate-700'
+                  }`}
+                  title="Toggle 3s live polling"
+                >
+                  {autoRefreshLogs ? 'Live: ON' : 'Live: PAUSED'}
+                </button>
+
+                <button
+                  onClick={fetchLogs}
+                  disabled={isLoadingLogs}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
+                  title="Manual Refresh"
+                >
+                  <RefreshCw className={`w-4 h-4 ${isLoadingLogs ? 'animate-spin' : ''}`} />
+                </button>
+
+                <button
+                  onClick={handleClearLogs}
+                  className="p-1.5 rounded-lg text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 border border-rose-500/20 transition-colors"
+                  title="Clear All Logs"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Terminal Log Console */}
+            <div className="flex-1 bg-[#050b14] border border-slate-800 rounded-xl p-4 font-mono text-xs overflow-y-auto min-h-[420px] max-h-[600px] space-y-1">
+              {filteredLogs.length === 0 ? (
+                <div className="text-slate-600 italic py-8 text-center">
+                  No log entries found. Perform actions or run commands to stream logs.
+                </div>
+              ) : (
+                filteredLogs.map((log) => {
+                  const isWarn = log.level === 'WARN';
+                  const isError = log.level === 'ERROR';
+                  return (
+                    <div key={log.id} className="leading-relaxed hover:bg-slate-900/40 px-1 rounded flex items-start gap-2">
+                      <span className="text-slate-500 shrink-0 text-[11px] select-none">
+                        [{log.created_at.slice(11, 19)}]
+                      </span>
+                      <span
+                        className={`text-[10px] px-1.5 py-0.2 rounded font-bold shrink-0 ${
+                          isError
+                            ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                            : isWarn
+                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                            : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                        }`}
+                      >
+                        {log.category}
+                      </span>
+                      <span
+                        className={`break-all ${
+                          isError
+                            ? 'text-rose-400 font-medium'
+                            : isWarn
+                            ? 'text-amber-300'
+                            : 'text-emerald-300 selection:bg-emerald-500/30 selection:text-emerald-200'
+                        }`}
+                      >
+                        {log.message}
+                        {log.metadata && (
+                          <span className="text-slate-500 text-[11px] ml-2 font-mono">
+                            ({log.metadata})
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                  );
+                })
+              )}
+            </div>
           </div>
         )}
 

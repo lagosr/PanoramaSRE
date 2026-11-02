@@ -1,8 +1,9 @@
+use crate::db::SreDatabase;
 use crate::job_manager::{JobManager, JobStatus, ResourceLock};
 use crate::scrubber::scrub_secrets;
 use serde::{Deserialize, Serialize};
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tauri::ipc::Channel;
 use tauri::State;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -32,9 +33,19 @@ pub async fn run_process_stream(
     request: RunCommandRequest,
     channel: Channel<ProcessOutputChunk>,
     job_manager: State<'_, Arc<JobManager>>,
+    db: State<'_, Arc<Mutex<SreDatabase>>>,
 ) -> Result<i32, String> {
     let job_id = request.job_id.clone();
     let lock_type = request.lock_type;
+
+    if let Ok(guard) = db.lock() {
+        let _ = guard.log_action(
+            "RUNNER",
+            "INFO",
+            &format!("Job registered: {}", request.label),
+            Some(&format!("job_id={}, cmd={} {}", job_id, request.command, request.args.join(" "))),
+        );
+    }
 
     // Register job status as queued
     job_manager.register_job(JobStatus {
@@ -90,6 +101,9 @@ pub async fn run_process_stream(
 
     if let Some(pid) = child.id() {
         job_manager.attach_pid(&job_id, pid).await;
+        if let Ok(guard) = db.lock() {
+            let _ = guard.log_action("RUNNER", "INFO", &format!("Process spawned: PID {}", pid), Some(&format!("job_id={}", job_id)));
+        }
         channel.send(ProcessOutputChunk {
             job_id: job_id.clone(),
             stream: "system".to_string(),
@@ -98,16 +112,20 @@ pub async fn run_process_stream(
         }).ok();
     }
 
-    // Stream stdout & stderr concurrently with real-time secret scrubbing
+    // Stream stdout & stderr concurrently with real-time secret scrubbing and DB persistence
     let stdout = child.stdout.take().expect("Failed to open stdout");
     let stderr = child.stderr.take().expect("Failed to open stderr");
 
     let channel_stdout = channel.clone();
     let job_id_stdout = job_id.clone();
+    let db_stdout = Arc::clone(&db);
     let stdout_handle = tokio::spawn(async move {
         let mut reader = BufReader::new(stdout).lines();
         while let Ok(Some(line)) = reader.next_line().await {
             let scrubbed = scrub_secrets(&line);
+            if let Ok(guard) = db_stdout.lock() {
+                let _ = guard.log_action("STREAM", "INFO", &scrubbed, Some(&format!("job_id={}", job_id_stdout)));
+            }
             let _ = channel_stdout.send(ProcessOutputChunk {
                 job_id: job_id_stdout.clone(),
                 stream: "stdout".to_string(),
@@ -119,10 +137,14 @@ pub async fn run_process_stream(
 
     let channel_stderr = channel.clone();
     let job_id_stderr = job_id.clone();
+    let db_stderr = Arc::clone(&db);
     let stderr_handle = tokio::spawn(async move {
         let mut reader = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = reader.next_line().await {
             let scrubbed = scrub_secrets(&line);
+            if let Ok(guard) = db_stderr.lock() {
+                let _ = guard.log_action("STREAM", "WARN", &scrubbed, Some(&format!("job_id={}", job_id_stderr)));
+            }
             let _ = channel_stderr.send(ProcessOutputChunk {
                 job_id: job_id_stderr.clone(),
                 stream: "stderr".to_string(),
@@ -138,6 +160,15 @@ pub async fn run_process_stream(
     let exit_code = status.code().unwrap_or(-1);
 
     job_manager.update_completion(&job_id, Some(exit_code), false).await;
+
+    if let Ok(guard) = db.lock() {
+        let _ = guard.log_action(
+            "RUNNER",
+            if exit_code == 0 { "INFO" } else { "ERROR" },
+            &format!("Job completed with exit code {}", exit_code),
+            Some(&format!("job_id={}, code={}", job_id, exit_code)),
+        );
+    }
 
     channel.send(ProcessOutputChunk {
         job_id: job_id.clone(),
