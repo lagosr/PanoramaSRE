@@ -1,0 +1,28 @@
+# Node / Vite
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Tauri / Rust
+src-tauri/target/
+src-tauri/gen/
+
+# Environment secrets
+.env
+.env*.local
+.env.deploy
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+*.log
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Local data & backups cache
+backups/
+*.tar.gz
+*.sqlite-shm
+*.sqlite-wal

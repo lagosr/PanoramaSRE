@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capability for PanoramaSRE",
+  "windows": ["main", "*"],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "shell:default",
+    "dialog:default",
+    "fs:default",
+    "notification:default",
+    "process:default"
+  ]
+}
