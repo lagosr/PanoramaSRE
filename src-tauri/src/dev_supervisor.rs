@@ -83,6 +83,25 @@ impl DevSupervisor {
         }
     }
 
+    /// Kill any process listening on a specific TCP port using netstat + taskkill
+    pub fn kill_by_port(port: u16) {
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+            // Run powershell to find listening PID on port and kill it tree-wide
+            let ps_cmd = format!(
+                "Get-NetTCPConnection -LocalPort {} -State Listen -ErrorAction SilentlyContinue | ForEach-Object {{ Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }}",
+                port
+            );
+            let _ = Command::new("powershell")
+                .args(["-NoProfile", "-NonInteractive", "-Command", &ps_cmd])
+                .creation_flags(CREATE_NO_WINDOW)
+                .output();
+        }
+    }
+
     /// Stop all managed dev processes (called on Quit)
     pub fn stop_all(&self) {
         let mut map = self.managed_processes.lock().unwrap();
@@ -191,14 +210,23 @@ pub async fn start_dev_server(
 pub async fn stop_dev_server(
     supervisor: tauri::State<'_, Arc<DevSupervisor>>,
     app_id: String,
+    port: Option<u16>,
 ) -> Result<bool, String> {
     let mut map = supervisor.managed_processes.lock().unwrap();
+    let mut stopped = false;
+
     if let Some(mut child) = map.remove(&app_id) {
         let pid = child.id();
         DevSupervisor::kill_process_tree(pid);
         let _ = child.kill();
-        Ok(true)
-    } else {
-        Ok(false)
+        stopped = true;
     }
+
+    // Always check and terminate listening process on that port as well (covers prior runs & orphaned trees)
+    if let Some(p) = port {
+        DevSupervisor::kill_by_port(p);
+        stopped = true;
+    }
+
+    Ok(stopped)
 }

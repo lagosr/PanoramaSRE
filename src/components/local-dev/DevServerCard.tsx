@@ -4,8 +4,8 @@ interface DevServerCardProps {
   app: DiscoveredApp;
   onStart: (appId: string, workspacePath: string, devCommand: string) => void;
   onStartAuthAndApp: (appId: string, workspacePath: string, devCommand: string) => void;
-  onStop: (appId: string) => void;
-  onRestart: (appId: string, workspacePath: string, devCommand: string) => void;
+  onStop: (appId: string, port?: number) => void;
+  onRestart: (appId: string, workspacePath: string, devCommand: string, port?: number) => void;
   isActionPending?: boolean;
 }
 
@@ -143,7 +143,8 @@ export function DevServerCard({
                 onRestart(
                   app.manifest.appId,
                   app.workspacePath,
-                  app.manifest.sre.devCommand
+                  app.manifest.sre.devCommand,
+                  app.manifest.port
                 )
               }
               disabled={isActionPending}
@@ -152,7 +153,7 @@ export function DevServerCard({
               Restart
             </button>
             <button
-              onClick={() => onStop(app.manifest.appId)}
+              onClick={() => onStop(app.manifest.appId, app.manifest.port)}
               disabled={isActionPending}
               className="py-1.5 px-3 rounded-lg text-xs font-medium bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/30 transition-colors whitespace-nowrap"
             >
@@ -162,8 +163,31 @@ export function DevServerCard({
         )}
 
         {isExternal && (
-          <div className="w-full text-center py-1 text-xs text-amber-400 italic">
-            Running via external shell (e.g. terminal / VSCode)
+          <div className="flex items-center gap-2 w-full">
+            <span className="flex-1 text-xs text-amber-400 italic truncate" title="Running via external shell or prior session">
+              External / Prior Run
+            </span>
+            <button
+              onClick={() =>
+                onRestart(
+                  app.manifest.appId,
+                  app.workspacePath,
+                  app.manifest.sre.devCommand,
+                  app.manifest.port
+                )
+              }
+              disabled={isActionPending}
+              className="py-1.5 px-2.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors whitespace-nowrap"
+            >
+              Restart
+            </button>
+            <button
+              onClick={() => onStop(app.manifest.appId, app.manifest.port)}
+              disabled={isActionPending}
+              className="py-1.5 px-2.5 rounded-lg text-xs font-medium bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/30 transition-colors whitespace-nowrap"
+            >
+              Stop
+            </button>
           </div>
         )}
       </div>

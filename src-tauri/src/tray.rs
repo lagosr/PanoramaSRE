@@ -11,10 +11,21 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 
     let menu = Menu::with_items(app, &[&show_item, &hide_item, &quit_item])?;
 
-    let _tray = TrayIconBuilder::new()
+    let icon = app.default_window_icon().cloned()
+        .or_else(|| {
+            tauri::image::Image::from_app_icon_resource(32).ok()
+        });
+
+    let mut builder = TrayIconBuilder::new()
         .tooltip("PanoramaSRE - Windows Control Plane")
         .menu(&menu)
-        .show_menu_on_left_click(false)
+        .show_menu_on_left_click(false);
+
+    if let Some(i) = icon {
+        builder = builder.icon(i);
+    }
+
+    let _tray = builder
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => {
                 if let Some(window) = app.get_webview_window("main") {

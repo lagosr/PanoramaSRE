@@ -352,27 +352,86 @@ export const App: React.FC = () => {
     await handleStartDevServer(appId, workspacePath, devCommand);
   };
 
-  const handleStopDevServer = async (appId: string) => {
+  const handleStopDevServer = async (appId: string, port?: number) => {
     try {
-      await invoke('stop_dev_server', { appId });
-      refreshDevServers();
+      await invoke('stop_dev_server', { appId, port });
+      // Short delay to allow Windows process termination and port release
+      setTimeout(() => refreshDevServers(), 600);
     } catch (err) {
       console.error('Failed to stop dev server:', err);
     }
   };
 
-  const handleRestartDevServer = async (appId: string, workspacePath: string, devCommand: string) => {
+  const handleRestartDevServer = async (appId: string, workspacePath: string, devCommand: string, port?: number) => {
     try {
-      await invoke('stop_dev_server', { appId });
-      await invoke('start_dev_server', {
-        appId,
-        workspacePath,
-        devCommand,
-      });
-      refreshDevServers();
+      await invoke('stop_dev_server', { appId, port });
+      setTimeout(async () => {
+        try {
+          await invoke('start_dev_server', {
+            appId,
+            workspacePath,
+            devCommand,
+          });
+          refreshDevServers();
+        } catch (startErr) {
+          console.error('Failed to start during restart:', startErr);
+        }
+      }, 700);
     } catch (err) {
       console.error('Failed to restart dev server:', err);
     }
+  };
+
+  const handleStartAllDevServers = async () => {
+    // 1. Start auth first if present
+    const authApp = apps.find((a) => a.manifest.slug === 'auth');
+    if (authApp && authApp.devServer?.status !== 'RUNNING_MANAGED' && authApp.devServer?.status !== 'RUNNING_EXTERNAL') {
+      try {
+        await invoke('start_dev_server', {
+          appId: authApp.manifest.appId,
+          workspacePath: authApp.workspacePath,
+          devCommand: authApp.manifest.sre.devCommand,
+        });
+      } catch (err) {
+        console.warn('Failed to start auth dev server:', err);
+      }
+    }
+
+    // 2. Start all other remaining child web servers in parallel
+    const childApps = apps.filter((a) => a.manifest.slug !== 'auth');
+    await Promise.all(
+      childApps.map(async (child) => {
+        if (child.devServer?.status !== 'RUNNING_MANAGED' && child.devServer?.status !== 'RUNNING_EXTERNAL') {
+          try {
+            await invoke('start_dev_server', {
+              appId: child.manifest.appId,
+              workspacePath: child.workspacePath,
+              devCommand: child.manifest.sre.devCommand,
+            });
+          } catch (childErr) {
+            console.warn(`Failed to start ${child.manifest.displayName}:`, childErr);
+          }
+        }
+      })
+    );
+
+    setTimeout(() => refreshDevServers(), 1000);
+  };
+
+  const handleStopAllDevServers = async () => {
+    await Promise.all(
+      apps.map(async (app) => {
+        try {
+          await invoke('stop_dev_server', {
+            appId: app.manifest.appId,
+            port: app.manifest.port,
+          });
+        } catch (err) {
+          console.warn(`Failed to stop ${app.manifest.displayName}:`, err);
+        }
+      })
+    );
+    setTimeout(() => refreshDevServers(), 800);
   };
 
   // Backup & Recovery Actions
@@ -569,6 +628,8 @@ export const App: React.FC = () => {
               onStartAuthAndApp={handleStartAuthAndApp}
               onStop={handleStopDevServer}
               onRestart={handleRestartDevServer}
+              onStartAll={handleStartAllDevServers}
+              onStopAll={handleStopAllDevServers}
             />
           )}
 

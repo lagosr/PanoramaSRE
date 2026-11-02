@@ -1,12 +1,15 @@
 import { DiscoveredApp } from '../../lib/types';
 import { DevServerCard } from './DevServerCard';
+import { Play, Square } from 'lucide-react';
 
 interface LocalDevViewProps {
   apps: DiscoveredApp[];
   onStart: (appId: string, workspacePath: string, devCommand: string) => void;
   onStartAuthAndApp: (appId: string, workspacePath: string, devCommand: string) => void;
-  onStop: (appId: string) => void;
-  onRestart: (appId: string, workspacePath: string, devCommand: string) => void;
+  onStop: (appId: string, port?: number) => void;
+  onRestart: (appId: string, workspacePath: string, devCommand: string, port?: number) => void;
+  onStartAll: () => void;
+  onStopAll: () => void;
 }
 
 export function LocalDevView({
@@ -15,6 +18,8 @@ export function LocalDevView({
   onStartAuthAndApp,
   onStop,
   onRestart,
+  onStartAll,
+  onStopAll,
 }: LocalDevViewProps) {
   const runningCount = apps.filter(
     (a) => a.devServer?.status === 'RUNNING_MANAGED' || a.devServer?.status === 'RUNNING_EXTERNAL'
@@ -34,11 +39,31 @@ export function LocalDevView({
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
-            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+          <div className="flex items-center gap-3">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
               <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
               {runningCount} / {apps.length} Dev Servers Active
             </span>
+
+            <button
+              onClick={onStartAll}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition-colors shadow-sm"
+              title="Start all dev servers (auth started first)"
+            >
+              <Play className="w-3.5 h-3.5 fill-current" />
+              <span>Start All</span>
+            </button>
+
+            {runningCount > 0 && (
+              <button
+                onClick={onStopAll}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/30 transition-colors"
+                title="Stop all currently running dev servers"
+              >
+                <Square className="w-3.5 h-3.5 fill-current" />
+                <span>Stop All</span>
+              </button>
+            )}
           </div>
         </div>
       </div>
