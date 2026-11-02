@@ -1,18 +1,26 @@
 import { useState } from 'react';
 import { DiscoveredApp } from '../../lib/types';
-import { GitBranch, Rocket, RotateCcw, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { GitBranch, Rocket, RotateCcw, AlertTriangle, CheckCircle2, Layers } from 'lucide-react';
+import { ConfirmDangerModal } from '../ui/ConfirmDangerModal';
 
 interface ReleasePipelineViewProps {
   apps: DiscoveredApp[];
   onTriggerDeploy: (app: DiscoveredApp, bump: string, allowDirty: boolean) => void;
+  onTriggerDeployAll: (apps: DiscoveredApp[], bump: string, allowDirty: boolean) => void;
   onTriggerRollback: (app: DiscoveredApp, tag: string) => void;
 }
 
-export function ReleasePipelineView({ apps, onTriggerDeploy, onTriggerRollback }: ReleasePipelineViewProps) {
+export function ReleasePipelineView({
+  apps,
+  onTriggerDeploy,
+  onTriggerDeployAll,
+  onTriggerRollback,
+}: ReleasePipelineViewProps) {
   const [selectedAppSlug, setSelectedAppSlug] = useState<string>(apps[0]?.manifest.slug || '');
   const [bumpVersion, setBumpVersion] = useState<string>('none');
   const [allowDirty, setAllowDirty] = useState<boolean>(false);
   const [rollbackTag, setRollbackTag] = useState<string>('');
+  const [showDeployAllModal, setShowDeployAllModal] = useState<boolean>(false);
 
   const selectedApp = apps.find((a) => a.manifest.slug === selectedAppSlug) || apps[0];
   const comp = selectedApp?.composition;
@@ -20,14 +28,24 @@ export function ReleasePipelineView({ apps, onTriggerDeploy, onTriggerRollback }
   return (
     <div className="p-8 max-w-7xl mx-auto space-y-8">
       {/* Header */}
-      <div>
-        <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-          <GitBranch className="w-5 h-5 text-emerald-400" />
-          6-Stage Release Pipeline & Instant Rollback Engine
-        </h2>
-        <p className="text-sm text-slate-500 mt-0.5">
-          Deploy cryptographic git-backed releases or execute sub-5-second container rollbacks
-        </p>
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+            <GitBranch className="w-5 h-5 text-emerald-400" />
+            6-Stage Release Pipeline & Instant Rollback Engine
+          </h2>
+          <p className="text-sm text-slate-500 mt-0.5">
+            Deploy cryptographic git-backed releases or execute sub-5-second container rollbacks
+          </p>
+        </div>
+
+        <button
+          onClick={() => setShowDeployAllModal(true)}
+          className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg transition-all"
+        >
+          <Layers className="w-4 h-4" />
+          <span>Deploy All Suite Apps ({apps.length})</span>
+        </button>
       </div>
 
       {/* Target Application Selector */}
@@ -192,6 +210,20 @@ export function ReleasePipelineView({ apps, onTriggerDeploy, onTriggerRollback }
           </div>
         </div>
       )}
+
+      {/* Confirmation Modal for Deploy All Suite Apps */}
+      <ConfirmDangerModal
+        isOpen={showDeployAllModal}
+        title="Deploy All Panorama Suite Applications"
+        description={`This will sequentially trigger the 6-stage release pipeline (deploy-docker.ps1) for all ${apps.length} applications: PanoramaAuth, SpendyLedger, BiomedMaven, WaterAnalyzer, TastyBasket, and PanoramaResources. Live output will stream to the SRE terminal drawer.`}
+        confirmWord="DEPLOY"
+        confirmLabel="Initiate Suite-Wide Deployment"
+        onConfirm={() => {
+          setShowDeployAllModal(false);
+          onTriggerDeployAll(apps, bumpVersion, allowDirty);
+        }}
+        onCancel={() => setShowDeployAllModal(false)}
+      />
     </div>
   );
 }

@@ -559,7 +559,49 @@ export const App: React.FC = () => {
     }).then(() => refreshSslStatus());
   };
 
-  // Terminal Drawer Action Handlers
+  // Deployment Execution Helpers
+  const executeAppDeploy = (app: DiscoveredApp, bump: string, allowDirty: boolean): Promise<any> => {
+    const jobId = `deploy-${app.manifest.slug}-${Date.now()}`;
+    const newTab: TerminalTab = {
+      id: jobId,
+      title: `Deploy: ${app.manifest.displayName}`,
+      lines: [`[PanoramaSRE] Initiating release pipeline for ${app.manifest.displayName}...`],
+      isRunning: true,
+    };
+    setTerminalTabs((prev) => [...prev, newTab]);
+    setActiveTerminalTabId(jobId);
+    setIsDrawerOpen(true);
+
+    const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', './deploy-docker.ps1'];
+    if (bump !== 'none') {
+      args.push('-BumpVersion', bump);
+    }
+    if (allowDirty) {
+      args.push('-AllowDirty');
+    }
+
+    return invoke('run_process_stream', {
+      jobId,
+      command: 'powershell.exe',
+      args,
+      workingDir: app.workspacePath,
+      resourceLock: 'WSH_REMOTE_MUTATION',
+    }).then(() => syncFullTelemetry(false));
+  };
+
+  const handleDeployAllApps = async (appsToDeploy: DiscoveredApp[], bump: string, allowDirty: boolean) => {
+    // 1. Deploy PanoramaAuth first if present (IdP must always lead)
+    const authApp = appsToDeploy.find((a) => a.manifest.slug === 'auth');
+    if (authApp) {
+      await executeAppDeploy(authApp, bump, allowDirty);
+    }
+
+    // 2. Deploy remaining child applications sequentially through the FIFO runner
+    const childApps = appsToDeploy.filter((a) => a.manifest.slug !== 'auth');
+    for (const app of childApps) {
+      await executeAppDeploy(app, bump, allowDirty);
+    }
+  };
   const handleAbortJob = async (id: string) => {
     try {
       await invoke('abort_process', { jobId: id });
@@ -666,32 +708,8 @@ export const App: React.FC = () => {
           {activeTab === 'releases' && (
             <ReleasePipelineView
               apps={apps}
-              onTriggerDeploy={(app, bump, allowDirty) => {
-                const jobId = `deploy-${app.manifest.slug}-${Date.now()}`;
-                const newTab: TerminalTab = {
-                  id: jobId,
-                  title: `Deploy: ${app.manifest.displayName}`,
-                  lines: [`[PanoramaSRE] Initiating release pipeline for ${app.manifest.displayName}...`],
-                  isRunning: true,
-                };
-                setTerminalTabs((prev) => [...prev, newTab]);
-                setActiveTerminalTabId(jobId);
-                setIsDrawerOpen(true);
-                const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', './deploy-docker.ps1'];
-                if (bump !== 'none') {
-                  args.push('-BumpVersion', bump);
-                }
-                if (allowDirty) {
-                  args.push('-AllowDirty');
-                }
-                invoke('run_process_stream', {
-                  jobId,
-                  command: 'powershell.exe',
-                  args,
-                  workingDir: app.workspacePath,
-                  resourceLock: 'WSH_REMOTE_MUTATION',
-                }).then(() => syncFullTelemetry(false));
-              }}
+              onTriggerDeploy={executeAppDeploy}
+              onTriggerDeployAll={handleDeployAllApps}
               onTriggerRollback={(app, tag) => {
                 const jobId = `rollback-${app.manifest.slug}-${Date.now()}`;
                 const newTab: TerminalTab = {
