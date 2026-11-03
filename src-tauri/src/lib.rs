@@ -81,6 +81,8 @@ pub fn run() {
             scan_local_backups,
             fetch_wsh_snapshot,
             read_backup_ledger,
+            check_pageant_status,
+            launch_pageant_with_key,
             get_ssl_fleet_status,
             get_system_logs,
             clear_system_logs,

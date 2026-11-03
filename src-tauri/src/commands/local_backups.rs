@@ -171,3 +171,135 @@ pub async fn scan_local_backups(workspace_path: String) -> Result<BackupScanResu
     .await
     .map_err(|e| format!("Join error: {}", e))?
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageantStatus {
+    pub is_running: bool,
+    pub has_key_loaded: bool,
+    pub key_path: String,
+    pub pageant_executable: String,
+    pub message: String,
+}
+
+#[tauri::command]
+pub async fn check_pageant_status(custom_key_path: Option<String>) -> Result<PageantStatus, String> {
+    tokio::task::spawn_blocking(move || {
+        #[cfg(windows)]
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+        let key_path = custom_key_path.unwrap_or_else(|| {
+            "D:\\Google\\My Drive\\RSA\\rsa-key-deployment.ppk".to_string()
+        });
+
+        let pageant_executable = {
+            let default_exe = "C:\\Program Files\\PuTTY\\pageant.exe";
+            if Path::new(default_exe).exists() {
+                default_exe.to_string()
+            } else {
+                "pageant.exe".to_string()
+            }
+        };
+
+        // 1. Check if pageant.exe process is currently running
+        let mut cmd = Command::new("tasklist");
+        cmd.args(["/FI", "IMAGENAME eq pageant.exe", "/NH"]);
+        #[cfg(windows)]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+
+        let tasklist_out = cmd.output().map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+        let is_running = tasklist_out.to_lowercase().contains("pageant.exe");
+
+        if !is_running {
+            return Ok(PageantStatus {
+                is_running: false,
+                has_key_loaded: false,
+                key_path,
+                pageant_executable,
+                message: "PuTTY Pageant is NOT running. SSH batch operations will fail with interactive passphrase prompts.".to_string(),
+            });
+        }
+
+        // 2. Check if Pageant has the deployment key loaded and unlocked
+        // Using plink -v in batch mode against localhost or remote to test agent query
+        let mut plink_cmd = Command::new("plink.exe");
+        plink_cmd.args([
+            "-v",
+            "-batch",
+            "-ssh",
+            "-i",
+            &key_path,
+            "root@wsh.panoramadr.com",
+            "exit",
+        ]);
+        #[cfg(windows)]
+        plink_cmd.creation_flags(CREATE_NO_WINDOW);
+
+        let plink_out = plink_cmd.output();
+        let mut has_key_loaded = false;
+        let mut msg = "Pageant is running and holding the decrypted deployment identity.".to_string();
+
+        if let Ok(out) = plink_out {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if stderr.contains("Pageant has 1 SSH-2 keys") || stderr.contains("Trying Pageant key") || stderr.contains("Authenticating with public key \"rsa-key-deployment\" from agent") {
+                has_key_loaded = true;
+            } else if out.status.success() {
+                has_key_loaded = true;
+            } else if stderr.contains("Cannot answer interactive prompts in batch mode") {
+                has_key_loaded = false;
+                msg = "Pageant is running, but the deployment key is NOT loaded or locked with a passphrase.".to_string();
+            }
+        }
+
+        Ok(PageantStatus {
+            is_running: true,
+            has_key_loaded,
+            key_path,
+            pageant_executable,
+            message: msg,
+        })
+    })
+    .await
+    .map_err(|e| format!("Join error: {}", e))?
+}
+
+#[tauri::command]
+pub async fn launch_pageant_with_key(custom_key_path: Option<String>) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let key_path = custom_key_path.unwrap_or_else(|| {
+            "D:\\Google\\My Drive\\RSA\\rsa-key-deployment.ppk".to_string()
+        });
+
+        let pageant_executable = {
+            let default_exe = "C:\\Program Files\\PuTTY\\pageant.exe";
+            if Path::new(default_exe).exists() {
+                default_exe.to_string()
+            } else {
+                "pageant.exe".to_string()
+            }
+        };
+
+        if !Path::new(&key_path).exists() {
+            return Err(format!("Deployment key not found at: {}", key_path));
+        }
+
+        // Launch Pageant with the key path using PowerShell Start-Process
+        // This opens Pageant and prompts the user once for the passphrase GUI in their user desktop session
+        let mut cmd = Command::new("powershell.exe");
+        cmd.args([
+            "-NoProfile",
+            "-Command",
+            &format!("Start-Process -FilePath '{}' -ArgumentList '\"{}\"'", pageant_executable, key_path),
+        ]);
+
+        let out = cmd.output().map_err(|e| format!("Failed to spawn Pageant: {}", e))?;
+        if !out.status.success() {
+            let err = String::from_utf8_lossy(&out.stderr);
+            return Err(format!("Pageant launch failed: {}", err));
+        }
+
+        Ok("Pageant launched. If prompted, please enter your private key passphrase in the PuTTY dialog.".to_string())
+    })
+    .await
+    .map_err(|e| format!("Join error: {}", e))?
+}

@@ -9,6 +9,8 @@ interface TopLiveSyncBarProps {
   lastSyncTime: string | null;
   isSyncing: boolean;
   onRefresh: () => void;
+  backupFailureCount?: number;
+  onNavigateToBackups?: () => void;
 }
 
 export function TopLiveSyncBar({
@@ -19,6 +21,8 @@ export function TopLiveSyncBar({
   lastSyncTime,
   isSyncing,
   onRefresh,
+  backupFailureCount = 0,
+  onNavigateToBackups,
 }: TopLiveSyncBarProps) {
   const hasFleetAlert = totalAppCount > 0 && prodHealthyCount < totalAppCount;
 
@@ -72,6 +76,18 @@ export function TopLiveSyncBar({
             </span>
           )}
         </div>
+
+        {/* Database Automated Backup Failure Red Flag Banner */}
+        {backupFailureCount > 0 && (
+          <button
+            onClick={onNavigateToBackups}
+            className="hidden lg:inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/60 shadow-[0_0_12px_rgba(244,63,94,0.4)] animate-pulse font-semibold text-xs transition-colors cursor-pointer whitespace-nowrap"
+            title="Automated daily database backup failed! Click to inspect."
+          >
+            <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+            <span>BACKUP INCIDENT: {backupFailureCount} APP{backupFailureCount > 1 ? 'S' : ''} FAILED</span>
+          </button>
+        )}
       </div>
 
       {/* Right: Sync Status & Manual Refresh */}

@@ -20,7 +20,8 @@ import {
   Laptop, 
   Activity,
   FolderOpen,
-  ExternalLink
+  ExternalLink,
+  AlertTriangle
 } from 'lucide-react';
 
 interface BackupsRecoveryViewProps {
@@ -145,6 +146,67 @@ export function BackupsRecoveryView({
         </div>
       </div>
 
+      {/* Critical Automated Backup Incident Alert Banner */}
+      {ledger?.last_run_status?.toLowerCase() === 'failed' && (
+        <div className="rounded-xl border border-rose-500/80 bg-rose-950/40 p-5 shadow-[0_0_25px_rgba(244,63,94,0.35)] ring-1 ring-rose-500/50 space-y-3">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="flex items-start sm:items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-rose-500/20 border border-rose-500/50 flex items-center justify-center shrink-0">
+                <XCircle className="w-6 h-6 text-rose-400" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-rose-500 text-white uppercase tracking-wider">
+                    CRITICAL DR INCIDENT
+                  </span>
+                  <span className="text-xs text-rose-400 font-mono">
+                    {ledger.last_run_timestamp ? new Date(ledger.last_run_timestamp).toLocaleString() : 'Latest Automated Run'}
+                  </span>
+                </div>
+                <h3 className="text-base font-bold text-rose-100 mt-1">
+                  Automated Database Backup Run Failed
+                </h3>
+                <p className="text-xs text-rose-300/90 mt-0.5">
+                  The automated nightly database backup run failed. Immediate remediation is required to ensure database snapshot integrity.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0 flex-wrap">
+              <button
+                onClick={onTriggerFullGfsBackup}
+                disabled={isLoading}
+                className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white shadow-sm transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+                <span>Retry Full GFS Backup Now</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Root cause and failure details */}
+          <div className="p-3.5 rounded-lg bg-black/40 border border-rose-900/60 text-xs font-mono space-y-2">
+            <div className="flex items-center gap-2 text-rose-300 font-semibold">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+              <span className="text-white">Failure Root Cause Diagnosis:</span>
+              <span className="text-rose-200 font-normal">
+                Automated night backup job failed during remote execution.
+              </span>
+            </div>
+
+            <div className="space-y-1.5 pt-1 border-t border-rose-900/50">
+              <p className="text-[11px] font-semibold text-rose-300 uppercase tracking-wider">Failed Application Details:</p>
+              {ledger.latest_app_details.filter(a => a.status.toLowerCase() === 'failed').map(app => (
+                <div key={app.app_name} className="text-[11px] bg-rose-950/30 p-2 rounded border border-rose-900/40">
+                  <span className="font-semibold text-rose-200">{app.app_name}: </span>
+                  <span className="text-slate-300 break-all">{app.error || 'Execution failed with exit code 1'}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Top Metrics Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm">
@@ -179,23 +241,37 @@ export function BackupsRecoveryView({
           <p className="text-xs text-slate-400 mt-0.5">Automated nightly snapshots</p>
         </div>
 
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm">
+        <div className={`rounded-xl border p-4 shadow-sm transition-all ${
+          (ledger?.failed_runs || 0) > 0
+            ? 'border-rose-500/60 bg-rose-950/20'
+            : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900'
+        }`}>
           <p className="text-xs font-medium text-slate-500">Failed / Retried Runs</p>
           <p className="text-xl font-bold text-rose-400 mt-1 font-mono">
             {ledger?.failed_runs || 0}
           </p>
-          <p className="text-xs text-slate-400 mt-0.5">Zero corruption events</p>
+          <p className="text-xs text-rose-300/80 mt-0.5">
+            {(ledger?.failed_runs || 0) > 0 ? 'Requires attention / re-run' : 'Zero corruption events'}
+          </p>
         </div>
 
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm">
+        <div className={`rounded-xl border p-4 shadow-sm transition-all ${
+          ledger?.last_run_status === 'Failed'
+            ? 'border-rose-500/60 bg-rose-950/20'
+            : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900'
+        }`}>
           <p className="text-xs font-medium text-slate-500">Last GFS Execution</p>
           <p className="text-sm font-bold text-slate-900 dark:text-slate-100 mt-1 truncate font-mono">
-            {ledger?.last_run_timestamp || 'Never'}
+            {ledger?.last_run_timestamp ? new Date(ledger.last_run_timestamp).toLocaleString() : 'Never'}
           </p>
           <div className="flex items-center gap-1.5 mt-0.5">
             {ledger?.last_run_status === 'Success' ? (
               <span className="text-xs text-emerald-400 font-semibold flex items-center gap-1">
                 <CheckCircle2 className="w-3.5 h-3.5" /> Success
+              </span>
+            ) : ledger?.last_run_status === 'Failed' ? (
+              <span className="text-xs text-rose-400 font-bold flex items-center gap-1">
+                <XCircle className="w-3.5 h-3.5 text-rose-400" /> Failed (Incident)
               </span>
             ) : (
               <span className="text-xs text-slate-400 font-semibold">
@@ -463,8 +539,15 @@ export function BackupsRecoveryView({
                           </span>
                         )}
                       </td>
-                      <td className="py-2.5 text-slate-300 font-mono truncate max-w-xs">
-                        {app.file || 'N/A'}
+                      <td className="py-2.5 text-slate-300 font-mono max-w-sm">
+                        {app.file || (
+                          <div className="text-[11px] text-rose-300 bg-rose-950/40 p-1.5 rounded border border-rose-900/50 break-all whitespace-pre-wrap">
+                            <span className="font-bold text-rose-400">Error: </span>
+                            {app.error?.includes('Cannot answer interactive prompts in batch mode')
+                              ? 'PuTTY Pageant not running (Cannot answer interactive prompts in batch mode)'
+                              : app.error || 'Backup execution failed.'}
+                          </div>
+                        )}
                       </td>
                       <td className="py-2.5 text-slate-400 font-mono">
                         {formatBytes(app.size_bytes)}
@@ -566,20 +649,36 @@ export function BackupsRecoveryView({
                                     {r.app_details.map((ad) => (
                                       <div
                                         key={ad.app_name}
-                                        className="p-2.5 rounded-lg border border-slate-800 bg-slate-900/60 text-xs flex items-center justify-between"
+                                        className={`p-2.5 rounded-lg border text-xs flex flex-col justify-between gap-1.5 ${
+                                          ad.status.toLowerCase() === 'failed'
+                                            ? 'border-rose-800/80 bg-rose-950/30'
+                                            : 'border-slate-800 bg-slate-900/60'
+                                        }`}
                                       >
-                                        <div>
-                                          <p className="font-semibold text-slate-200">{ad.app_name}</p>
-                                          <p className="text-[11px] text-slate-400 truncate max-w-[180px]">
-                                            {ad.file || 'No archive file'}
-                                          </p>
+                                        <div className="flex items-center justify-between">
+                                          <div>
+                                            <p className="font-semibold text-slate-200">{ad.app_name}</p>
+                                            <p className="text-[11px] text-slate-400 truncate max-w-[180px]">
+                                              {ad.file || (
+                                                <span className="text-rose-400 font-semibold flex items-center gap-1">
+                                                  <XCircle className="w-2.5 h-2.5 inline" /> Failed
+                                                </span>
+                                              )}
+                                            </p>
+                                          </div>
+                                          <div className="text-right">
+                                            <span className="text-slate-300 font-mono">{formatBytes(ad.size_bytes)}</span>
+                                            {ad.duration_seconds !== null && ad.duration_seconds !== undefined && (
+                                              <p className="text-[10px] text-slate-500">{ad.duration_seconds.toFixed(1)}s</p>
+                                            )}
+                                          </div>
                                         </div>
-                                        <div className="text-right">
-                                          <span className="text-slate-300 font-mono">{formatBytes(ad.size_bytes)}</span>
-                                          {ad.duration_seconds !== null && ad.duration_seconds !== undefined && (
-                                            <p className="text-[10px] text-slate-500">{ad.duration_seconds.toFixed(1)}s</p>
-                                          )}
-                                        </div>
+                                        {ad.error && (
+                                          <div className="p-1.5 rounded bg-black/40 border border-rose-900/60 text-[10px] text-rose-300 font-mono break-all whitespace-pre-wrap">
+                                            <span className="font-bold text-rose-400">Error: </span>
+                                            {ad.error}
+                                          </div>
+                                        )}
                                       </div>
                                     ))}
                                   </div>

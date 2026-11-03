@@ -157,6 +157,7 @@ export interface AppBackupDetail {
   file: string | null;
   size_bytes: number | null;
   duration_seconds: number | null;
+  error?: string | null;
 }
 
 export interface BackupRecord {
@@ -168,6 +169,14 @@ export interface BackupRecord {
   destination: string;
   app_details?: AppBackupDetail[];
   pruned_files?: Record<string, string[]>;
+}
+
+export interface PageantStatus {
+  is_running: boolean;
+  has_key_loaded: boolean;
+  key_path: string;
+  pageant_executable: string;
+  message: string;
 }
 
 export interface BackupLedgerSummary {

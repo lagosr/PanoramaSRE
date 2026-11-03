@@ -10,6 +10,7 @@ pub struct AppBackupDetail {
     pub file: Option<String>,
     pub size_bytes: Option<u64>,
     pub duration_seconds: Option<f64>,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,6 +111,7 @@ pub async fn read_backup_ledger(custom_path: Option<String>) -> Result<BackupLed
                         file: info["file"].as_str().map(|s| s.to_string()),
                         size_bytes: size,
                         duration_seconds: info["duration_seconds"].as_f64(),
+                        error: info["error"].as_str().map(|s| s.to_string()),
                     });
                 }
             }

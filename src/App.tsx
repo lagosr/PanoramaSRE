@@ -46,7 +46,6 @@ export const App: React.FC = () => {
   const [backupLedger, setBackupLedger] = useState<BackupLedgerSummary | null>(null);
   const [sslFleet, setSslFleet] = useState<SslFleetSummary | null>(null);
   const [isLoadingSsl, setIsLoadingSsl] = useState<boolean>(false);
-
   // Terminal Drawer State
   const [terminalTabs, setTerminalTabs] = useState<TerminalTab[]>([]);
   const [activeTerminalTabId, setActiveTerminalTabId] = useState<string>('');
@@ -991,6 +990,46 @@ export const App: React.FC = () => {
     [saveTabToDb]
   );
 
+  const handleTriggerFullGfsBackup = useCallback(() => {
+    const jobId = `gfs-backup-${Date.now()}`;
+    const newTab: TerminalTab = {
+      id: jobId,
+      title: 'GFS Full Backup',
+      lines: ['[PanoramaSRE] Triggering BackupManager.ps1 full backup...'],
+      isRunning: true,
+      createdAt: new Date().toISOString(),
+    };
+    setTerminalTabs((prev) => [...prev, newTab]);
+    setActiveTerminalTabId(jobId);
+    setIsDrawerOpen(true);
+    saveTabToDb(newTab);
+
+    runStreamJob({
+      jobId,
+      label: 'GFS Full Backup',
+      command: 'powershell.exe',
+      args: [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        'C:\\Users\\rodrigo\\Documents\\AG Projects\\PanoramaDrSuite\\tools\\backup-manager\\BackupManager.ps1',
+        'Backup',
+      ],
+      lockType: 'LocalBackupIo',
+      onLine: (line) => {
+        appendTerminalLine(jobId, line);
+      },
+      onComplete: (exitCode) => {
+        finalizeTerminalJob(jobId, exitCode);
+        refreshBackupLedger();
+      },
+      onError: (err) => {
+        failTerminalJob(jobId, `GFS backup failed: ${err}`);
+      },
+    });
+  }, [appendTerminalLine, finalizeTerminalJob, failTerminalJob, refreshBackupLedger, saveTabToDb]);
+
   const handleCloseTab = (id: string) => {
     setTerminalTabs((prev) => prev.filter((t) => t.id !== id));
     invoke('delete_console_session', { id }).catch((e) =>
@@ -1035,12 +1074,18 @@ export const App: React.FC = () => {
   const unhealthyCount = apps.filter((a) => a.health && a.health.status !== 'healthy').length;
   const prodHealthyCount = apps.filter((a) => a.health?.status === 'healthy').length;
 
+  const backupFailureCount =
+    backupLedger?.last_run_status?.toLowerCase() === 'failed'
+      ? backupLedger?.latest_app_details.filter((a) => a.status.toLowerCase() === 'failed').length || 0
+      : 0;
+
   return (
     <div className="flex h-screen w-screen bg-[#050b14] text-slate-100 overflow-hidden font-sans">
       <SidebarRail
         activeTab={activeTab}
         onSelectTab={setActiveTab}
         unhealthyCount={unhealthyCount}
+        backupFailureCount={backupFailureCount}
       />
 
       <main className="flex-1 flex flex-col h-full overflow-hidden relative">
@@ -1052,6 +1097,8 @@ export const App: React.FC = () => {
           lastSyncTime={lastSyncTime}
           isSyncing={isManualSyncing}
           onRefresh={() => syncFullTelemetry(true)}
+          backupFailureCount={backupFailureCount}
+          onNavigateToBackups={() => setActiveTab('backups')}
         />
 
         <div className="flex-1 overflow-y-auto">
@@ -1060,7 +1107,10 @@ export const App: React.FC = () => {
               apps={apps}
               appliances={appliances}
               sslFleet={sslFleet}
+              backupLedger={backupLedger}
               isLoading={apps.length === 0}
+              onNavigateToBackups={() => setActiveTab('backups')}
+              onTriggerFullGfsBackup={handleTriggerFullGfsBackup}
             />
           )}
 
@@ -1172,45 +1222,7 @@ export const App: React.FC = () => {
               ledger={backupLedger}
               isLoading={isManualSyncing}
               onRefresh={refreshBackupLedger}
-              onTriggerFullGfsBackup={() => {
-                const jobId = `gfs-backup-${Date.now()}`;
-                const newTab: TerminalTab = {
-                  id: jobId,
-                  title: 'GFS Full Backup',
-                  lines: ['[PanoramaSRE] Triggering BackupManager.ps1 full backup...'],
-                  isRunning: true,
-                  createdAt: new Date().toISOString(),
-                };
-                setTerminalTabs((prev) => [...prev, newTab]);
-                setActiveTerminalTabId(jobId);
-                setIsDrawerOpen(true);
-                saveTabToDb(newTab);
-
-                runStreamJob({
-                  jobId,
-                  label: 'GFS Full Backup',
-                  command: 'powershell.exe',
-                  args: [
-                    '-NoProfile',
-                    '-ExecutionPolicy',
-                    'Bypass',
-                    '-File',
-                    'C:\\Users\\rodrigo\\Documents\\AG Projects\\PanoramaDrSuite\\tools\\backup-manager\\BackupManager.ps1',
-                    'Backup',
-                  ],
-                  lockType: 'LocalBackupIo',
-                  onLine: (line) => {
-                    appendTerminalLine(jobId, line);
-                  },
-                  onComplete: (exitCode) => {
-                    finalizeTerminalJob(jobId, exitCode);
-                    refreshBackupLedger();
-                  },
-                  onError: (err) => {
-                    failTerminalJob(jobId, `GFS backup failed: ${err}`);
-                  },
-                });
-              }}
+              onTriggerFullGfsBackup={handleTriggerFullGfsBackup}
               onTriggerAppBackup={handleTriggerAppBackup}
               onApplyLocalBackup={handleApplyLocalBackup}
               onRestoreRemoteBackup={handleRestoreRemoteBackup}

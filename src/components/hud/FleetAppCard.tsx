@@ -1,17 +1,19 @@
-import { DiscoveredApp } from '../../lib/types';
+import { DiscoveredApp, AppBackupDetail } from '../../lib/types';
 import { ProvenanceBadge } from '../ui/ProvenanceBadge';
-import { AlertCircle } from 'lucide-react';
+import { AlertCircle, HardDriveDownload, XCircle } from 'lucide-react';
 
 interface FleetAppCardProps {
   app: DiscoveredApp;
+  backupStatus?: AppBackupDetail | null;
   onOpenApp: (url: string) => void;
   onInspectComposition: (app: DiscoveredApp) => void;
 }
 
-export function FleetAppCard({ app, onOpenApp, onInspectComposition }: FleetAppCardProps) {
+export function FleetAppCard({ app, backupStatus, onOpenApp, onInspectComposition }: FleetAppCardProps) {
   const isHealthy = app.health?.status === 'healthy';
   const release = app.health?.release;
   const latency = app.latencyMs ?? 0;
+  const isBackupFailed = backupStatus?.status?.toLowerCase() === 'failed';
   const isCritical = !isHealthy || app.provenanceState === 'PROD_UNREACHABLE' || app.provenanceState === 'DIRTY_PROD';
 
   return (
@@ -19,6 +21,8 @@ export function FleetAppCard({ app, onOpenApp, onInspectComposition }: FleetAppC
       className={`flex flex-col justify-between rounded-xl border p-5 transition-all w-full min-w-0 overflow-hidden relative ${
         isCritical
           ? 'bg-rose-950/20 border-rose-500/80 shadow-[0_0_24px_rgba(244,63,94,0.25)] ring-1 ring-rose-500/50'
+          : isBackupFailed
+          ? 'bg-rose-950/10 border-rose-500/60 shadow-sm'
           : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm hover:border-slate-300 dark:hover:border-slate-700'
       }`}
     >
@@ -35,6 +39,19 @@ export function FleetAppCard({ app, onOpenApp, onInspectComposition }: FleetAppC
         </div>
       )}
 
+      {/* Backup Failure Warning Banner if DB snapshot failed */}
+      {!isCritical && isBackupFailed && (
+        <div className="mb-3 px-3 py-1.5 rounded-lg bg-rose-500/15 border border-rose-500/40 flex items-center justify-between text-rose-300 text-xs font-semibold">
+          <div className="flex items-center gap-1.5">
+            <HardDriveDownload className="w-4 h-4 text-rose-400 shrink-0" />
+            <span>DR ALERT: LATEST BACKUP FAILED</span>
+          </div>
+          <span className="font-mono text-[10px] uppercase tracking-wider bg-rose-500/20 text-rose-200 px-1.5 py-0.5 rounded border border-rose-500/30">
+            FAILED
+          </span>
+        </div>
+      )}
+
       <div className="min-w-0">
         {/* Card Header: Icon, Title, Status & Provenance */}
         <div className="flex items-start justify-between gap-3 mb-3">
@@ -43,6 +60,8 @@ export function FleetAppCard({ app, onOpenApp, onInspectComposition }: FleetAppC
               className={`w-10 h-10 rounded-lg flex items-center justify-center font-bold text-base shrink-0 border ${
                 isCritical
                   ? 'bg-rose-500/20 border-rose-500/40 text-rose-400'
+                  : isBackupFailed
+                  ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
                   : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
               }`}
             >
@@ -53,6 +72,9 @@ export function FleetAppCard({ app, onOpenApp, onInspectComposition }: FleetAppC
                 <span>{app.manifest.displayName}</span>
                 {isCritical && (
                   <span className="inline-block w-2 h-2 rounded-full bg-rose-500 animate-ping shrink-0" title="Unhealthy" />
+                )}
+                {isBackupFailed && !isCritical && (
+                  <span className="inline-block w-2 h-2 rounded-full bg-rose-400 shrink-0" title="Backup Failed" />
                 )}
               </h3>
               <p className="text-xs text-slate-500 font-mono truncate">
@@ -115,6 +137,26 @@ export function FleetAppCard({ app, onOpenApp, onInspectComposition }: FleetAppC
               {app.composition ? `${app.composition.local_branch} @ ${app.composition.local_head_short}` : 'Scanning...'}
             </span>
           </div>
+
+          {backupStatus && (
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-slate-500 shrink-0">DB Backup:</span>
+              <span
+                className={`font-mono truncate text-right text-[11px] font-semibold flex items-center gap-1 ${
+                  isBackupFailed ? 'text-rose-400' : 'text-emerald-400'
+                }`}
+              >
+                {isBackupFailed ? (
+                  <>
+                    <XCircle className="w-3 h-3 shrink-0 text-rose-400 inline" />
+                    <span>Failed</span>
+                  </>
+                ) : (
+                  <span>Success</span>
+                )}
+              </span>
+            </div>
+          )}
 
           {app.composition && app.composition.blast_radius_badges.length > 0 && (
             <div className="pt-1.5 flex flex-wrap gap-1 border-t border-slate-200/50 dark:border-slate-800/50">
