@@ -850,11 +850,8 @@ export const App: React.FC = () => {
     haltDeploymentsRef.current = false;
 
     try {
-      // 1. Order applications: PanoramaAuth (IdP) MUST lead if present
-      const sortedApps = [
-        ...appsToDeploy.filter((a) => a.manifest.slug === 'auth'),
-        ...appsToDeploy.filter((a) => a.manifest.slug !== 'auth'),
-      ];
+      // Respect the user's explicit deployment order (caller passes already-ordered slice)
+      const sortedApps = [...appsToDeploy];
 
       for (let i = 0; i < sortedApps.length; i++) {
         // Check if user clicked Halt

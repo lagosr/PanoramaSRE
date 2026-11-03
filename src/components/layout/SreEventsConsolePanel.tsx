@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   Terminal as TerminalIcon, 
   X, 
@@ -14,7 +14,9 @@ import {
   Radio,
   ChevronDown,
   Copy,
-  Check
+  Check,
+  Search,
+  ListFilter
 } from 'lucide-react';
 import { formatConsoleLine } from './ConsoleColorizer';
 
@@ -53,6 +55,17 @@ interface SreEventsConsolePanelProps {
   onToggleDrawer: () => void;
 }
 
+// Category extraction helper
+function getTabCategory(title: string): string {
+  const lower = title.toLowerCase();
+  if (lower.includes('deploy')) return 'Deployments';
+  if (lower.includes('tunnel') || lower.includes('cloudflare')) return 'Cloudflare Tunnel';
+  if (lower.includes('snapshot') || lower.includes('backup') || lower.includes('restore') || lower.includes('apply')) return 'Database / DR';
+  if (lower.includes('rollback')) return 'Rollbacks';
+  if (lower.includes('build') || lower.includes('test')) return 'Build & Test';
+  return 'Operations';
+}
+
 export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
   isOpen,
   onClose,
@@ -72,9 +85,28 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
   const [isExpanded, setIsExpanded] = useState(false);
   const [activeMainSection, setActiveMainSection] = useState<'console' | 'events'>('console');
   const [copiedState, setCopiedState] = useState(false);
+  const [isPickerOpen, setIsPickerOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'running' | 'success' | 'failed'>('all');
+  const [categoryFilter, setCategoryFilter] = useState<string>('all');
+  
   const scrollRef = useRef<HTMLDivElement>(null);
+  const pickerDropdownRef = useRef<HTMLDivElement>(null);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
+
+  // Close picker dropdown on click outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (pickerDropdownRef.current && !pickerDropdownRef.current.contains(event.target as Node)) {
+        setIsPickerOpen(false);
+      }
+    }
+    if (isPickerOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [isPickerOpen]);
 
   // Auto-scroll to bottom on new lines in console
   useEffect(() => {
@@ -82,6 +114,34 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [activeTab?.lines.length, activeMainSection]);
+
+  // Derived categories from existing tabs
+  const availableCategories = useMemo(() => {
+    const set = new Set<string>();
+    tabs.forEach((t) => set.add(getTabCategory(t.title)));
+    return Array.from(set);
+  }, [tabs]);
+
+  // Filtered and searched tabs for the picker dropdown
+  const filteredTabs = useMemo(() => {
+    return tabs.filter((t) => {
+      // Search match
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matchesTitle = t.title.toLowerCase().includes(q);
+        const matchesId = t.id.toLowerCase().includes(q);
+        if (!matchesTitle && !matchesId) return false;
+      }
+      // Status filter
+      if (statusFilter === 'running' && !t.isRunning) return false;
+      if (statusFilter === 'failed' && (t.isRunning || t.exitCode === 0)) return false;
+      if (statusFilter === 'success' && (t.isRunning || t.exitCode !== 0)) return false;
+      // Category filter
+      if (categoryFilter !== 'all' && getTabCategory(t.title) !== categoryFilter) return false;
+
+      return true;
+    });
+  }, [tabs, searchQuery, statusFilter, categoryFilter]);
 
   // When drawer is closed, render only the bottom status bar trigger
   if (!isOpen) {
@@ -98,7 +158,7 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
           {actionFeedback ? (
             <div className="flex items-center space-x-1.5 truncate">
               {actionFeedback.type === 'pending' && (
-                <Loader2 className="w-3.5 h-3.5 text-emerald-400 animate-spin shrink-0" />
+                <Loader2 className="w-3.5 h-3.5 text-amber-400 animate-spin shrink-0" />
               )}
               {actionFeedback.type === 'success' && (
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
@@ -106,27 +166,14 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
               {actionFeedback.type === 'error' && (
                 <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
               )}
-              <span
-                className={`truncate font-medium ${
-                  actionFeedback.type === 'error'
-                    ? 'text-rose-400'
-                    : actionFeedback.type === 'pending'
-                    ? 'text-emerald-300'
-                    : 'text-slate-200'
-                }`}
-              >
-                {actionFeedback.message}
-              </span>
+              <span className="truncate text-slate-300 text-[11px]">{actionFeedback.message}</span>
             </div>
           ) : (
-            <div className="flex items-center space-x-2 text-slate-500 truncate">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500/80" />
-              <span className="truncate">Ready • SRE Telemetry Active</span>
-            </div>
+            <span className="text-slate-500 text-[11px] truncate">Ready • SRE Telemetry Active</span>
           )}
         </div>
 
-        {/* Right: Drawer toggle trigger */}
+        {/* Right: Drawer toggle pill */}
         <div className="flex items-center space-x-2 shrink-0">
           <button
             onClick={onToggleDrawer}
@@ -141,7 +188,7 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
             <span>Console & Events</span>
             {tabs.length > 0 && (
               <span
-                className={`px-1 rounded-full text-[10px] font-bold ${
+                className={`px-1.5 rounded-full text-[10px] font-bold ${
                   runningJobsCount > 0 ? 'bg-emerald-500 text-black animate-pulse' : 'bg-slate-800 text-slate-300'
                 }`}
               >
@@ -272,24 +319,204 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
         </div>
       </div>
 
-      {/* Sub-Header for Console Stream Tabs */}
+      {/* Sub-Header for Console Stream Tabs with High-Density Selector */}
       {activeMainSection === 'console' && (
-        <div className="h-8 bg-slate-950/80 border-b border-slate-800/80 flex items-center justify-between px-3 shrink-0">
-          <div className="flex items-center space-x-1 overflow-x-auto min-w-0 flex-1">
-            {tabs.map((tab) => {
+        <div className="h-8 bg-slate-950/90 border-b border-slate-800 flex items-center justify-between px-3 shrink-0 gap-2 relative">
+          {/* High-Scale Stream Hub Selector Dropdown Button */}
+          <div className="relative shrink-0" ref={pickerDropdownRef}>
+            <button
+              onClick={() => setIsPickerOpen(!isPickerOpen)}
+              className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded text-xs font-semibold border transition-all ${
+                isPickerOpen
+                  ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300'
+                  : 'bg-slate-900 hover:bg-slate-800 border-slate-700 text-slate-200'
+              }`}
+              title="Browse all console streams with search and filtering"
+            >
+              <ListFilter className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              <span className="truncate max-w-[200px]">
+                {activeTab ? activeTab.title : 'Select Stream'}
+              </span>
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-slate-800 text-slate-400 ml-1">
+                {tabs.length}
+              </span>
+              <ChevronDown className={`w-3 h-3 text-slate-400 transition-transform ${isPickerOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {/* High-Density Stream Hub Overlay (Handles 100s of streams) */}
+            {isPickerOpen && (
+              <div className="absolute top-8 left-0 z-50 w-96 max-w-[90vw] bg-slate-950 border border-slate-800 rounded-xl shadow-2xl p-3 flex flex-col space-y-2.5 animate-fadeIn">
+                {/* Search Bar */}
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-2.5" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search streams by title or command..."
+                    className="w-full pl-8 pr-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-xs font-mono text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500/50"
+                    autoFocus
+                  />
+                  {searchQuery && (
+                    <button
+                      onClick={() => setSearchQuery('')}
+                      className="absolute right-2 top-2 text-slate-500 hover:text-slate-300"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                {/* Filter Pills Bar */}
+                <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-mono">
+                  {(['all', 'running', 'failed', 'success'] as const).map((st) => (
+                    <button
+                      key={st}
+                      type="button"
+                      onClick={() => setStatusFilter(st)}
+                      className={`px-2 py-0.5 rounded capitalize transition-colors ${
+                        statusFilter === st
+                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-bold'
+                          : 'bg-slate-900 text-slate-400 hover:text-slate-200 hover:bg-slate-800 border border-slate-800'
+                      }`}
+                    >
+                      {st}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Category Pills Bar */}
+                {availableCategories.length > 1 && (
+                  <div className="flex flex-wrap items-center gap-1 text-[10px] font-mono pt-1 border-t border-slate-900">
+                    <span className="text-slate-500 text-[10px]">Category:</span>
+                    <button
+                      type="button"
+                      onClick={() => setCategoryFilter('all')}
+                      className={`px-1.5 py-0.5 rounded transition-colors ${
+                        categoryFilter === 'all'
+                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-semibold'
+                          : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
+                      }`}
+                    >
+                      All
+                    </button>
+                    {availableCategories.map((c) => (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => setCategoryFilter(c)}
+                        className={`px-1.5 py-0.5 rounded transition-colors truncate max-w-[120px] ${
+                          categoryFilter === c
+                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-semibold'
+                            : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
+                        }`}
+                        title={c}
+                      >
+                        {c}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* Stream Item List with Scroll Container */}
+                <div className="max-h-64 overflow-y-auto space-y-1 custom-scrollbar pr-1">
+                  {filteredTabs.length === 0 ? (
+                    <div className="p-4 text-center text-xs text-slate-500 italic">
+                      No matching console streams found.
+                    </div>
+                  ) : (
+                    filteredTabs.map((tab) => {
+                      const isSelected = tab.id === activeTabId;
+                      const category = getTabCategory(tab.title);
+
+                      return (
+                        <div
+                          key={tab.id}
+                          onClick={() => {
+                            onSelectTab(tab.id);
+                            setIsPickerOpen(false);
+                          }}
+                          className={`p-2 rounded-lg border cursor-pointer transition-all flex items-center justify-between gap-2 ${
+                            isSelected
+                              ? 'bg-slate-900 border-emerald-500/50 shadow-sm'
+                              : 'bg-slate-950 hover:bg-slate-900/60 border-slate-800/80'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            {tab.isRunning ? (
+                              <Loader2 className="w-3.5 h-3.5 text-emerald-400 animate-spin shrink-0" />
+                            ) : tab.exitCode === 0 ? (
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                            ) : tab.exitCode !== undefined && tab.exitCode !== 0 ? (
+                              <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                            ) : (
+                              <TerminalIcon className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                            )}
+                            <div className="min-w-0">
+                              <p className="text-xs font-semibold text-slate-200 truncate">
+                                {tab.title}
+                              </p>
+                              <div className="flex items-center gap-1.5 text-[10px] text-slate-500 font-mono">
+                                <span>{category}</span>
+                                <span>•</span>
+                                <span>{tab.lines.length} lines</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onCloseTab(tab.id);
+                            }}
+                            className="p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-slate-800 shrink-0 transition-colors"
+                            title="Close stream"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+
+                {/* Footer Status in Dropdown */}
+                <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-[10px] text-slate-500 font-mono">
+                  <span>Showing {filteredTabs.length} of {tabs.length} streams</span>
+                  {tabs.length > 0 && (
+                    <button
+                      onClick={() => {
+                        onPurgeAllTabs();
+                        setIsPickerOpen(false);
+                      }}
+                      className="text-rose-400 hover:underline"
+                    >
+                      Purge All
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Quick-Access Compact Strip (Shows Most Recent Active Streams with auto-scroll) */}
+          <div className="flex items-center space-x-1 overflow-x-auto min-w-0 flex-1 custom-scrollbar">
+            {tabs.slice(-8).map((tab) => {
               const isActive = tab.id === activeTabId;
               return (
                 <div
                   key={tab.id}
                   onClick={() => onSelectTab(tab.id)}
-                  className={`flex items-center space-x-2 px-2.5 py-0.5 rounded text-xs cursor-pointer border transition-colors shrink-0 ${
+                  className={`flex items-center space-x-1.5 px-2 py-0.5 rounded text-xs cursor-pointer border transition-colors shrink-0 ${
                     isActive
                       ? 'bg-slate-900 border-slate-700 text-emerald-400 font-medium'
                       : 'bg-transparent border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-900/40'
                   }`}
+                  title={tab.title}
                 >
                   {tab.isRunning && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />}
-                  <span className="truncate max-w-[150px]">{tab.title}</span>
+                  <span className="truncate max-w-[130px]">{tab.title}</span>
                   <button
                     type="button"
                     onClick={(e) => {
@@ -299,13 +526,14 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
                     className="hover:text-red-400 text-slate-500 hover:bg-slate-800 p-0.5 rounded"
                     title="Close tab"
                   >
-                    <X className="w-3 h-3" />
+                    <X className="w-2.5 h-2.5" />
                   </button>
                 </div>
               );
             })}
           </div>
 
+          {/* Tab Actions: Copy, Abort, Clear */}
           <div className="flex items-center space-x-1.5 shrink-0 pl-2">
             {activeTab && activeTab.lines.length > 0 && (
               <button

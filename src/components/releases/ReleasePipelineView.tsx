@@ -20,7 +20,8 @@ import {
   Check,
   Square
 } from 'lucide-react';
-import { ConfirmDangerModal } from '../ui/ConfirmDangerModal';
+import { BatchDeployModal, BatchDeployOptions } from './BatchDeployModal';
+import { CustomSelect } from '../ui/CustomSelect';
 import { formatLocalDateTime, formatRelativeTime } from '../../lib/formatters';
 import { TerminalTab } from '../layout/SreTerminalDrawer';
 
@@ -163,7 +164,7 @@ export function ReleasePipelineView({
               className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg transition-all"
             >
               <Layers className="w-4 h-4" />
-              <span>Deploy All Suite Apps ({apps.length})</span>
+              <span>Batch / Multi-App Deployment...</span>
             </button>
           )}
         </div>
@@ -487,19 +488,20 @@ export function ReleasePipelineView({
                 </div>
 
                 <div className="flex flex-wrap items-center gap-4 text-xs">
-                  <div className="flex items-center gap-2">
-                    <span className="text-slate-400">SemVer Bump:</span>
-                    <select
-                      value={bumpVersion}
-                      onChange={(e) => setBumpVersion(e.target.value)}
-                      disabled={!!activeSelectedDeployJob}
-                      className="px-2.5 py-1 rounded bg-slate-800 border border-slate-700 text-slate-200 disabled:opacity-50"
-                    >
-                      <option value="none">none (keep current)</option>
-                      <option value="patch">patch (0.0.+1)</option>
-                      <option value="minor">minor (0.+1.0)</option>
-                      <option value="major">major (+1.0.0)</option>
-                    </select>
+                  <div className="flex items-center gap-2 min-w-[240px]">
+                    <span className="text-slate-400 whitespace-nowrap">SemVer Bump:</span>
+                    <div className="flex-1">
+                      <CustomSelect
+                        value={bumpVersion}
+                        options={[
+                          { value: 'none', label: 'none (keep current)' },
+                          { value: 'patch', label: 'patch (0.0.+1)' },
+                          { value: 'minor', label: 'minor (0.+1.0)' },
+                          { value: 'major', label: 'major (+1.0.0)' },
+                        ]}
+                        onChange={(val) => setBumpVersion(val)}
+                      />
+                    </div>
                   </div>
 
                   <label className="flex items-center gap-2 cursor-pointer text-slate-400">
@@ -637,16 +639,13 @@ export function ReleasePipelineView({
         </div>
       )}
 
-      {/* Confirmation Modal for Deploy All Suite Apps */}
-      <ConfirmDangerModal
+      {/* Batch / Multi-App Deployment Orchestrator Modal */}
+      <BatchDeployModal
         isOpen={showDeployAllModal}
-        title="Deploy All Panorama Suite Applications"
-        description={`This will sequentially trigger the 6-stage release pipeline (deploy-docker.ps1) for all ${apps.length} applications: PanoramaAuth, SpendyLedger, BiomedMaven, WaterAnalyzer, TastyBasket, and PanoramaResources. Live output will stream to the SRE terminal drawer.`}
-        confirmWord="DEPLOY"
-        confirmLabel="Initiate Suite-Wide Deployment"
-        onConfirm={() => {
+        apps={apps}
+        onConfirm={(options: BatchDeployOptions) => {
           setShowDeployAllModal(false);
-          onTriggerDeployAll(apps, bumpVersion, allowDirty);
+          onTriggerDeployAll(options.selectedApps, options.bumpVersion, options.allowDirty);
         }}
         onCancel={() => setShowDeployAllModal(false)}
       />
