@@ -115,7 +115,7 @@ export function LocalBackupHydratorPanel({
         </div>
       ) : archives.length === 0 ? (
         <div className="py-12 text-center rounded-lg border border-dashed border-slate-200 dark:border-slate-800 p-8">
-          <p className="text-sm font-medium text-slate-300">No backup archives found locally</p>
+          <p className="text-sm font-medium text-slate-700 dark:text-slate-300">No backup archives found locally</p>
           <p className="text-xs text-slate-500 mt-1">
             Click &quot;Pull Fresh Prod Backup&quot; to download a live snapshot from WSH.
           </p>
@@ -124,7 +124,7 @@ export function LocalBackupHydratorPanel({
         <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
-              <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-400 font-mono uppercase text-[10px]">
+              <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-500 dark:text-slate-400 font-mono uppercase text-[10px]">
                 <th className="py-3 px-4">Archive Filename</th>
                 <th className="py-3 px-4">Backup Date & Time</th>
                 <th className="py-3 px-4">Type</th>
@@ -141,33 +141,33 @@ export function LocalBackupHydratorPanel({
                     key={arc.file_name}
                     className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors"
                   >
-                    <td className="py-3 px-4 font-medium text-slate-200">
+                    <td className="py-3 px-4 font-medium text-slate-900 dark:text-slate-200">
                       {arc.file_name}
                     </td>
-                    <td className="py-3 px-4 text-slate-300">
+                    <td className="py-3 px-4 text-slate-700 dark:text-slate-300">
                       {arc.timestamp_str}
                     </td>
                     <td className="py-3 px-4">
                       {arc.is_auto_gfs ? (
-                        <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                        <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-purple-500/10 text-purple-700 dark:text-purple-400 border border-purple-500/20">
                           AUTO GFS
                         </span>
                       ) : (
-                        <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-500/10 text-slate-400 border border-slate-500/20">
+                        <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-500/10 text-slate-600 dark:text-slate-400 border border-slate-500/20">
                           MANUAL
                         </span>
                       )}
                     </td>
-                    <td className="py-3 px-4 text-slate-400">
+                    <td className="py-3 px-4 text-slate-500 dark:text-slate-400">
                       {formatBytes(arc.size_bytes)}
                     </td>
                     <td className="py-3 px-4">
                       {isSchemaMatch ? (
-                        <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                        <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20">
                           v{arc.schema_version} MATCH
                         </span>
                       ) : (
-                        <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                        <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-rose-500/10 text-rose-700 dark:text-rose-400 border border-rose-500/20">
                           v{arc.schema_version} (DEV v{liveSchemaVersion})
                         </span>
                       )}
@@ -176,7 +176,7 @@ export function LocalBackupHydratorPanel({
                       <button
                         onClick={() => setPendingApplyArchive(arc)}
                         disabled={isApplying}
-                        className="px-3 py-1 rounded text-xs font-medium bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 transition-colors"
+                        className="px-3 py-1 rounded text-xs font-medium bg-emerald-600/10 hover:bg-emerald-600/20 dark:bg-emerald-600/20 dark:hover:bg-emerald-600/30 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 transition-colors"
                       >
                         Apply Local
                       </button>

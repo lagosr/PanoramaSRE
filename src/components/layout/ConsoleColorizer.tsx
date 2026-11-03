@@ -17,7 +17,7 @@ export interface ColoredSegment {
 export function formatConsoleLine(line: string): React.ReactNode {
   if (!line) return <span>&nbsp;</span>;
 
-  // 1. Critical Errors
+  // 1. Critical Errors (WCAG AAA/AA 4.5:1+)
   if (
     /error/i.test(line) ||
     /fatal/i.test(line) ||
@@ -28,10 +28,10 @@ export function formatConsoleLine(line: string): React.ReactNode {
     /command failed/i.test(line) ||
     /rejected/i.test(line)
   ) {
-    return <span className="text-rose-400 font-semibold">{line}</span>;
+    return <span className="text-rose-600 dark:text-rose-400 font-semibold">{line}</span>;
   }
 
-  // 2. Warnings & Deprecations
+  // 2. Warnings & Deprecations (WCAG AA 4.5:1+)
   if (
     /warn/i.test(line) ||
     /\bWRN\b/.test(line) ||
@@ -41,10 +41,10 @@ export function formatConsoleLine(line: string): React.ReactNode {
     /dirty/i.test(line) ||
     /blocking/i.test(line)
   ) {
-    return <span className="text-amber-400">{line}</span>;
+    return <span className="text-amber-700 dark:text-amber-400 font-medium">{line}</span>;
   }
 
-  // 3. Success, Tunnel Info & Completion
+  // 3. Success, Tunnel Info & Completion (WCAG AAA/AA 4.5:1+)
   if (
     /success/i.test(line) ||
     /healthy/i.test(line) ||
@@ -55,12 +55,12 @@ export function formatConsoleLine(line: string): React.ReactNode {
     /finished `release`/i.test(line) ||
     /Registered tunnel connection/i.test(line)
   ) {
-    return <span className="text-emerald-400 font-medium">{line}</span>;
+    return <span className="text-emerald-700 dark:text-emerald-400 font-medium">{line}</span>;
   }
 
   // 3.5. Standard Tunnel Informational logs
   if (/\bINF\b/.test(line)) {
-    return <span className="text-sky-300/90">{line}</span>;
+    return <span className="text-sky-700 dark:text-sky-300 font-medium">{line}</span>;
   }
 
   // 4. Docker & Runner Prefixes (#1, #2, [RUNNER], [PanoramaSRE])
@@ -71,8 +71,8 @@ export function formatConsoleLine(line: string): React.ReactNode {
       const rest = line.substring(bracketEnd + 1);
       return (
         <span>
-          <span className="text-sky-400 font-bold">{tag}</span>
-          <span className="text-slate-300">{rest}</span>
+          <span className="text-sky-700 dark:text-sky-400 font-bold">{tag}</span>
+          <span className="text-slate-800 dark:text-slate-300">{rest}</span>
         </span>
       );
     }
@@ -80,9 +80,9 @@ export function formatConsoleLine(line: string): React.ReactNode {
 
   // 5. Git / Remote / Network commands
   if (line.startsWith('>>>') || line.startsWith('==>') || line.startsWith('---') || line.startsWith('Hit:') || line.startsWith('Get:')) {
-    return <span className="text-cyan-300">{line}</span>;
+    return <span className="text-teal-700 dark:text-cyan-300 font-medium">{line}</span>;
   }
 
   // 6. Default styled console text
-  return <span className="text-slate-300">{line}</span>;
+  return <span className="text-slate-800 dark:text-slate-300">{line}</span>;
 }

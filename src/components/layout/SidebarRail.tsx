@@ -47,20 +47,20 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
   ];
 
   return (
-    <aside className="w-16 md:w-64 bg-slate-950 border-r border-slate-800 flex flex-col justify-between select-none shrink-0">
+    <aside className="w-16 md:w-64 bg-white dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 flex flex-col justify-between select-none shrink-0">
       <div>
         {/* App Title / Header */}
-        <div className="h-14 flex items-center px-4 border-b border-slate-800 space-x-3">
+        <div className="h-14 flex items-center px-4 border-b border-slate-200 dark:border-slate-800 space-x-3">
           <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border ${
             unhealthyCount > 0
               ? 'bg-rose-500/10 border-rose-500/40'
               : 'bg-emerald-500/10 border-emerald-500/30'
           }`}>
-            <CircleDot className={`w-4 h-4 ${unhealthyCount > 0 ? 'text-rose-400 animate-ping' : 'text-emerald-400 animate-pulse'}`} />
+            <CircleDot className={`w-4 h-4 ${unhealthyCount > 0 ? 'text-rose-400 animate-ping' : 'text-emerald-500 dark:text-emerald-400 animate-pulse'}`} />
           </div>
           <div className="hidden md:block">
-            <h1 className="text-sm font-bold tracking-tight text-slate-100">PanoramaSRE</h1>
-            <p className="text-[10px] text-slate-400 font-mono">
+            <h1 className="text-sm font-bold tracking-tight text-slate-900 dark:text-slate-100">PanoramaSRE</h1>
+            <p className="text-[10px] text-slate-500 dark:text-slate-400 font-mono">
               Control Plane v1.0.0 {APP_VERSION_INFO.buildDate ? `(${APP_VERSION_INFO.buildDate})` : ''}
             </p>
           </div>
@@ -80,16 +80,16 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
                 className={`w-full flex items-center px-3 py-2.5 rounded-lg text-sm font-medium transition-colors group relative ${
                   isActive
                     ? isAlertTab
-                      ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40 ring-1 ring-rose-500/40'
-                      : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                      ? 'bg-rose-500/20 text-rose-800 dark:text-rose-300 border border-rose-500/40 ring-1 ring-rose-500/40 font-semibold'
+                      : 'bg-emerald-500/15 text-emerald-800 dark:text-emerald-400 border border-emerald-500/30 dark:border-emerald-500/20 font-semibold shadow-sm'
                     : isAlertTab
-                    ? 'text-rose-400 hover:text-rose-300 hover:bg-rose-950/30 border border-rose-500/30'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                    ? 'text-rose-700 dark:text-rose-400 hover:text-rose-800 dark:hover:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/30 border border-rose-500/30'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-900 border border-transparent'
                 }`}
                 title={item.label}
               >
                 <Icon className={`w-5 h-5 shrink-0 transition-colors ${
-                  isAlertTab ? 'text-rose-400 animate-pulse' : isActive ? 'text-emerald-400' : 'text-slate-400 group-hover:text-slate-200'
+                  isAlertTab ? 'text-rose-600 dark:text-rose-400 animate-pulse' : isActive ? 'text-emerald-700 dark:text-emerald-400' : 'text-slate-400 group-hover:text-slate-600 dark:group-hover:text-slate-200'
                 }`} />
                 <span className="ml-3 hidden md:inline whitespace-nowrap">{item.label}</span>
 
@@ -97,7 +97,7 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
                   <span className={`hidden md:inline-flex items-center justify-center ml-auto px-2 py-0.5 rounded-full text-[11px] font-mono font-bold shrink-0 ${
                     item.id === 'hud' || item.id === 'backups'
                       ? 'bg-rose-500 text-white shadow-[0_0_8px_rgba(244,63,94,0.6)] animate-pulse'
-                      : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                      : 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/40'
                   }`}>
                     {item.badge}
                   </span>

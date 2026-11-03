@@ -219,11 +219,11 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
   // When drawer is closed, render only the bottom status bar trigger
   if (!isOpen) {
     return (
-      <footer className="h-8 bg-slate-950 border-t border-slate-800 px-3 flex items-center justify-between text-xs font-mono select-none z-50 shrink-0">
+      <footer className="h-8 bg-white dark:bg-slate-950 border-t border-slate-200 dark:border-slate-800 px-3 flex items-center justify-between text-xs font-mono select-none z-50 shrink-0">
         {/* Left: Host indicator + action status */}
         <div className="flex items-center space-x-3 min-w-0 flex-1 mr-4">
-          <div className="flex items-center space-x-1.5 shrink-0 bg-slate-900 px-2 py-0.5 rounded border border-slate-800 text-slate-300">
-            <Radio className="w-3 h-3 text-emerald-400 animate-pulse shrink-0" />
+          <div className="flex items-center space-x-1.5 shrink-0 bg-slate-100 dark:bg-slate-900 px-2 py-0.5 rounded border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-300">
+            <Radio className="w-3 h-3 text-emerald-500 dark:text-emerald-400 animate-pulse shrink-0" />
             <span className="text-[11px] font-semibold">wsh.panoramadr.com</span>
             <span className="text-[10px] text-slate-500">(LAN Direct)</span>
           </div>
@@ -231,18 +231,18 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
           {actionFeedback ? (
             <div className="flex items-center space-x-1.5 truncate">
               {actionFeedback.type === 'pending' && (
-                <Loader2 className="w-3.5 h-3.5 text-amber-400 animate-spin shrink-0" />
+                <Loader2 className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400 animate-spin shrink-0" />
               )}
               {actionFeedback.type === 'success' && (
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 dark:text-emerald-400 shrink-0" />
               )}
               {actionFeedback.type === 'error' && (
-                <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                <AlertCircle className="w-3.5 h-3.5 text-rose-500 dark:text-rose-400 shrink-0" />
               )}
-              <span className="truncate text-slate-300 text-[11px]">{actionFeedback.message}</span>
+              <span className="truncate text-slate-700 dark:text-slate-300 text-[11px]">{actionFeedback.message}</span>
             </div>
           ) : (
-            <span className="text-slate-500 text-[11px] truncate">Ready • SRE Telemetry Active</span>
+            <span className="text-slate-500 dark:text-slate-400 text-[11px] truncate">Ready • SRE Telemetry Active</span>
           )}
         </div>
 
@@ -252,8 +252,8 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
             onClick={onToggleDrawer}
             className={`flex items-center space-x-1.5 px-2.5 py-1 rounded transition-colors text-xs font-medium border ${
               runningJobsCount > 0
-                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'
-                : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/20'
+                : 'bg-slate-50 dark:bg-slate-900/60 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-900'
             }`}
             title="Open Console & Events (Ctrl+` or click)"
           >
@@ -262,7 +262,7 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
             {tabs.length > 0 && (
               <span
                 className={`px-1.5 rounded-full text-[10px] font-bold ${
-                  runningJobsCount > 0 ? 'bg-emerald-500 text-black animate-pulse' : 'bg-slate-800 text-slate-300'
+                  runningJobsCount > 0 ? 'bg-emerald-500 text-black animate-pulse' : 'bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
                 }`}
               >
                 {runningJobsCount > 0 ? runningJobsCount : tabs.length}
@@ -278,27 +278,29 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
   // When drawer is OPEN: Flush attached to bottom-0 with NO GAP
   return (
     <div
-      className={`fixed bottom-0 left-0 right-0 z-50 bg-[#050b14] border-t border-slate-800 flex flex-col shadow-2xl transition-all duration-200 select-none ${
+      className={`fixed bottom-0 left-0 right-0 z-50 bg-white dark:bg-[#050b14] border-t border-slate-200 dark:border-slate-800 flex flex-col shadow-2xl transition-all duration-200 select-none ${
         isExpanded ? 'h-full' : 'h-88'
       }`}
     >
       {/* Top Main Section Switcher & Window Control Bar */}
-      <div className="h-10 bg-slate-950 border-b border-slate-800 flex items-center justify-between px-3 shrink-0 gap-3">
+      <div className="h-10 bg-slate-100 dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-3 shrink-0 gap-3">
         {/* Left: Primary Section Tabs (Terminal Console vs Notification & Events) */}
         <div className="flex items-center space-x-2 shrink-0">
           <button
             onClick={() => setActiveMainSection('console')}
             className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
               activeMainSection === 'console'
-                ? 'bg-slate-900 border-emerald-500/40 text-emerald-400 shadow-sm'
-                : 'bg-transparent border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-900/40'
+                ? 'bg-white dark:bg-slate-900 border-emerald-600/40 dark:border-emerald-500/40 text-emerald-700 dark:text-emerald-400 shadow-sm'
+                : 'bg-transparent border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-900/40'
             }`}
           >
             <TerminalIcon className="w-3.5 h-3.5" />
             <span>Console Stream</span>
             {tabs.length > 0 && (
               <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
-                runningJobsCount > 0 ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-slate-800 text-slate-400'
+                runningJobsCount > 0
+                  ? 'bg-emerald-500/15 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30'
+                  : 'bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-400'
               }`}>
                 {tabs.length}
               </span>
@@ -309,14 +311,14 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
             onClick={() => setActiveMainSection('events')}
             className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
               activeMainSection === 'events'
-                ? 'bg-slate-900 border-amber-500/40 text-amber-400 shadow-sm'
-                : 'bg-transparent border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-900/40'
+                ? 'bg-white dark:bg-slate-900 border-amber-600/40 dark:border-amber-500/40 text-amber-700 dark:text-amber-400 shadow-sm'
+                : 'bg-transparent border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-900/40'
             }`}
           >
             <Bell className="w-3.5 h-3.5" />
             <span>Events & Notifications</span>
             {eventsHistory.length > 0 && (
-              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-amber-500/15 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30">
                 {eventsHistory.length}
               </span>
             )}
@@ -328,21 +330,21 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
           <div
             className={`hidden md:flex items-center space-x-1.5 px-2.5 py-1 rounded text-xs border font-medium truncate max-w-sm ${
               actionFeedback.type === 'pending'
-                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-800 dark:text-emerald-300'
                 : actionFeedback.type === 'error'
-                ? 'bg-rose-500/10 border-rose-500/30 text-rose-300'
-                : 'bg-slate-900 border-slate-700 text-slate-200'
+                ? 'bg-rose-500/10 border-rose-500/30 text-rose-800 dark:text-rose-300'
+                : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200'
             }`}
             title={actionFeedback.message}
           >
             {actionFeedback.type === 'pending' && (
-              <Loader2 className="w-3.5 h-3.5 text-emerald-400 animate-spin shrink-0" />
+              <Loader2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 animate-spin shrink-0" />
             )}
             {actionFeedback.type === 'success' && (
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
             )}
             {actionFeedback.type === 'error' && (
-              <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+              <AlertCircle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
             )}
             <span className="truncate">{actionFeedback.message}</span>
           </div>
@@ -350,15 +352,15 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
 
         {/* Right: Host Badge & Global Window Controls */}
         <div className="flex items-center space-x-2 shrink-0">
-          <div className="hidden lg:flex items-center space-x-1.5 px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-[11px] font-mono text-slate-400">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+          <div className="hidden lg:flex items-center space-x-1.5 px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-[11px] font-mono text-slate-700 dark:text-slate-400">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400" />
             <span>wsh.panoramadr.com</span>
           </div>
 
           {activeMainSection === 'console' && tabs.length > 0 && (
             <button
               onClick={onPurgeAllTabs}
-              className="flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-mono text-rose-400 hover:bg-rose-500/10 border border-rose-500/20 transition-colors"
+              className="flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-mono text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 border border-rose-300 dark:border-rose-500/20 transition-colors"
               title="Delete all console tabs and purge from database"
             >
               <span>Purge All</span>
@@ -368,7 +370,7 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
           {activeMainSection === 'events' && eventsHistory.length > 0 && (
             <button
               onClick={onClearEvents}
-              className="flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-mono text-slate-400 hover:text-slate-200 hover:bg-slate-800 border border-slate-700/60 transition-colors"
+              className="flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-mono text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-800 border border-slate-300 dark:border-slate-700/60 transition-colors"
               title="Clear event history log"
             >
               <span>Clear Events</span>
@@ -377,14 +379,14 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
 
           <button
             onClick={() => setIsExpanded(!isExpanded)}
-            className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors"
+            className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 transition-colors"
             title={isExpanded ? 'Restore' : 'Maximize'}
           >
             {isExpanded ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
           </button>
           <button
             onClick={onClose}
-            className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors"
+            className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 transition-colors"
             title="Close Panel (X)"
           >
             <X className="w-3.5 h-3.5" />
@@ -394,46 +396,46 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
 
       {/* Sub-Header for Console Stream Tabs with High-Density Selector */}
       {activeMainSection === 'console' && (
-        <div className="h-8 bg-slate-950/90 border-b border-slate-800 flex items-center justify-between px-3 shrink-0 gap-2 relative">
+        <div className="h-8 bg-slate-50 dark:bg-slate-950/90 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-3 shrink-0 gap-2 relative">
           {/* High-Scale Stream Hub Selector Dropdown Button */}
           <div className="relative shrink-0" ref={pickerDropdownRef}>
             <button
               onClick={() => setIsPickerOpen(!isPickerOpen)}
               className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded text-xs font-semibold border transition-all ${
                 isPickerOpen
-                  ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300'
-                  : 'bg-slate-900 hover:bg-slate-800 border-slate-700 text-slate-200'
+                  ? 'bg-emerald-500/15 dark:bg-emerald-500/20 border-emerald-500/50 text-emerald-800 dark:text-emerald-300'
+                  : 'bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-200'
               }`}
               title="Browse all console streams with search and filtering"
             >
-              <ListFilter className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              <ListFilter className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
               <span className="truncate max-w-[200px]">
                 {activeTab ? activeTab.title : 'Select Stream'}
               </span>
-              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-slate-800 text-slate-400 ml-1">
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-400 ml-1">
                 {tabs.length}
               </span>
-              <ChevronDown className={`w-3 h-3 text-slate-400 transition-transform ${isPickerOpen ? 'rotate-180' : ''}`} />
+              <ChevronDown className={`w-3 h-3 text-slate-500 dark:text-slate-400 transition-transform ${isPickerOpen ? 'rotate-180' : ''}`} />
             </button>
 
             {/* High-Density Stream Hub Overlay (Handles 100s of streams) */}
             {isPickerOpen && (
-              <div className="absolute top-8 left-0 z-50 w-96 max-w-[90vw] bg-slate-950 border border-slate-800 rounded-xl shadow-2xl p-3 flex flex-col space-y-2.5 animate-fadeIn">
+              <div className="absolute top-8 left-0 z-50 w-96 max-w-[90vw] bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl p-3 flex flex-col space-y-2.5 animate-fadeIn">
                 {/* Search Bar */}
                 <div className="relative">
-                  <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-2.5" />
+                  <Search className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 absolute left-2.5 top-2.5" />
                   <input
                     type="text"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     placeholder="Search streams by title or command..."
-                    className="w-full pl-8 pr-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-xs font-mono text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500/50"
+                    className="w-full pl-8 pr-3 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-mono text-slate-900 dark:text-slate-200 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:border-emerald-500/50"
                     autoFocus
                   />
                   {searchQuery && (
                     <button
                       onClick={() => setSearchQuery('')}
-                      className="absolute right-2 top-2 text-slate-500 hover:text-slate-300"
+                      className="absolute right-2 top-2 text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300"
                     >
                       <X className="w-3.5 h-3.5" />
                     </button>
@@ -449,8 +451,8 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
                       onClick={() => setStatusFilter(st)}
                       className={`px-2 py-0.5 rounded capitalize transition-colors ${
                         statusFilter === st
-                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-bold'
-                          : 'bg-slate-900 text-slate-400 hover:text-slate-200 hover:bg-slate-800 border border-slate-800'
+                          ? 'bg-emerald-500/15 dark:bg-emerald-500/20 text-emerald-800 dark:text-emerald-300 border border-emerald-500/40 font-bold'
+                          : 'bg-slate-100 dark:bg-slate-900 text-slate-700 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800'
                       }`}
                     >
                       {st}
@@ -460,15 +462,15 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
 
                 {/* Category Pills Bar */}
                 {availableCategories.length > 1 && (
-                  <div className="flex flex-wrap items-center gap-1 text-[10px] font-mono pt-1 border-t border-slate-900">
+                  <div className="flex flex-wrap items-center gap-1 text-[10px] font-mono pt-1 border-t border-slate-200 dark:border-slate-900">
                     <span className="text-slate-500 text-[10px]">Category:</span>
                     <button
                       type="button"
                       onClick={() => setCategoryFilter('all')}
                       className={`px-1.5 py-0.5 rounded transition-colors ${
                         categoryFilter === 'all'
-                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-semibold'
-                          : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
+                          ? 'bg-emerald-500/15 dark:bg-emerald-500/20 text-emerald-800 dark:text-emerald-300 border border-emerald-500/40 font-semibold'
+                          : 'bg-slate-100 dark:bg-slate-900 text-slate-700 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 border border-slate-200 dark:border-slate-800'
                       }`}
                     >
                       All
@@ -480,8 +482,8 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
                         onClick={() => setCategoryFilter(c)}
                         className={`px-1.5 py-0.5 rounded transition-colors truncate max-w-[120px] ${
                           categoryFilter === c
-                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-semibold'
-                            : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
+                            ? 'bg-emerald-500/15 dark:bg-emerald-500/20 text-emerald-800 dark:text-emerald-300 border border-emerald-500/40 font-semibold'
+                            : 'bg-slate-100 dark:bg-slate-900 text-slate-700 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 border border-slate-200 dark:border-slate-800'
                         }`}
                         title={c}
                       >
@@ -512,31 +514,31 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
                           }}
                           className={`p-2 rounded-lg border cursor-pointer transition-all flex items-center justify-between gap-2 ${
                             isSelected
-                              ? 'bg-slate-900 border-emerald-500/50 shadow-sm'
-                              : 'bg-slate-950 hover:bg-slate-900/60 border-slate-800/80'
+                              ? 'bg-emerald-500/5 dark:bg-slate-900 border-emerald-500/50 shadow-sm'
+                              : 'bg-slate-50 dark:bg-slate-950 hover:bg-slate-100 dark:hover:bg-slate-900/60 border-slate-200 dark:border-slate-800/80'
                           }`}
                         >
                           <div className="flex items-center gap-2 min-w-0">
                             {tab.isRunning ? (
-                              <Loader2 className="w-3.5 h-3.5 text-emerald-400 animate-spin shrink-0" />
+                              <Loader2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 animate-spin shrink-0" />
                             ) : tab.exitCode === 0 ? (
-                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
                             ) : tab.exitCode !== undefined && tab.exitCode !== 0 ? (
-                              <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                              <AlertCircle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
                             ) : (
-                              <TerminalIcon className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                              <TerminalIcon className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 shrink-0" />
                             )}
                             <div className="min-w-0">
-                              <p className="text-xs font-semibold text-slate-200 truncate">
+                              <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate">
                                 {tab.title}
                               </p>
                               <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500 font-mono">
-                                <span className="text-slate-400">{category}</span>
+                                <span className="text-slate-600 dark:text-slate-400">{category}</span>
                                 <span>•</span>
                                 <span>{tab.lines.length} lines</span>
                                 <span>•</span>
-                                <span className={tab.isRunning ? "text-emerald-400 font-semibold flex items-center gap-1" : "text-slate-400 flex items-center gap-1"}>
-                                  <Clock className="w-2.5 h-2.5 text-slate-500 shrink-0" />
+                                <span className={tab.isRunning ? "text-emerald-700 dark:text-emerald-400 font-semibold flex items-center gap-1" : "text-slate-600 dark:text-slate-400 flex items-center gap-1"}>
+                                  <Clock className="w-2.5 h-2.5 text-slate-400 dark:text-slate-500 shrink-0" />
                                   <span>{finishDetails.label}</span>
                                 </span>
                               </div>
@@ -549,7 +551,7 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
                               e.stopPropagation();
                               onCloseTab(tab.id);
                             }}
-                            className="p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-slate-800 shrink-0 transition-colors"
+                            className="p-1 rounded text-slate-400 dark:text-slate-500 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-slate-200 dark:hover:bg-slate-800 shrink-0 transition-colors"
                             title="Close stream"
                           >
                             <X className="w-3 h-3" />
@@ -561,7 +563,7 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
                 </div>
 
                 {/* Footer Status in Dropdown */}
-                <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-[10px] text-slate-500 font-mono">
+                <div className="pt-2 border-t border-slate-200 dark:border-slate-800/80 flex items-center justify-between text-[10px] text-slate-500 font-mono">
                   <span>Showing {filteredTabs.length} of {tabs.length} streams</span>
                   {tabs.length > 0 && (
                     <button
@@ -569,7 +571,7 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
                         onPurgeAllTabs();
                         setIsPickerOpen(false);
                       }}
-                      className="text-rose-400 hover:underline"
+                      className="text-rose-600 dark:text-rose-400 hover:underline"
                     >
                       Purge All
                     </button>
@@ -589,12 +591,12 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
                   onClick={() => onSelectTab(tab.id)}
                   className={`flex items-center space-x-1.5 px-2 py-0.5 rounded text-xs cursor-pointer border transition-colors shrink-0 ${
                     isActive
-                      ? 'bg-slate-900 border-slate-700 text-emerald-400 font-medium'
-                      : 'bg-transparent border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-900/40'
+                      ? 'bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-emerald-700 dark:text-emerald-400 font-semibold shadow-xs'
+                      : 'bg-transparent border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-900/40'
                   }`}
                   title={tab.title}
                 >
-                  {tab.isRunning && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />}
+                  {tab.isRunning && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400 animate-ping" />}
                   <span className="truncate max-w-[130px]">{tab.title}</span>
                   <button
                     type="button"
@@ -602,7 +604,7 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
                       e.stopPropagation();
                       onCloseTab(tab.id);
                     }}
-                    className="hover:text-red-400 text-slate-500 hover:bg-slate-800 p-0.5 rounded"
+                    className="hover:text-rose-600 dark:hover:text-red-400 text-slate-400 dark:text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-800 p-0.5 rounded transition-colors"
                     title="Close tab"
                   >
                     <X className="w-2.5 h-2.5" />
@@ -625,17 +627,17 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
                     console.warn('Failed to copy console lines:', err);
                   }
                 }}
-                className="flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-mono bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors"
+                className="flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-mono bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 border border-slate-300 dark:border-slate-700 transition-colors shadow-xs"
                 title="Copy all output from current tab to clipboard"
               >
                 {copiedState ? (
                   <>
-                    <Check className="w-3 h-3 text-emerald-400" />
-                    <span className="text-emerald-400">Copied!</span>
+                    <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                    <span className="text-emerald-700 dark:text-emerald-400 font-semibold">Copied!</span>
                   </>
                 ) : (
                   <>
-                    <Copy className="w-3 h-3 text-slate-400" />
+                    <Copy className="w-3 h-3 text-slate-500 dark:text-slate-400" />
                     <span>Copy</span>
                   </>
                 )}
@@ -645,7 +647,7 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
             {activeTab?.isRunning && (
               <button
                 onClick={() => onAbortJob(activeTab.id)}
-                className="flex items-center space-x-1 px-2 py-0.5 rounded bg-red-500/20 text-red-400 hover:bg-red-500/30 text-[11px] font-mono transition-colors"
+                className="flex items-center space-x-1 px-2 py-0.5 rounded bg-rose-500/15 dark:bg-red-500/20 text-rose-700 dark:text-red-400 hover:bg-rose-500/25 dark:hover:bg-red-500/30 text-[11px] font-mono transition-colors font-medium"
                 title="Abort Running Process"
               >
                 <StopCircle className="w-3 h-3" />
@@ -656,7 +658,7 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
             {activeTab && (
               <button
                 onClick={() => onClearTab(activeTab.id)}
-                className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors"
+                className="p-1 rounded hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 transition-colors"
                 title="Clear current tab"
               >
                 <Trash2 className="w-3 h-3" />
@@ -670,7 +672,7 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
       {activeMainSection === 'console' ? (
         <div
           ref={scrollRef}
-          className="flex-1 p-4 font-mono text-xs overflow-y-auto space-y-0.5 selection:bg-emerald-500/30 selection:text-emerald-200 select-text bg-[#050b14]"
+          className="flex-1 p-4 font-mono text-xs overflow-y-auto space-y-0.5 selection:bg-emerald-500/20 dark:selection:bg-emerald-500/30 selection:text-emerald-900 dark:selection:text-emerald-200 select-text bg-slate-50 dark:bg-[#050b14]"
         >
           {activeTab && activeTab.lines.length > 0 ? (
             activeTab.lines.map((line, idx) => (
@@ -679,49 +681,49 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
               </div>
             ))
           ) : (
-            <div className="text-slate-600 italic">No output in stream.</div>
+            <div className="text-slate-500 dark:text-slate-600 italic">No output in stream.</div>
           )}
         </div>
       ) : (
         /* Events & Notifications Ledger Viewport */
-        <div className="flex-1 p-4 font-mono text-xs overflow-y-auto space-y-2 select-text bg-[#050b14]">
+        <div className="flex-1 p-4 font-mono text-xs overflow-y-auto space-y-2 select-text bg-slate-50 dark:bg-[#050b14]">
           {eventsHistory.length > 0 ? (
             eventsHistory.map((ev) => (
               <div
                 key={ev.id}
                 className={`p-3 rounded-lg border flex items-start gap-3 transition-colors ${
                   ev.type === 'error'
-                    ? 'bg-rose-500/10 border-rose-500/20 text-rose-300'
+                    ? 'bg-rose-50 dark:bg-rose-500/10 border-rose-200 dark:border-rose-500/20 text-rose-800 dark:text-rose-300'
                     : ev.type === 'pending'
-                    ? 'bg-amber-500/10 border-amber-500/20 text-amber-300'
+                    ? 'bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/20 text-amber-800 dark:text-amber-300'
                     : ev.type === 'success'
-                    ? 'bg-slate-900 border-slate-800 text-slate-200'
-                    : 'bg-slate-900/60 border-slate-800 text-slate-300'
+                    ? 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 shadow-xs'
+                    : 'bg-white dark:bg-slate-900/60 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-300 shadow-xs'
                 }`}
               >
                 <div className="shrink-0 mt-0.5">
-                  {ev.type === 'pending' && <Loader2 className="w-4 h-4 text-amber-400 animate-spin" />}
-                  {ev.type === 'success' && <CheckCircle2 className="w-4 h-4 text-emerald-400" />}
-                  {ev.type === 'error' && <AlertCircle className="w-4 h-4 text-rose-400" />}
-                  {ev.type === 'info' && <Bell className="w-4 h-4 text-cyan-400" />}
+                  {ev.type === 'pending' && <Loader2 className="w-4 h-4 text-amber-600 dark:text-amber-400 animate-spin" />}
+                  {ev.type === 'success' && <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />}
+                  {ev.type === 'error' && <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400" />}
+                  {ev.type === 'info' && <Bell className="w-4 h-4 text-sky-600 dark:text-cyan-400" />}
                 </div>
 
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 truncate">
-                      <span className="font-semibold text-slate-200 truncate">{ev.message}</span>
+                      <span className="font-semibold text-slate-900 dark:text-slate-200 truncate">{ev.message}</span>
                       {ev.type === 'success' && (
-                        <span className="px-1.5 py-0.2 rounded text-[9px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 uppercase tracking-wider shrink-0">
+                        <span className="px-1.5 py-0.2 rounded text-[9px] font-mono font-bold bg-emerald-500/15 dark:bg-emerald-500/20 text-emerald-800 dark:text-emerald-300 border border-emerald-500/30 uppercase tracking-wider shrink-0">
                           Complete
                         </span>
                       )}
                       {ev.type === 'pending' && (
-                        <span className="px-1.5 py-0.2 rounded text-[9px] font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 uppercase tracking-wider shrink-0 animate-pulse">
+                        <span className="px-1.5 py-0.2 rounded text-[9px] font-mono font-bold bg-amber-500/15 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-500/30 uppercase tracking-wider shrink-0 animate-pulse">
                           In Progress
                         </span>
                       )}
                     </div>
-                    <span className="text-[10px] text-slate-500 shrink-0 flex items-center gap-1">
+                    <span className="text-[10px] text-slate-500 shrink-0 flex items-center gap-1 font-mono">
                       <Clock className="w-2.5 h-2.5" />
                       {ev.timestamp}
                     </span>
@@ -730,7 +732,7 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
               </div>
             ))
           ) : (
-            <div className="text-slate-600 italic text-center p-8">No notifications or events recorded yet.</div>
+            <div className="text-slate-500 dark:text-slate-600 italic text-center p-8">No notifications or events recorded yet.</div>
           )}
         </div>
       )}

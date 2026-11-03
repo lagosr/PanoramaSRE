@@ -148,25 +148,25 @@ export function BackupsRecoveryView({
 
       {/* Critical Automated Backup Incident Alert Banner */}
       {ledger?.last_run_status?.toLowerCase() === 'failed' && (
-        <div className="rounded-xl border border-rose-500/80 bg-rose-950/40 p-5 shadow-[0_0_25px_rgba(244,63,94,0.35)] ring-1 ring-rose-500/50 space-y-3">
+        <div className="rounded-xl border border-rose-500/80 bg-rose-50 dark:bg-rose-950/40 p-5 shadow-[0_0_25px_rgba(244,63,94,0.15)] dark:shadow-[0_0_25px_rgba(244,63,94,0.35)] ring-1 ring-rose-500/50 space-y-3">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div className="flex items-start sm:items-center gap-3">
               <div className="w-10 h-10 rounded-lg bg-rose-500/20 border border-rose-500/50 flex items-center justify-center shrink-0">
-                <XCircle className="w-6 h-6 text-rose-400" />
+                <XCircle className="w-6 h-6 text-rose-500 dark:text-rose-400" />
               </div>
               <div>
                 <div className="flex items-center gap-2">
                   <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-rose-500 text-white uppercase tracking-wider">
                     CRITICAL DR INCIDENT
                   </span>
-                  <span className="text-xs text-rose-400 font-mono">
+                  <span className="text-xs text-rose-600 dark:text-rose-400 font-mono">
                     {ledger.last_run_timestamp ? new Date(ledger.last_run_timestamp).toLocaleString() : 'Latest Automated Run'}
                   </span>
                 </div>
-                <h3 className="text-base font-bold text-rose-100 mt-1">
+                <h3 className="text-base font-bold text-rose-900 dark:text-rose-100 mt-1">
                   Automated Database Backup Run Failed
                 </h3>
-                <p className="text-xs text-rose-300/90 mt-0.5">
+                <p className="text-xs text-rose-800 dark:text-rose-300/90 mt-0.5">
                   The automated nightly database backup run failed. Immediate remediation is required to ensure database snapshot integrity.
                 </p>
               </div>
@@ -185,21 +185,21 @@ export function BackupsRecoveryView({
           </div>
 
           {/* Root cause and failure details */}
-          <div className="p-3.5 rounded-lg bg-black/40 border border-rose-900/60 text-xs font-mono space-y-2">
-            <div className="flex items-center gap-2 text-rose-300 font-semibold">
-              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
-              <span className="text-white">Failure Root Cause Diagnosis:</span>
-              <span className="text-rose-200 font-normal">
+          <div className="p-3.5 rounded-lg bg-white/80 dark:bg-black/40 border border-rose-200 dark:border-rose-900/60 text-xs font-mono space-y-2">
+            <div className="flex items-center gap-2 text-rose-800 dark:text-rose-300 font-semibold">
+              <AlertTriangle className="w-4 h-4 text-amber-500 dark:text-amber-400 shrink-0" />
+              <span className="text-slate-900 dark:text-white">Failure Root Cause Diagnosis:</span>
+              <span className="text-rose-900 dark:text-rose-200 font-normal">
                 Automated night backup job failed during remote execution.
               </span>
             </div>
 
-            <div className="space-y-1.5 pt-1 border-t border-rose-900/50">
-              <p className="text-[11px] font-semibold text-rose-300 uppercase tracking-wider">Failed Application Details:</p>
+            <div className="space-y-1.5 pt-1 border-t border-rose-200 dark:border-rose-900/50">
+              <p className="text-[11px] font-semibold text-rose-800 dark:text-rose-300 uppercase tracking-wider">Failed Application Details:</p>
               {ledger.latest_app_details.filter(a => a.status.toLowerCase() === 'failed').map(app => (
-                <div key={app.app_name} className="text-[11px] bg-rose-950/30 p-2 rounded border border-rose-900/40">
-                  <span className="font-semibold text-rose-200">{app.app_name}: </span>
-                  <span className="text-slate-300 break-all">{app.error || 'Execution failed with exit code 1'}</span>
+                <div key={app.app_name} className="text-[11px] bg-rose-100/60 dark:bg-rose-950/30 p-2 rounded border border-rose-200 dark:border-rose-900/40">
+                  <span className="font-semibold text-rose-900 dark:text-rose-200">{app.app_name}: </span>
+                  <span className="text-slate-700 dark:text-slate-300 break-all">{app.error || 'Execution failed with exit code 1'}</span>
                 </div>
               ))}
             </div>
@@ -243,21 +243,21 @@ export function BackupsRecoveryView({
 
         <div className={`rounded-xl border p-4 shadow-sm transition-all ${
           (ledger?.failed_runs || 0) > 0
-            ? 'border-rose-500/60 bg-rose-950/20'
+            ? 'border-rose-300 dark:border-rose-500/60 bg-rose-50 dark:bg-rose-950/20'
             : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900'
         }`}>
           <p className="text-xs font-medium text-slate-500">Failed / Retried Runs</p>
-          <p className="text-xl font-bold text-rose-400 mt-1 font-mono">
+          <p className="text-xl font-bold text-rose-600 dark:text-rose-400 mt-1 font-mono">
             {ledger?.failed_runs || 0}
           </p>
-          <p className="text-xs text-rose-300/80 mt-0.5">
+          <p className="text-xs text-rose-700 dark:text-rose-300/80 mt-0.5">
             {(ledger?.failed_runs || 0) > 0 ? 'Requires attention / re-run' : 'Zero corruption events'}
           </p>
         </div>
 
         <div className={`rounded-xl border p-4 shadow-sm transition-all ${
           ledger?.last_run_status === 'Failed'
-            ? 'border-rose-500/60 bg-rose-950/20'
+            ? 'border-rose-300 dark:border-rose-500/60 bg-rose-50 dark:bg-rose-950/20'
             : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900'
         }`}>
           <p className="text-xs font-medium text-slate-500">Last GFS Execution</p>
@@ -266,15 +266,15 @@ export function BackupsRecoveryView({
           </p>
           <div className="flex items-center gap-1.5 mt-0.5">
             {ledger?.last_run_status === 'Success' ? (
-              <span className="text-xs text-emerald-400 font-semibold flex items-center gap-1">
+              <span className="text-xs text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1">
                 <CheckCircle2 className="w-3.5 h-3.5" /> Success
               </span>
             ) : ledger?.last_run_status === 'Failed' ? (
-              <span className="text-xs text-rose-400 font-bold flex items-center gap-1">
-                <XCircle className="w-3.5 h-3.5 text-rose-400" /> Failed (Incident)
+              <span className="text-xs text-rose-600 dark:text-rose-400 font-bold flex items-center gap-1">
+                <XCircle className="w-3.5 h-3.5 text-rose-500 dark:text-rose-400" /> Failed (Incident)
               </span>
             ) : (
-              <span className="text-xs text-slate-400 font-semibold">
+              <span className="text-xs text-slate-500 dark:text-slate-400 font-semibold">
                 {ledger?.last_run_status || 'Pending'}
               </span>
             )}
@@ -390,9 +390,9 @@ export function BackupsRecoveryView({
                   return (
                     <tr key={archive.file_name} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
                       {/* Date of Backup Column */}
-                      <td className="py-3 px-3 text-slate-200 font-semibold whitespace-nowrap">
+                      <td className="py-3 px-3 text-slate-900 dark:text-slate-200 font-semibold whitespace-nowrap">
                         <div className="flex items-center gap-1.5">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400"></span>
                           <span>{archive.date_str}</span>
                         </div>
                         <span className="text-[10px] text-slate-500 font-normal block pl-3">
@@ -401,7 +401,7 @@ export function BackupsRecoveryView({
                       </td>
 
                       {/* Archive Filename with Reveal in Explorer */}
-                      <td className="py-3 px-3 text-slate-300 max-w-xs">
+                      <td className="py-3 px-3 text-slate-700 dark:text-slate-300 max-w-xs">
                         <button
                           onClick={async (e) => {
                             e.stopPropagation();
@@ -411,7 +411,7 @@ export function BackupsRecoveryView({
                               console.warn('Failed to reveal archive file:', err);
                             }
                           }}
-                          className="truncate block hover:text-emerald-300 hover:underline cursor-pointer text-left w-full"
+                          className="truncate block hover:text-emerald-600 dark:hover:text-emerald-300 hover:underline cursor-pointer text-left w-full"
                           title={`Click to reveal file in folder: ${archive.full_path}`}
                         >
                           {archive.file_name}
@@ -423,8 +423,8 @@ export function BackupsRecoveryView({
                         <span
                           className={`inline-block px-2 py-0.5 rounded text-[11px] font-semibold ${
                             isSchemaMismatch
-                              ? 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
-                              : 'bg-slate-100 dark:bg-slate-800 text-slate-300'
+                              ? 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/30'
+                              : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
                           }`}
                         >
                           v{archive.schema_version}
@@ -432,7 +432,7 @@ export function BackupsRecoveryView({
                       </td>
 
                       {/* Size */}
-                      <td className="py-3 px-3 text-slate-400 font-mono whitespace-nowrap">{formatBytes(archive.size_bytes)}</td>
+                      <td className="py-3 px-3 text-slate-500 dark:text-slate-400 font-mono whitespace-nowrap">{formatBytes(archive.size_bytes)}</td>
 
                       {/* Health Snapshot */}
                       <td className="py-3 px-3 whitespace-nowrap">
@@ -616,22 +616,22 @@ export function BackupsRecoveryView({
                             )
                           ) : null}
                         </td>
-                        <td className="py-3 px-3 text-slate-300 font-medium whitespace-nowrap">{dateOnly}</td>
-                        <td className="py-3 px-3 text-slate-400 font-mono whitespace-nowrap">{timeOnly}</td>
+                        <td className="py-3 px-3 text-slate-700 dark:text-slate-300 font-medium whitespace-nowrap">{dateOnly}</td>
+                        <td className="py-3 px-3 text-slate-500 dark:text-slate-400 font-mono whitespace-nowrap">{timeOnly}</td>
                         <td className="py-3 px-3 whitespace-nowrap">
                           {r.status === 'Success' ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20">
                               <CheckCircle2 className="w-3 h-3" /> Success
                             </span>
                           ) : (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-rose-500/10 text-rose-700 dark:text-rose-400 border border-rose-500/20">
                               <XCircle className="w-3 h-3" /> Failed
                             </span>
                           )}
                         </td>
-                        <td className="py-3 px-3 text-slate-400 whitespace-nowrap">{r.run_type || 'Automated'}</td>
-                        <td className="py-3 px-3 text-slate-300 whitespace-nowrap font-semibold">{r.total_apps} apps</td>
-                        <td className="py-3 px-3 text-slate-400 font-mono whitespace-nowrap">{formatBytes(r.total_size_bytes)}</td>
+                        <td className="py-3 px-3 text-slate-500 dark:text-slate-400 whitespace-nowrap">{r.run_type || 'Automated'}</td>
+                        <td className="py-3 px-3 text-slate-800 dark:text-slate-300 whitespace-nowrap font-semibold">{r.total_apps} apps</td>
+                        <td className="py-3 px-3 text-slate-500 dark:text-slate-400 font-mono whitespace-nowrap">{formatBytes(r.total_size_bytes)}</td>
                         <td className="py-3 px-3 text-slate-500 truncate max-w-xs">{r.destination}</td>
                       </tr>
 
@@ -651,31 +651,31 @@ export function BackupsRecoveryView({
                                         key={ad.app_name}
                                         className={`p-2.5 rounded-lg border text-xs flex flex-col justify-between gap-1.5 ${
                                           ad.status.toLowerCase() === 'failed'
-                                            ? 'border-rose-800/80 bg-rose-950/30'
-                                            : 'border-slate-800 bg-slate-900/60'
+                                            ? 'border-rose-300 dark:border-rose-800/80 bg-rose-50 dark:bg-rose-950/30'
+                                            : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60'
                                         }`}
                                       >
                                         <div className="flex items-center justify-between">
                                           <div>
-                                            <p className="font-semibold text-slate-200">{ad.app_name}</p>
-                                            <p className="text-[11px] text-slate-400 truncate max-w-[180px]">
+                                            <p className="font-semibold text-slate-900 dark:text-slate-200">{ad.app_name}</p>
+                                            <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate max-w-[180px]">
                                               {ad.file || (
-                                                <span className="text-rose-400 font-semibold flex items-center gap-1">
+                                                <span className="text-rose-600 dark:text-rose-400 font-semibold flex items-center gap-1">
                                                   <XCircle className="w-2.5 h-2.5 inline" /> Failed
                                                 </span>
                                               )}
                                             </p>
                                           </div>
                                           <div className="text-right">
-                                            <span className="text-slate-300 font-mono">{formatBytes(ad.size_bytes)}</span>
+                                            <span className="text-slate-700 dark:text-slate-300 font-mono">{formatBytes(ad.size_bytes)}</span>
                                             {ad.duration_seconds !== null && ad.duration_seconds !== undefined && (
                                               <p className="text-[10px] text-slate-500">{ad.duration_seconds.toFixed(1)}s</p>
                                             )}
                                           </div>
                                         </div>
                                         {ad.error && (
-                                          <div className="p-1.5 rounded bg-black/40 border border-rose-900/60 text-[10px] text-rose-300 font-mono break-all whitespace-pre-wrap">
-                                            <span className="font-bold text-rose-400">Error: </span>
+                                          <div className="p-1.5 rounded bg-rose-100/80 dark:bg-black/40 border border-rose-300 dark:border-rose-900/60 text-[10px] text-rose-800 dark:text-rose-300 font-mono break-all whitespace-pre-wrap">
+                                            <span className="font-bold text-rose-600 dark:text-rose-400">Error: </span>
                                             {ad.error}
                                           </div>
                                         )}

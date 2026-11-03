@@ -2,8 +2,8 @@ import { DiscoveredApp } from '../../lib/types';
 
 interface DevServerCardProps {
   app: DiscoveredApp;
-  onStart: (appId: string, workspacePath: string, devCommand: string) => void;
-  onStartAuthAndApp: (appId: string, workspacePath: string, devCommand: string) => void;
+  onStart: (appId: string, workspacePath: string, devCommand: string, port?: number) => void;
+  onStartAuthAndApp: (appId: string, workspacePath: string, devCommand: string, port?: number) => void;
   onStop: (appId: string, port?: number) => void;
   onRestart: (appId: string, workspacePath: string, devCommand: string, port?: number) => void;
   isActionPending?: boolean;
@@ -80,13 +80,13 @@ export function DevServerCard({
         <div className="rounded-lg bg-slate-50 dark:bg-slate-950/60 border border-slate-100 dark:border-slate-800/80 p-3 mb-4 space-y-1.5 text-xs font-mono">
           <div className="flex items-center justify-between gap-2">
             <span className="text-slate-500 shrink-0">Local SQLite:</span>
-            <span className="text-slate-300 truncate">
+            <span className="text-slate-800 dark:text-slate-300 truncate">
               {dev?.sqlite_size_bytes ? formatBytes(dev.sqlite_size_bytes) : 'Not found'}
             </span>
           </div>
           <div className="flex items-center justify-between gap-2">
             <span className="text-slate-500 shrink-0">PRAGMA user_version:</span>
-            <span className="text-slate-300 truncate">
+            <span className="text-slate-800 dark:text-slate-300 truncate">
               {dev?.sqlite_user_version !== null && dev?.sqlite_user_version !== undefined
                 ? `v${dev.sqlite_user_version}`
                 : 'None'}
@@ -94,7 +94,7 @@ export function DevServerCard({
           </div>
           <div className="flex items-center justify-between gap-2">
             <span className="text-slate-500 shrink-0">Command:</span>
-            <span className="text-slate-400 truncate text-right">
+            <span className="text-slate-600 dark:text-slate-400 truncate text-right">
               {app.manifest.sre.devCommand}
             </span>
           </div>
@@ -110,7 +110,8 @@ export function DevServerCard({
                 onStart(
                   app.manifest.appId,
                   app.workspacePath,
-                  app.manifest.sre.devCommand
+                  app.manifest.sre.devCommand,
+                  app.manifest.port
                 )
               }
               disabled={isActionPending}
@@ -124,7 +125,8 @@ export function DevServerCard({
                   onStartAuthAndApp(
                     app.manifest.appId,
                     app.workspacePath,
-                    app.manifest.sre.devCommand
+                    app.manifest.sre.devCommand,
+                    app.manifest.port
                   )
                 }
                 disabled={isActionPending}
@@ -155,7 +157,7 @@ export function DevServerCard({
             <button
               onClick={() => onStop(app.manifest.appId, app.manifest.port)}
               disabled={isActionPending}
-              className="py-1.5 px-3 rounded-lg text-xs font-medium bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/30 transition-colors whitespace-nowrap"
+              className="py-1.5 px-3 rounded-lg text-xs font-medium bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/30 transition-colors whitespace-nowrap"
             >
               Stop
             </button>
@@ -164,7 +166,7 @@ export function DevServerCard({
 
         {isExternal && (
           <div className="flex items-center gap-2 w-full">
-            <span className="flex-1 text-xs text-amber-400 italic truncate" title="Running via external shell or prior session">
+            <span className="flex-1 text-xs text-amber-600 dark:text-amber-400 italic truncate" title="Running via external shell or prior session">
               External / Prior Run
             </span>
             <button
@@ -177,14 +179,14 @@ export function DevServerCard({
                 )
               }
               disabled={isActionPending}
-              className="py-1.5 px-2.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors whitespace-nowrap"
+              className="py-1.5 px-2.5 rounded-lg text-xs font-medium bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 transition-colors whitespace-nowrap"
             >
               Restart
             </button>
             <button
               onClick={() => onStop(app.manifest.appId, app.manifest.port)}
               disabled={isActionPending}
-              className="py-1.5 px-2.5 rounded-lg text-xs font-medium bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/30 transition-colors whitespace-nowrap"
+              className="py-1.5 px-2.5 rounded-lg text-xs font-medium bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/30 transition-colors whitespace-nowrap"
             >
               Stop
             </button>

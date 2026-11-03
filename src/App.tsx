@@ -464,13 +464,14 @@ export const App: React.FC = () => {
   }, [refreshDevServers, refreshAppliances, refreshWshTelemetry, refreshBackupLedger, refreshSslStatus, syncFullTelemetry]);
 
   // Dev Server Actions
-  const handleStartDevServer = async (appId: string, workspacePath: string, devCommand: string) => {
+  const handleStartDevServer = async (appId: string, workspacePath: string, devCommand: string, port?: number) => {
     try {
       showActionFeedback(`Starting ${appId}...`, 'pending');
       await invoke('start_dev_server', {
         appId,
         workspacePath,
         devCommand,
+        port,
       });
       showActionFeedback(`Dev server ${appId} started`, 'success', 3000);
       refreshDevServers();
@@ -480,17 +481,18 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleStartAuthAndApp = async (appId: string, workspacePath: string, devCommand: string) => {
+  const handleStartAuthAndApp = async (appId: string, workspacePath: string, devCommand: string, port?: number) => {
     showActionFeedback(`Starting PanoramaAuth and ${appId}...`, 'pending');
     const authApp = apps.find((a) => a.manifest.slug === 'auth');
     if (authApp) {
       await handleStartDevServer(
         authApp.manifest.appId,
         authApp.workspacePath,
-        authApp.manifest.sre.devCommand
+        authApp.manifest.sre.devCommand,
+        authApp.manifest.port
       );
     }
-    await handleStartDevServer(appId, workspacePath, devCommand);
+    await handleStartDevServer(appId, workspacePath, devCommand, port);
   };
 
   const handleStopDevServer = async (appId: string, port?: number) => {
@@ -516,6 +518,7 @@ export const App: React.FC = () => {
             appId,
             workspacePath,
             devCommand,
+            port,
           });
           showActionFeedback(`Dev server ${appId} restarted`, 'success', 3000);
           refreshDevServers();
@@ -540,6 +543,7 @@ export const App: React.FC = () => {
           appId: authApp.manifest.appId,
           workspacePath: authApp.workspacePath,
           devCommand: authApp.manifest.sre.devCommand,
+          port: authApp.manifest.port,
         });
       } catch (err) {
         console.warn('Failed to start auth dev server:', err);
@@ -556,6 +560,7 @@ export const App: React.FC = () => {
               appId: child.manifest.appId,
               workspacePath: child.workspacePath,
               devCommand: child.manifest.sre.devCommand,
+              port: child.manifest.port,
             });
           } catch (childErr) {
             console.warn(`Failed to start ${child.manifest.displayName}:`, childErr);
@@ -1080,7 +1085,7 @@ export const App: React.FC = () => {
       : 0;
 
   return (
-    <div className="flex h-screen w-screen bg-[#050b14] text-slate-100 overflow-hidden font-sans">
+    <div className="flex h-screen w-screen bg-slate-50 dark:bg-[#050b14] text-slate-900 dark:text-slate-100 overflow-hidden font-sans">
       <SidebarRail
         activeTab={activeTab}
         onSelectTab={setActiveTab}
@@ -1101,7 +1106,7 @@ export const App: React.FC = () => {
           onNavigateToBackups={() => setActiveTab('backups')}
         />
 
-        <div className="flex-1 overflow-y-auto">
+        <div className={`flex-1 overflow-y-auto ${isDrawerOpen ? 'pb-96' : 'pb-12'}`}>
           {activeTab === 'hud' && (
             <CommandCenterView
               apps={apps}

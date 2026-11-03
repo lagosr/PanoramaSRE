@@ -56,27 +56,27 @@ export function CommandCenterView({
 
       {/* Critical Database Automated Backup Incident Banner (Red Flag) */}
       {isLastBackupFailed && failedBackupApps.length > 0 && (
-        <div className="rounded-xl border border-rose-500/80 bg-rose-950/40 p-4 sm:p-5 shadow-[0_0_25px_rgba(244,63,94,0.35)] ring-1 ring-rose-500/50 space-y-3">
+        <div className="rounded-xl border border-rose-500/80 bg-rose-50 dark:bg-rose-950/40 p-4 sm:p-5 shadow-[0_0_25px_rgba(244,63,94,0.15)] dark:shadow-[0_0_25px_rgba(244,63,94,0.35)] ring-1 ring-rose-500/50 space-y-3">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div className="flex items-start sm:items-center gap-3">
               <div className="w-10 h-10 rounded-lg bg-rose-500/20 border border-rose-500/50 flex items-center justify-center shrink-0">
-                <HardDriveDownload className="w-6 h-6 text-rose-400" />
+                <HardDriveDownload className="w-6 h-6 text-rose-500 dark:text-rose-400" />
               </div>
               <div>
                 <div className="flex items-center gap-2">
                   <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-rose-500 text-white uppercase tracking-wider">
                     DISASTER RECOVERY ALERT
                   </span>
-                  <span className="text-xs text-rose-400 font-mono">
+                  <span className="text-xs text-rose-600 dark:text-rose-400 font-mono">
                     {backupLedger?.last_run_timestamp ? new Date(backupLedger.last_run_timestamp).toLocaleString() : 'Latest Run'}
                   </span>
                 </div>
-                <h3 className="text-sm font-bold text-rose-200 tracking-wide mt-1">
+                <h3 className="text-sm font-bold text-rose-900 dark:text-rose-200 tracking-wide mt-1">
                   AUTOMATED DATABASE BACKUP FAILED ACROSS {failedBackupApps.length} APPS
                 </h3>
-                <p className="text-xs text-rose-300/90 mt-0.5">
+                <p className="text-xs text-rose-800 dark:text-rose-300/90 mt-0.5">
                   Automated night backup job failed for:{' '}
-                  <span className="font-semibold text-white">
+                  <span className="font-semibold text-rose-950 dark:text-white">
                     {failedBackupApps.map((a) => a.app_name).join(', ')}
                   </span>
                   . Production databases lack verified recent backup snapshots.
@@ -96,7 +96,7 @@ export function CommandCenterView({
               {onNavigateToBackups && (
                 <button
                   onClick={onNavigateToBackups}
-                  className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 shadow-sm transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5"
+                  className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 shadow-sm transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5"
                 >
                   <span>Inspect Ledger</span>
                 </button>
@@ -105,10 +105,10 @@ export function CommandCenterView({
           </div>
 
           {/* Root cause and diagnostic explanation box */}
-          <div className="p-3 rounded-lg bg-slate-950/60 border border-rose-900/40 text-xs font-mono space-y-1">
-            <div className="flex items-center gap-2 text-rose-300">
-              <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-              <span className="font-semibold text-white">Root Cause:</span>
+          <div className="p-3 rounded-lg bg-white/80 dark:bg-slate-950/60 border border-rose-200 dark:border-rose-900/40 text-xs font-mono space-y-1">
+            <div className="flex items-center gap-2 text-rose-800 dark:text-rose-300">
+              <AlertTriangle className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400 shrink-0" />
+              <span className="font-semibold text-slate-900 dark:text-white">Root Cause:</span>
               <span>
                 Automated night backup job failed during remote execution.
               </span>
@@ -119,18 +119,18 @@ export function CommandCenterView({
 
       {/* Critical Fleet Alert Banner (Red Flag) */}
       {unhealthyApps.length > 0 && (
-        <div className="rounded-xl border border-rose-500/80 bg-rose-950/40 p-4 sm:p-5 shadow-[0_0_25px_rgba(244,63,94,0.3)] ring-1 ring-rose-500/50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 animate-pulse">
+        <div className="rounded-xl border border-rose-500/80 bg-rose-50 dark:bg-rose-950/40 p-4 sm:p-5 shadow-[0_0_25px_rgba(244,63,94,0.15)] dark:shadow-[0_0_25px_rgba(244,63,94,0.3)] ring-1 ring-rose-500/50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 animate-pulse">
           <div className="flex items-start sm:items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-rose-500/20 border border-rose-500/50 flex items-center justify-center shrink-0">
-              <ShieldAlert className="w-6 h-6 text-rose-400" />
+              <ShieldAlert className="w-6 h-6 text-rose-500 dark:text-rose-400" />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-rose-200 tracking-wide">
+              <h3 className="text-sm font-bold text-rose-900 dark:text-rose-200 tracking-wide">
                 CRITICAL FLEET INCIDENT DETECTED
               </h3>
-              <p className="text-xs text-rose-300/90 mt-0.5">
+              <p className="text-xs text-rose-800 dark:text-rose-300/90 mt-0.5">
                 {unhealthyApps.length} application{unhealthyApps.length > 1 ? 's are' : ' is'} reporting unhealthy or unreachable in production:{' '}
-                <span className="font-semibold text-white">
+                <span className="font-semibold text-rose-950 dark:text-white">
                   {unhealthyApps.map((a) => a.manifest.displayName).join(', ')}
                 </span>
               </p>

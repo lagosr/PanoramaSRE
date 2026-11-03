@@ -59,10 +59,10 @@ export function FleetAppCard({ app, backupStatus, onOpenApp, onInspectCompositio
             <div
               className={`w-10 h-10 rounded-lg flex items-center justify-center font-bold text-base shrink-0 border ${
                 isCritical
-                  ? 'bg-rose-500/20 border-rose-500/40 text-rose-400'
+                  ? 'bg-rose-500/20 border-rose-500/40 text-rose-700 dark:text-rose-400'
                   : isBackupFailed
-                  ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
-                  : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                  ? 'bg-amber-500/20 border-amber-500/40 text-amber-800 dark:text-amber-300'
+                  : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-700 dark:text-emerald-400'
               }`}
             >
               {app.manifest.displayName.substring(0, 2).toUpperCase()}
@@ -77,7 +77,7 @@ export function FleetAppCard({ app, backupStatus, onOpenApp, onInspectCompositio
                   <span className="inline-block w-2 h-2 rounded-full bg-rose-400 shrink-0" title="Backup Failed" />
                 )}
               </h3>
-              <p className="text-xs text-slate-500 font-mono truncate">
+              <p className="text-xs text-slate-500 dark:text-slate-400 font-mono truncate">
                 Port {app.manifest.port} • {app.manifest.basePath}
               </p>
             </div>
@@ -93,14 +93,14 @@ export function FleetAppCard({ app, backupStatus, onOpenApp, onInspectCompositio
               <span
                 className={`text-[10px] font-mono px-1.5 py-0.5 rounded font-semibold ${
                   isHealthy
-                    ? 'bg-emerald-500/10 text-emerald-400'
-                    : 'bg-rose-500/20 text-rose-300 border border-rose-500/40 animate-pulse'
+                    ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+                    : 'bg-rose-500/20 text-rose-800 dark:text-rose-300 border border-rose-500/40 animate-pulse'
                 }`}
               >
                 {isHealthy ? `${latency}ms` : 'FAIL'}
               </span>
             ) : (
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40 animate-pulse font-semibold">
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-800 dark:text-rose-300 border border-rose-500/40 animate-pulse font-semibold">
                 OFFLINE
               </span>
             )}
@@ -143,12 +143,12 @@ export function FleetAppCard({ app, backupStatus, onOpenApp, onInspectCompositio
               <span className="text-slate-500 shrink-0">DB Backup:</span>
               <span
                 className={`font-mono truncate text-right text-[11px] font-semibold flex items-center gap-1 ${
-                  isBackupFailed ? 'text-rose-400' : 'text-emerald-400'
+                  isBackupFailed ? 'text-rose-700 dark:text-rose-400' : 'text-emerald-700 dark:text-emerald-400'
                 }`}
               >
                 {isBackupFailed ? (
                   <>
-                    <XCircle className="w-3 h-3 shrink-0 text-rose-400 inline" />
+                    <XCircle className="w-3 h-3 shrink-0 text-rose-600 dark:text-rose-400 inline" />
                     <span>Failed</span>
                   </>
                 ) : (
@@ -163,7 +163,7 @@ export function FleetAppCard({ app, backupStatus, onOpenApp, onInspectCompositio
               {app.composition.blast_radius_badges.map((badge) => (
                 <span
                   key={badge}
-                  className="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30"
+                  className="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-amber-500/15 text-amber-900 dark:text-amber-300 border border-amber-500/30"
                 >
                   {badge}
                 </span>
@@ -177,7 +177,7 @@ export function FleetAppCard({ app, backupStatus, onOpenApp, onInspectCompositio
       <div className="flex items-center gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
         <button
           onClick={() => onInspectComposition(app)}
-          className="flex-1 py-1.5 px-3 rounded-lg text-xs font-medium bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-colors whitespace-nowrap"
+          className="flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700/60 transition-colors whitespace-nowrap"
         >
           Inspect Drift
         </button>

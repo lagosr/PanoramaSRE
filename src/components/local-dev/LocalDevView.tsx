@@ -4,8 +4,8 @@ import { Play, Square, Loader2 } from 'lucide-react';
 
 interface LocalDevViewProps {
   apps: DiscoveredApp[];
-  onStart: (appId: string, workspacePath: string, devCommand: string) => void;
-  onStartAuthAndApp: (appId: string, workspacePath: string, devCommand: string) => void;
+  onStart: (appId: string, workspacePath: string, devCommand: string, port?: number) => void;
+  onStartAuthAndApp: (appId: string, workspacePath: string, devCommand: string, port?: number) => void;
   onStop: (appId: string, port?: number) => void;
   onRestart: (appId: string, workspacePath: string, devCommand: string, port?: number) => void;
   onStartAll: () => void;
@@ -77,8 +77,8 @@ export function LocalDevView({
                 disabled={isActionPending}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors border ${
                   isActionPending
-                    ? 'bg-slate-800 text-slate-500 border-slate-700 cursor-not-allowed'
-                    : 'bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border-rose-500/30'
+                    ? 'bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-700 cursor-not-allowed'
+                    : 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 border-rose-500/30'
                 }`}
                 title="Stop all currently running dev servers"
               >

@@ -1,5 +1,6 @@
 import { NetworkPosture } from '../../lib/types';
-import { AlertCircle } from 'lucide-react';
+import { AlertCircle, Sun, Moon } from 'lucide-react';
+import { useTheme } from '../../context/ThemeContext';
 
 interface TopLiveSyncBarProps {
   networkPosture: NetworkPosture;
@@ -24,53 +25,54 @@ export function TopLiveSyncBar({
   backupFailureCount = 0,
   onNavigateToBackups,
 }: TopLiveSyncBarProps) {
+  const { theme, resolvedTheme, toggleTheme } = useTheme();
   const hasFleetAlert = totalAppCount > 0 && prodHealthyCount < totalAppCount;
 
   return (
-    <header className="h-14 border-b border-slate-200 dark:border-slate-800 bg-white/50 dark:bg-slate-900/50 backdrop-blur-md px-6 flex items-center justify-between gap-3 z-10 select-none">
+    <header className="h-14 border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-900/50 backdrop-blur-md px-6 flex items-center justify-between gap-3 z-10 select-none">
       {/* Left: Network Posture Indicator & Fleet Counters */}
       <div className="flex items-center gap-2.5 sm:gap-3 shrink-0 min-w-0">
         <div className="flex items-center gap-2 shrink-0">
           {networkPosture === 'LAN_DIRECT' && (
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 whitespace-nowrap">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold bg-emerald-500/15 text-emerald-800 dark:text-emerald-400 border border-emerald-500/30 whitespace-nowrap">
+              <span className="w-2 h-2 rounded-full bg-emerald-600 dark:bg-emerald-400 animate-pulse"></span>
               LAN DIRECT (172.20.20.9)
             </span>
           )}
           {networkPosture === 'WAN_CLOUDFLARE' && (
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold bg-amber-500/15 text-amber-400 border border-amber-500/30 whitespace-nowrap">
-              <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold bg-amber-500/15 text-amber-900 dark:text-amber-400 border border-amber-500/30 whitespace-nowrap">
+              <span className="w-2 h-2 rounded-full bg-amber-600 dark:bg-amber-400"></span>
               WAN (Cloudflare)
             </span>
           )}
           {networkPosture === 'OFFLINE' && (
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold bg-rose-500/15 text-rose-400 border border-rose-500/30 whitespace-nowrap">
-              <span className="w-2 h-2 rounded-full bg-rose-400"></span>
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold bg-rose-500/15 text-rose-800 dark:text-rose-400 border border-rose-500/30 whitespace-nowrap">
+              <span className="w-2 h-2 rounded-full bg-rose-600 dark:bg-rose-400"></span>
               HOST OFFLINE
             </span>
           )}
         </div>
 
         {/* Dev Servers Compact Counter */}
-        <div className="hidden sm:flex items-center gap-1.5 text-xs text-slate-400 border-l border-slate-200 dark:border-slate-800 pl-3 shrink-0 whitespace-nowrap">
+        <div className="hidden sm:flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-400 border-l border-slate-200 dark:border-slate-800 pl-3 shrink-0 whitespace-nowrap">
           <span>Dev:</span>
-          <span className={`font-mono font-medium ${devRunningCount === totalAppCount ? 'text-emerald-400' : devRunningCount > 0 ? 'text-amber-300' : 'text-slate-400'}`}>
+          <span className={`font-mono font-medium ${devRunningCount === totalAppCount ? 'text-emerald-700 dark:text-emerald-400' : devRunningCount > 0 ? 'text-amber-800 dark:text-amber-300' : 'text-slate-600 dark:text-slate-400'}`}>
             {devRunningCount}/{totalAppCount} running
           </span>
         </div>
 
         {/* Production Fleet Health Compact Counter / High Alert */}
-        <div className="hidden md:flex items-center gap-1.5 text-xs text-slate-400 border-l border-slate-200 dark:border-slate-800 pl-3 shrink-0 whitespace-nowrap">
+        <div className="hidden md:flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-400 border-l border-slate-200 dark:border-slate-800 pl-3 shrink-0 whitespace-nowrap">
           <span>Prod:</span>
           {hasFleetAlert ? (
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/50 shadow-[0_0_12px_rgba(244,63,94,0.3)] animate-pulse font-semibold">
-              <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-rose-500/20 text-rose-800 dark:text-rose-300 border border-rose-500/50 shadow-[0_0_12px_rgba(244,63,94,0.3)] animate-pulse font-semibold">
+              <AlertCircle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
               <span>CRITICAL: {totalAppCount - prodHealthyCount} UNHEALTHY</span>
             </span>
           ) : (
             <span className="inline-flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-              <span className="font-mono font-medium text-emerald-400">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 dark:bg-emerald-400" />
+              <span className="font-mono font-medium text-emerald-700 dark:text-emerald-400">
                 {prodHealthyCount}/{totalAppCount} healthy
               </span>
             </span>
@@ -81,22 +83,35 @@ export function TopLiveSyncBar({
         {backupFailureCount > 0 && (
           <button
             onClick={onNavigateToBackups}
-            className="hidden lg:inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/60 shadow-[0_0_12px_rgba(244,63,94,0.4)] animate-pulse font-semibold text-xs transition-colors cursor-pointer whitespace-nowrap"
+            className="hidden lg:inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-rose-500/20 hover:bg-rose-500/30 text-rose-700 dark:text-rose-300 border border-rose-500/60 shadow-[0_0_12px_rgba(244,63,94,0.4)] animate-pulse font-semibold text-xs transition-colors cursor-pointer whitespace-nowrap"
             title="Automated daily database backup failed! Click to inspect."
           >
-            <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+            <AlertCircle className="w-3.5 h-3.5 text-rose-500 dark:text-rose-400 shrink-0" />
             <span>BACKUP INCIDENT: {backupFailureCount} APP{backupFailureCount > 1 ? 'S' : ''} FAILED</span>
           </button>
         )}
       </div>
 
-      {/* Right: Sync Status & Manual Refresh */}
+      {/* Right: Sync Status & Manual Refresh & Theme Toggle */}
       <div className="flex items-center gap-3">
         {lastSyncTime && (
-          <span className="text-xs text-slate-400 hidden md:inline">
-            Last sync: <span className="font-mono text-slate-300">{lastSyncTime}</span>
+          <span className="text-xs text-slate-500 dark:text-slate-400 hidden md:inline">
+            Last sync: <span className="font-mono text-slate-700 dark:text-slate-300">{lastSyncTime}</span>
           </span>
         )}
+
+        {/* Quick Theme Toggle Button */}
+        <button
+          onClick={toggleTheme}
+          className="p-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 transition-colors"
+          title={`Active theme: ${theme} (resolved: ${resolvedTheme}). Click to toggle.`}
+        >
+          {resolvedTheme === 'dark' ? (
+            <Sun className="w-4 h-4 text-amber-400" />
+          ) : (
+            <Moon className="w-4 h-4 text-slate-700" />
+          )}
+        </button>
 
         <button
           onClick={onRefresh}

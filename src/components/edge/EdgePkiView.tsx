@@ -98,10 +98,10 @@ export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
             <button
               onClick={onRefreshSsl}
               disabled={isLoadingSsl}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 transition-colors flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 disabled:opacity-50"
+              className="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 transition-colors flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 disabled:opacity-50"
               title="Execute immediate live dual-probe check across all 5 lab domains"
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${isLoadingSsl ? 'animate-spin text-emerald-400' : ''}`} />
+              <RefreshCw className={`w-3.5 h-3.5 ${isLoadingSsl ? 'animate-spin text-emerald-500 dark:text-emerald-400' : ''}`} />
               Re-probe Fleet
             </button>
           )}
@@ -110,19 +110,19 @@ export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
             <>
               <button
                 onClick={handleRenewDue}
-                className="px-3 py-1.5 rounded-lg text-xs font-medium text-emerald-300 hover:text-emerald-200 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 transition-colors flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                className="px-3 py-1.5 rounded-lg text-xs font-medium text-emerald-700 dark:text-emerald-300 hover:text-emerald-800 dark:hover:text-emerald-200 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 transition-colors flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
                 title="Automate renewal of certificates with less than 30 days remaining"
               >
-                <Zap className="w-3.5 h-3.5 text-emerald-400" />
+                <Zap className="w-3.5 h-3.5 text-emerald-500 dark:text-emerald-400" />
                 Renew Due Certs (&lt;30d)
               </button>
 
               <button
                 onClick={() => setIsForceModalOpen(true)}
-                className="px-3 py-1.5 rounded-lg text-xs font-medium text-amber-300 hover:text-amber-200 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 transition-colors flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                className="px-3 py-1.5 rounded-lg text-xs font-medium text-amber-700 dark:text-amber-300 hover:text-amber-800 dark:hover:text-amber-200 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 transition-colors flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
                 title="Force renew all certificates and re-deploy to devices regardless of expiration date"
               >
-                <RotateCw className="w-3.5 h-3.5 text-amber-400" />
+                <RotateCw className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400" />
                 Force Renew All
               </button>
             </>
@@ -306,7 +306,7 @@ export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
                   Upstream: <strong className="text-emerald-400">v2026.10.7</strong> (Verified latest upstream release)
                 </span>
               </div>
-              <div className="font-mono text-xs bg-slate-950 p-3 rounded-lg border border-slate-800 overflow-x-auto max-h-56 space-y-1">
+              <div className="font-mono text-xs bg-slate-900 dark:bg-slate-950 p-3 rounded-lg border border-slate-200 dark:border-slate-800 overflow-x-auto max-h-56 space-y-1">
                 {logLines.length > 0 ? (
                   logLines.map((line, idx) => {
                     const match = line.match(/^(\S+)\s+(ERR|WRN|INF|DBG)\s+(.*)$/);
@@ -323,10 +323,10 @@ export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
                               ? 'bg-rose-500/15 border border-rose-500/30 text-rose-300 shadow-sm'
                               : isWrn
                               ? 'bg-amber-500/10 border border-amber-500/20 text-amber-300'
-                              : 'hover:bg-slate-900/60 text-slate-300'
+                              : 'hover:bg-slate-800/60 dark:hover:bg-slate-900/60 text-slate-300'
                           }`}
                         >
-                          <span className="text-[11px] text-slate-500 shrink-0 select-none">
+                          <span className="text-[11px] text-slate-400 dark:text-slate-500 shrink-0 select-none">
                             {timestamp}
                           </span>
                           <span

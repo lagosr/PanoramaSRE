@@ -198,6 +198,7 @@ pub async fn start_dev_server(
     app_id: String,
     workspace_path: String,
     dev_command: Option<String>,
+    port: Option<u16>,
 ) -> Result<u32, String> {
     let mut map = supervisor.managed_processes.lock().unwrap();
 
@@ -212,9 +213,17 @@ pub async fn start_dev_server(
         }
     }
 
-    let cmd_str = dev_command.unwrap_or_else(|| "npm run dev".to_string());
-    if cmd_str.trim().is_empty() {
+    let raw_cmd = dev_command.unwrap_or_else(|| "npm run dev".to_string());
+    if raw_cmd.trim().is_empty() {
         return Err("Empty dev command".into());
+    }
+
+    // Ensure specific port is passed to npm/next if port is provided and command is npm run dev
+    let mut cmd_str = raw_cmd.clone();
+    if let Some(p) = port {
+        if cmd_str == "npm run dev" || cmd_str == "npm run dev --" {
+            cmd_str = format!("npm run dev -- -p {}", p);
+        }
     }
 
     #[cfg(windows)]
@@ -225,6 +234,12 @@ pub async fn start_dev_server(
     let mut cmd = Command::new("cmd");
     cmd.current_dir(&workspace_path)
         .args(["/c", &cmd_str]);
+
+    // Explicitly set PORT environment variable for Next.js and Node servers
+    if let Some(p) = port {
+        cmd.env("PORT", p.to_string());
+    }
+
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
 
@@ -233,7 +248,7 @@ pub async fn start_dev_server(
     map.insert(app_id.clone(), child);
 
     if let Ok(guard) = db.lock() {
-        let _ = guard.log_action("DEV_SUPERVISOR", "INFO", &format!("Started dev server for {}", app_id), Some(&format!("pid={}, cmd={}, path={}", pid, cmd_str, workspace_path)));
+        let _ = guard.log_action("DEV_SUPERVISOR", "INFO", &format!("Started dev server for {}", app_id), Some(&format!("pid={}, cmd={}, port={:?}, path={}", pid, cmd_str, port, workspace_path)));
     }
 
     Ok(pid)

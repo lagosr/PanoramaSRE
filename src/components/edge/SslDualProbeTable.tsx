@@ -182,7 +182,7 @@ export const SslDualProbeTable: React.FC<SslDualProbeTableProps> = ({
                     {item.local_cert.exists ? (
                       <div className="space-y-1">
                         <div className="flex items-center gap-2">
-                          <span className="text-slate-300 font-semibold">
+                          <span className="text-slate-800 dark:text-slate-300 font-semibold">
                             {formatLocalDate(item.local_cert.not_after)}
                           </span>
                           {renderHealthBadge(
@@ -190,8 +190,8 @@ export const SslDualProbeTable: React.FC<SslDualProbeTableProps> = ({
                             item.local_cert.days_remaining
                           )}
                         </div>
-                        <div className="flex items-center gap-1.5 text-[10px] text-slate-400">
-                          <span className="text-slate-500 font-sans">SHA256:</span>
+                        <div className="flex items-center gap-1.5 text-[10px] text-slate-500 dark:text-slate-400">
+                          <span className="text-slate-400 dark:text-slate-500 font-sans">SHA256:</span>
                           <span className="font-mono">
                             {item.local_cert.thumbprint.slice(0, 8)}...
                             {item.local_cert.thumbprint.slice(-6)}
@@ -200,11 +200,11 @@ export const SslDualProbeTable: React.FC<SslDualProbeTableProps> = ({
                             onClick={() =>
                               handleCopy(item.local_cert.thumbprint, localCopyId)
                             }
-                            className="p-0.5 hover:text-emerald-400 text-slate-500 transition-colors"
+                            className="p-0.5 hover:text-emerald-500 dark:hover:text-emerald-400 text-slate-400 dark:text-slate-500 transition-colors"
                             title="Copy full local thumbprint"
                           >
                             {copiedKey === localCopyId ? (
-                              <Check className="w-2.5 h-2.5 text-emerald-400" />
+                              <Check className="w-2.5 h-2.5 text-emerald-500 dark:text-emerald-400" />
                             ) : (
                               <Copy className="w-2.5 h-2.5" />
                             )}
@@ -223,7 +223,7 @@ export const SslDualProbeTable: React.FC<SslDualProbeTableProps> = ({
                     {item.live_cert.reachable ? (
                       <div className="space-y-1">
                         <div className="flex items-center gap-2">
-                          <span className="text-slate-300 font-semibold">
+                          <span className="text-slate-800 dark:text-slate-300 font-semibold">
                             {formatLocalDate(item.live_cert.not_after)}
                           </span>
                           {renderHealthBadge(
@@ -235,8 +235,8 @@ export const SslDualProbeTable: React.FC<SslDualProbeTableProps> = ({
                             {item.live_cert.latency_ms}ms
                           </span>
                         </div>
-                        <div className="flex items-center gap-1.5 text-[10px] text-slate-400">
-                          <span className="text-slate-500 font-sans">SHA256:</span>
+                        <div className="flex items-center gap-1.5 text-[10px] text-slate-500 dark:text-slate-400">
+                          <span className="text-slate-400 dark:text-slate-500 font-sans">SHA256:</span>
                           <span className="font-mono">
                             {item.live_cert.thumbprint.slice(0, 8)}...
                             {item.live_cert.thumbprint.slice(-6)}
@@ -245,7 +245,7 @@ export const SslDualProbeTable: React.FC<SslDualProbeTableProps> = ({
                             onClick={() =>
                               handleCopy(item.live_cert.thumbprint, liveCopyId)
                             }
-                            className="p-0.5 hover:text-emerald-400 text-slate-500 transition-colors"
+                            className="p-0.5 hover:text-emerald-500 dark:hover:text-emerald-400 text-slate-400 dark:text-slate-500 transition-colors"
                             title="Copy full live peer thumbprint"
                           >
                             {copiedKey === liveCopyId ? (

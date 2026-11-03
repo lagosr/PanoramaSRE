@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Sliders, Shield, Terminal, Database, Check, RefreshCw, Info, Trash2, Search } from 'lucide-react';
+import { Sliders, Shield, Terminal, Database, Check, RefreshCw, Info, Trash2, Search, Sun, Moon, Laptop } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { CustomSelect } from '../ui/CustomSelect';
 import { APP_VERSION_INFO } from '../../lib/version';
+import { useTheme } from '../../context/ThemeContext';
 
 interface SystemLogEntry {
   id: number;
@@ -16,6 +17,7 @@ interface SystemLogEntry {
 type SettingsTab = 'general' | 'ssh' | 'logs' | 'database';
 
 export const SettingsView: React.FC = () => {
+  const { theme, resolvedTheme, setTheme } = useTheme();
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const [minimizeToTray, setMinimizeToTray] = useState(true);
   const [toastAlerts, setToastAlerts] = useState(true);
@@ -83,10 +85,10 @@ export const SettingsView: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-[#050b14] overflow-hidden">
+    <div className="flex-1 flex flex-col h-full bg-slate-50 dark:bg-[#050b14] overflow-hidden">
       {/* View Header */}
-      <div className="h-14 border-b border-slate-800 px-6 flex items-center justify-between">
-        <h2 className="text-base font-semibold text-slate-100">Settings & SRE Governance</h2>
+      <div className="h-14 border-b border-slate-200 dark:border-slate-800 px-6 flex items-center justify-between bg-white dark:bg-transparent">
+        <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">Settings & SRE Governance</h2>
         <button
           onClick={handleSave}
           className="flex items-center space-x-1.5 px-3 py-1.5 text-xs bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-colors font-medium"
@@ -97,11 +99,11 @@ export const SettingsView: React.FC = () => {
       </div>
 
       {/* 4-Tab Bar */}
-      <div className="border-b border-slate-800 px-6 flex space-x-6">
+      <div className="border-b border-slate-200 dark:border-slate-800 px-6 flex space-x-6 bg-white dark:bg-transparent">
         <button
           onClick={() => setActiveTab('general')}
           className={`py-3 text-sm font-medium border-b-2 flex items-center space-x-2 transition-colors ${
-            activeTab === 'general' ? 'border-emerald-500 text-emerald-400' : 'border-transparent text-slate-400 hover:text-slate-200'
+            activeTab === 'general' ? 'border-emerald-500 text-emerald-600 dark:text-emerald-400 font-semibold' : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
           }`}
         >
           <Sliders className="w-4 h-4" />
@@ -110,7 +112,7 @@ export const SettingsView: React.FC = () => {
         <button
           onClick={() => setActiveTab('ssh')}
           className={`py-3 text-sm font-medium border-b-2 flex items-center space-x-2 transition-colors ${
-            activeTab === 'ssh' ? 'border-emerald-500 text-emerald-400' : 'border-transparent text-slate-400 hover:text-slate-200'
+            activeTab === 'ssh' ? 'border-emerald-500 text-emerald-600 dark:text-emerald-400 font-semibold' : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
           }`}
         >
           <Shield className="w-4 h-4" />
@@ -119,7 +121,7 @@ export const SettingsView: React.FC = () => {
         <button
           onClick={() => setActiveTab('logs')}
           className={`py-3 text-sm font-medium border-b-2 flex items-center space-x-2 transition-colors ${
-            activeTab === 'logs' ? 'border-emerald-500 text-emerald-400' : 'border-transparent text-slate-400 hover:text-slate-200'
+            activeTab === 'logs' ? 'border-emerald-500 text-emerald-600 dark:text-emerald-400 font-semibold' : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
           }`}
         >
           <Terminal className="w-4 h-4" />
@@ -128,7 +130,7 @@ export const SettingsView: React.FC = () => {
         <button
           onClick={() => setActiveTab('database')}
           className={`py-3 text-sm font-medium border-b-2 flex items-center space-x-2 transition-colors ${
-            activeTab === 'database' ? 'border-emerald-500 text-emerald-400' : 'border-transparent text-slate-400 hover:text-slate-200'
+            activeTab === 'database' ? 'border-emerald-500 text-emerald-600 dark:text-emerald-400 font-semibold' : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
           }`}
         >
           <Database className="w-4 h-4" />
@@ -140,72 +142,126 @@ export const SettingsView: React.FC = () => {
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
         {activeTab === 'general' && (
           <div className="max-w-2xl space-y-6">
+            {/* Appearance & Color Scheme Preference */}
+            <div className="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4 shadow-sm">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Appearance & Theme Preference</h3>
+                  <p className="text-xs text-slate-500">Select your preferred user theme. Synchronized across PanoramaDrSuite.</p>
+                </div>
+                <span className="text-xs font-mono px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 uppercase">
+                  Active: {resolvedTheme}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setTheme('dark')}
+                  className={`p-3 rounded-lg border flex flex-col items-center gap-2 transition-all cursor-pointer ${
+                    theme === 'dark'
+                      ? 'bg-emerald-500/10 border-emerald-500 text-emerald-600 dark:text-emerald-400 ring-1 ring-emerald-500/50'
+                      : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700/80 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:border-slate-300 dark:hover:border-slate-600'
+                  }`}
+                >
+                  <Moon className="w-5 h-5" />
+                  <span className="text-xs font-medium">Dark Mode</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setTheme('light')}
+                  className={`p-3 rounded-lg border flex flex-col items-center gap-2 transition-all cursor-pointer ${
+                    theme === 'light'
+                      ? 'bg-emerald-500/10 border-emerald-500 text-emerald-600 dark:text-emerald-400 ring-1 ring-emerald-500/50'
+                      : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700/80 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:border-slate-300 dark:hover:border-slate-600'
+                  }`}
+                >
+                  <Sun className="w-5 h-5" />
+                  <span className="text-xs font-medium">Light Mode</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setTheme('system')}
+                  className={`p-3 rounded-lg border flex flex-col items-center gap-2 transition-all cursor-pointer ${
+                    theme === 'system'
+                      ? 'bg-emerald-500/10 border-emerald-500 text-emerald-600 dark:text-emerald-400 ring-1 ring-emerald-500/50'
+                      : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700/80 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:border-slate-300 dark:hover:border-slate-600'
+                  }`}
+                >
+                  <Laptop className="w-5 h-5" />
+                  <span className="text-xs font-medium">System Sync</span>
+                </button>
+              </div>
+            </div>
+
             {/* Version & Build Provenance Card */}
-            <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-5 space-y-3">
+            <div className="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-3 shadow-sm">
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-2">
-                  <Info className="w-4 h-4 text-emerald-400" />
-                  <h3 className="text-sm font-semibold text-slate-200">PanoramaSRE Build Provenance</h3>
+                  <Info className="w-4 h-4 text-emerald-500 dark:text-emerald-400" />
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-200">PanoramaSRE Build Provenance</h3>
                 </div>
-                <span className="px-2 py-0.5 rounded text-xs font-mono font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                <span className="px-2 py-0.5 rounded text-xs font-mono font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30">
                   {APP_VERSION_INFO.fullVersionString}
                 </span>
               </div>
-              <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-800/80 font-mono text-xs">
+              <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-100 dark:border-slate-800/80 font-mono text-xs">
                 <div>
                   <span className="text-slate-500 block text-[11px]">Semantic Version:</span>
-                  <span className="text-slate-300 font-semibold">{APP_VERSION_INFO.version}</span>
+                  <span className="text-slate-800 dark:text-slate-300 font-semibold">{APP_VERSION_INFO.version}</span>
                 </div>
                 <div>
                   <span className="text-slate-500 block text-[11px]">Git Commit SHA:</span>
-                  <span className="text-emerald-400 font-semibold">{APP_VERSION_INFO.buildHash}</span>
+                  <span className="text-emerald-600 dark:text-emerald-400 font-semibold">{APP_VERSION_INFO.buildHash}</span>
                 </div>
                 <div>
                   <span className="text-slate-500 block text-[11px]">Build Timestamp:</span>
-                  <span className="text-slate-300">{APP_VERSION_INFO.buildDate || 'Local Dev'}</span>
+                  <span className="text-slate-800 dark:text-slate-300">{APP_VERSION_INFO.buildDate || 'Local Dev'}</span>
                 </div>
                 <div>
                   <span className="text-slate-500 block text-[11px]">Build Identifier:</span>
-                  <span className="text-slate-300">{APP_VERSION_INFO.buildNumber}</span>
+                  <span className="text-slate-800 dark:text-slate-300">{APP_VERSION_INFO.buildNumber}</span>
                 </div>
               </div>
             </div>
 
-            <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-5 space-y-4">
-              <h3 className="text-sm font-semibold text-slate-200">System Tray & Window Lifecycle</h3>
+            <div className="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4 shadow-sm">
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-200">System Tray & Window Lifecycle</h3>
               
               <label className="flex items-center justify-between cursor-pointer">
                 <div>
-                  <div className="text-sm text-slate-300">Minimize to System Tray on Close (X)</div>
+                  <div className="text-sm text-slate-800 dark:text-slate-300">Minimize to System Tray on Close (X)</div>
                   <div className="text-xs text-slate-500">Keeps background telemetry scheduler and local dev servers active.</div>
                 </div>
                 <input
                   type="checkbox"
                   checked={minimizeToTray}
                   onChange={(e) => setMinimizeToTray(e.target.checked)}
-                  className="w-4 h-4 accent-emerald-500 rounded bg-slate-800 border-slate-700"
+                  className="w-4 h-4 accent-emerald-500 rounded bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-700"
                 />
               </label>
 
               <label className="flex items-center justify-between cursor-pointer">
                 <div>
-                  <div className="text-sm text-slate-300">Windows 11 Toast Notifications</div>
+                  <div className="text-sm text-slate-800 dark:text-slate-300">Windows 11 Toast Notifications</div>
                   <div className="text-xs text-slate-500">Edge-triggered alerts on app outage, 75°C thermals, or SSL expiry.</div>
                 </div>
                 <input
                   type="checkbox"
                   checked={toastAlerts}
                   onChange={(e) => setToastAlerts(e.target.checked)}
-                  className="w-4 h-4 accent-emerald-500 rounded bg-slate-800 border-slate-700"
+                  className="w-4 h-4 accent-emerald-500 rounded bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-700"
                 />
               </label>
             </div>
 
-            <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-5 space-y-4">
-              <h3 className="text-sm font-semibold text-slate-200">Telemetry & Polling Intervals</h3>
+            <div className="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4 shadow-sm">
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-200">Telemetry & Polling Intervals</h3>
               
               <div>
-                <label className="block text-xs font-mono text-slate-400 mb-1.5">Tier 1 Polling Interval</label>
+                <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1.5">Tier 1 Polling Interval</label>
                 <CustomSelect
                   value={pollInterval}
                   onChange={setPollInterval}
@@ -223,11 +279,11 @@ export const SettingsView: React.FC = () => {
 
         {activeTab === 'ssh' && (
           <div className="max-w-2xl space-y-4">
-            <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-5 space-y-3 font-mono text-xs">
-              <div className="text-slate-400 font-semibold mb-2">TARGET HOST CONNECTION</div>
-              <div className="text-slate-300"><span className="text-slate-500">Host:</span> wsh.panoramadr.com</div>
-              <div className="text-slate-300"><span className="text-slate-500">User:</span> root</div>
-              <div className="text-slate-300"><span className="text-slate-500">Key:</span> D:\Google\My Drive\RSA\rsa-key-deployment.ppk</div>
+            <div className="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-3 font-mono text-xs shadow-sm">
+              <div className="text-slate-600 dark:text-slate-400 font-semibold mb-2">TARGET HOST CONNECTION</div>
+              <div className="text-slate-800 dark:text-slate-300"><span className="text-slate-500">Host:</span> wsh.panoramadr.com</div>
+              <div className="text-slate-800 dark:text-slate-300"><span className="text-slate-500">User:</span> root</div>
+              <div className="text-slate-800 dark:text-slate-300"><span className="text-slate-500">Key:</span> D:\Google\My Drive\RSA\rsa-key-deployment.ppk</div>
             </div>
           </div>
         )}
@@ -235,15 +291,15 @@ export const SettingsView: React.FC = () => {
         {activeTab === 'logs' && (
           <div className="flex flex-col space-y-3 h-full">
             {/* Log Controls Header */}
-            <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-900/60 border border-slate-800 rounded-xl p-3">
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl p-3 shadow-sm">
               <div className="flex items-center gap-2 flex-1 min-w-[200px]">
-                <Search className="w-4 h-4 text-slate-500 shrink-0" />
+                <Search className="w-4 h-4 text-slate-400 shrink-0" />
                 <input
                   type="text"
                   placeholder="Filter logs or parameters..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="bg-transparent border-0 text-xs text-slate-200 placeholder-slate-500 focus:outline-none w-full"
+                  className="bg-transparent border-0 text-xs text-slate-800 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none w-full"
                 />
               </div>
 
@@ -269,8 +325,8 @@ export const SettingsView: React.FC = () => {
                   onClick={() => setAutoRefreshLogs(!autoRefreshLogs)}
                   className={`px-2.5 py-1.5 rounded-lg text-xs font-mono font-medium transition-colors border ${
                     autoRefreshLogs
-                      ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
-                      : 'bg-slate-800 text-slate-400 border-slate-700'
+                      ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700'
                   }`}
                   title="Toggle 3s live polling"
                 >
@@ -280,7 +336,7 @@ export const SettingsView: React.FC = () => {
                 <button
                   onClick={fetchLogs}
                   disabled={isLoadingLogs}
-                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
+                  className="p-1.5 rounded-lg text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
                   title="Manual Refresh"
                 >
                   <RefreshCw className={`w-4 h-4 ${isLoadingLogs ? 'animate-spin' : ''}`} />
@@ -288,7 +344,7 @@ export const SettingsView: React.FC = () => {
 
                 <button
                   onClick={handleClearLogs}
-                  className="p-1.5 rounded-lg text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 border border-rose-500/20 transition-colors"
+                  className="p-1.5 rounded-lg text-rose-500 dark:text-rose-400 hover:text-rose-600 dark:hover:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-500/10 border border-rose-200 dark:border-rose-500/20 transition-colors"
                   title="Clear All Logs"
                 >
                   <Trash2 className="w-4 h-4" />
@@ -297,9 +353,9 @@ export const SettingsView: React.FC = () => {
             </div>
 
             {/* Terminal Log Console */}
-            <div className="flex-1 bg-[#050b14] border border-slate-800 rounded-xl p-4 font-mono text-xs overflow-y-auto min-h-[420px] max-h-[600px] space-y-1">
+            <div className="flex-1 bg-slate-50 dark:bg-[#050b14] border border-slate-200 dark:border-slate-800 rounded-xl p-4 font-mono text-xs overflow-y-auto min-h-[420px] max-h-[600px] space-y-1 select-text">
               {filteredLogs.length === 0 ? (
-                <div className="text-slate-600 italic py-8 text-center">
+                <div className="text-slate-500 dark:text-slate-600 italic py-8 text-center">
                   No log entries found. Perform actions or run commands to stream logs.
                 </div>
               ) : (
@@ -307,17 +363,17 @@ export const SettingsView: React.FC = () => {
                   const isWarn = log.level === 'WARN';
                   const isError = log.level === 'ERROR';
                   return (
-                    <div key={log.id} className="leading-relaxed hover:bg-slate-900/40 px-1 rounded flex items-start gap-2">
-                      <span className="text-slate-500 shrink-0 text-[11px] select-none">
+                    <div key={log.id} className="leading-relaxed hover:bg-slate-200/50 dark:hover:bg-slate-900/40 px-1 rounded flex items-start gap-2">
+                      <span className="text-slate-500 dark:text-slate-500 shrink-0 text-[11px] select-none font-mono">
                         [{log.created_at.slice(11, 19)}]
                       </span>
                       <span
-                        className={`text-[10px] px-1.5 py-0.2 rounded font-bold shrink-0 ${
+                        className={`text-[10px] px-1.5 py-0.2 rounded font-bold shrink-0 font-mono ${
                           isError
-                            ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                            ? 'bg-rose-500/15 dark:bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/30'
                             : isWarn
-                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                            : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                            ? 'bg-amber-500/15 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-500/30'
+                            : 'bg-emerald-500/10 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30'
                         }`}
                       >
                         {log.category}
@@ -325,15 +381,15 @@ export const SettingsView: React.FC = () => {
                       <span
                         className={`break-all ${
                           isError
-                            ? 'text-rose-400 font-medium'
+                            ? 'text-rose-700 dark:text-rose-400 font-medium'
                             : isWarn
-                            ? 'text-amber-300'
-                            : 'text-emerald-300 selection:bg-emerald-500/30 selection:text-emerald-200'
+                            ? 'text-amber-800 dark:text-amber-300 font-medium'
+                            : 'text-slate-800 dark:text-emerald-300 selection:bg-emerald-500/20 dark:selection:bg-emerald-500/30 selection:text-emerald-900 dark:selection:text-emerald-200'
                         }`}
                       >
                         {log.message}
                         {log.metadata && (
-                          <span className="text-slate-500 text-[11px] ml-2 font-mono">
+                          <span className="text-slate-500 dark:text-slate-400 text-[11px] ml-2 font-mono">
                             ({log.metadata})
                           </span>
                         )}
@@ -347,9 +403,9 @@ export const SettingsView: React.FC = () => {
         )}
 
         {activeTab === 'database' && (
-          <div className="max-w-2xl bg-slate-900/60 border border-slate-800 rounded-xl p-5 space-y-3">
-            <h3 className="text-sm font-semibold text-slate-200">Local SQLite Telemetry Storage</h3>
-            <p className="text-xs text-slate-400">Stores audit logs, system telemetry, and command run history locally in WAL mode.</p>
+          <div className="max-w-2xl bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-3 shadow-sm">
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-200">Local SQLite Telemetry Storage</h3>
+            <p className="text-xs text-slate-600 dark:text-slate-400">Stores audit logs, system telemetry, and command run history locally in WAL mode.</p>
             <div className="text-xs font-mono text-slate-500">Database file: data/sre.sqlite (WAL enabled)</div>
           </div>
         )}

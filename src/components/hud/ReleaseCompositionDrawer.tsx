@@ -40,7 +40,7 @@ export function ReleaseCompositionDrawer({ app, isOpen, onClose }: ReleaseCompos
 
           <button
             onClick={onClose}
-            className="p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors"
+            className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
           >
             <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M18 6L6 18M6 6l12 12" />
@@ -53,8 +53,8 @@ export function ReleaseCompositionDrawer({ app, isOpen, onClose }: ReleaseCompos
           {/* Comparison Cards */}
           <div className="grid grid-cols-2 gap-4">
             <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
-              <p className="text-[11px] font-semibold uppercase text-slate-400 mb-1">Live on WSH</p>
-              <p className="font-mono text-sm text-slate-200 font-medium truncate">
+              <p className="text-[11px] font-semibold uppercase text-slate-500 dark:text-slate-400 mb-1">Live on WSH</p>
+              <p className="font-mono text-sm text-slate-900 dark:text-slate-200 font-medium truncate">
                 {comp?.prod_release_id || 'Unreachable'}
               </p>
               <p className="text-[11px] text-slate-500 font-mono truncate mt-0.5">
@@ -63,8 +63,8 @@ export function ReleaseCompositionDrawer({ app, isOpen, onClose }: ReleaseCompos
             </div>
 
             <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
-              <p className="text-[11px] font-semibold uppercase text-slate-400 mb-1">Local Workspace HEAD</p>
-              <p className="font-mono text-sm text-slate-200 font-medium truncate">
+              <p className="text-[11px] font-semibold uppercase text-slate-500 dark:text-slate-400 mb-1">Local Workspace HEAD</p>
+              <p className="font-mono text-sm text-slate-900 dark:text-slate-200 font-medium truncate">
                 {comp?.local_branch} @ {comp?.local_head_short}
               </p>
               <p className="text-[11px] text-slate-500 font-mono truncate mt-0.5">
@@ -121,10 +121,10 @@ export function ReleaseCompositionDrawer({ app, isOpen, onClose }: ReleaseCompos
                     className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 text-xs"
                   >
                     <div className="flex items-center justify-between mb-1">
-                      <span className="font-mono text-emerald-400 font-semibold">{c.sha}</span>
+                      <span className="font-mono text-emerald-600 dark:text-emerald-400 font-semibold">{c.sha}</span>
                       <span className="text-slate-500 text-[11px]">{c.author}</span>
                     </div>
-                    <p className="text-slate-300">{c.subject}</p>
+                    <p className="text-slate-800 dark:text-slate-300">{c.subject}</p>
                   </div>
                 ))}
               </div>
@@ -139,11 +139,11 @@ export function ReleaseCompositionDrawer({ app, isOpen, onClose }: ReleaseCompos
               Modified Files Since Prod ({comp?.changed_files_since_prod.length ?? 0})
             </h4>
             {comp && comp.changed_files_since_prod.length > 0 ? (
-              <div className="rounded-lg bg-[#050b14] border border-slate-800 p-3 font-mono text-xs text-emerald-400 max-h-48 overflow-y-auto space-y-1">
+              <div className="rounded-lg bg-slate-900 dark:bg-[#050b14] border border-slate-200 dark:border-slate-800 p-3 font-mono text-xs text-emerald-600 dark:text-emerald-400 max-h-48 overflow-y-auto space-y-1">
                 {comp.changed_files_since_prod.map((f, i) => (
                   <div key={i} className="flex items-center gap-2">
-                    <span className="text-amber-400 font-semibold">{f.status}</span>
-                    <span className="truncate">{f.path}</span>
+                    <span className="text-amber-500 dark:text-amber-400 font-semibold">{f.status}</span>
+                    <span className="truncate text-slate-700 dark:text-slate-300">{f.path}</span>
                   </div>
                 ))}
               </div>
@@ -157,7 +157,7 @@ export function ReleaseCompositionDrawer({ app, isOpen, onClose }: ReleaseCompos
         <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 flex justify-end">
           <button
             onClick={onClose}
-            className="px-4 py-2 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors"
+            className="px-4 py-2 rounded-lg text-xs font-medium bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 transition-colors"
           >
             Close
           </button>
