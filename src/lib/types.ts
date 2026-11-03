@@ -17,6 +17,11 @@ export interface AppManifest {
   hasDatabase?: boolean;
   portalOrder: number;
   roles: string[];
+  auth?: {
+    slug: string;
+    basePath: string;
+    port: number;
+  };
   sre: {
     deployScript: string;
     dbScript: string;
