@@ -4,6 +4,7 @@ import { DiscoveredApp, ApplianceStatus, SslFleetSummary } from '../../lib/types
 import { FleetAppCard } from './FleetAppCard';
 import { ApplianceStatusStrip } from './ApplianceStatusStrip';
 import { ReleaseCompositionDrawer } from './ReleaseCompositionDrawer';
+import { ShieldAlert } from 'lucide-react';
 
 interface CommandCenterViewProps {
   apps: DiscoveredApp[];
@@ -27,10 +28,47 @@ export function CommandCenterView({ apps, appliances, sslFleet, isLoading }: Com
     setSelectedApp(app);
   };
 
+  const unhealthyApps = apps.filter(
+    (a) => a.health?.status !== 'healthy' || a.provenanceState === 'PROD_UNREACHABLE'
+  );
+
   return (
     <div className="p-4 sm:p-6 md:p-8 max-w-7xl mx-auto w-full min-w-0 space-y-6 overflow-hidden">
       {/* Home Lab Appliances Status Banner */}
       <ApplianceStatusStrip appliances={appliances} sslFleet={sslFleet} />
+
+      {/* Critical Fleet Alert Banner (Red Flag) */}
+      {unhealthyApps.length > 0 && (
+        <div className="rounded-xl border border-rose-500/80 bg-rose-950/40 p-4 sm:p-5 shadow-[0_0_25px_rgba(244,63,94,0.3)] ring-1 ring-rose-500/50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 animate-pulse">
+          <div className="flex items-start sm:items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-rose-500/20 border border-rose-500/50 flex items-center justify-center shrink-0">
+              <ShieldAlert className="w-6 h-6 text-rose-400" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-rose-200 tracking-wide">
+                CRITICAL FLEET INCIDENT DETECTED
+              </h3>
+              <p className="text-xs text-rose-300/90 mt-0.5">
+                {unhealthyApps.length} application{unhealthyApps.length > 1 ? 's are' : ' is'} reporting unhealthy or unreachable in production:{' '}
+                <span className="font-semibold text-white">
+                  {unhealthyApps.map((a) => a.manifest.displayName).join(', ')}
+                </span>
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {unhealthyApps.map((a) => (
+              <button
+                key={a.manifest.slug}
+                onClick={() => setSelectedApp(a)}
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white shadow-sm transition-all whitespace-nowrap"
+              >
+                Inspect {a.manifest.displayName}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Fleet Overview Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -73,10 +111,10 @@ export function CommandCenterView({ apps, appliances, sslFleet, isLoading }: Com
         </div>
       )}
 
-      {/* Release Composition Drawer */}
+      {/* Release Composition Inspector Drawer */}
       <ReleaseCompositionDrawer
         app={selectedApp}
-        isOpen={selectedApp !== null}
+        isOpen={!!selectedApp}
         onClose={() => setSelectedApp(null)}
       />
     </div>

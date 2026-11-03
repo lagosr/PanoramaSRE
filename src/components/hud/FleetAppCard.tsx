@@ -1,5 +1,6 @@
 import { DiscoveredApp } from '../../lib/types';
 import { ProvenanceBadge } from '../ui/ProvenanceBadge';
+import { AlertCircle } from 'lucide-react';
 
 interface FleetAppCardProps {
   app: DiscoveredApp;
@@ -11,19 +12,48 @@ export function FleetAppCard({ app, onOpenApp, onInspectComposition }: FleetAppC
   const isHealthy = app.health?.status === 'healthy';
   const release = app.health?.release;
   const latency = app.latencyMs ?? 0;
+  const isCritical = !isHealthy || app.provenanceState === 'PROD_UNREACHABLE' || app.provenanceState === 'DIRTY_PROD';
 
   return (
-    <article className="flex flex-col justify-between rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm hover:border-slate-300 dark:hover:border-slate-700 transition-all w-full min-w-0 overflow-hidden">
+    <article
+      className={`flex flex-col justify-between rounded-xl border p-5 transition-all w-full min-w-0 overflow-hidden relative ${
+        isCritical
+          ? 'bg-rose-950/20 border-rose-500/80 shadow-[0_0_24px_rgba(244,63,94,0.25)] ring-1 ring-rose-500/50'
+          : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm hover:border-slate-300 dark:hover:border-slate-700'
+      }`}
+    >
+      {/* Critical Unhealthy Banner if down */}
+      {isCritical && (
+        <div className="mb-3 px-3 py-1.5 rounded-lg bg-rose-500/20 border border-rose-500/40 flex items-center justify-between text-rose-300 text-xs font-semibold animate-pulse">
+          <div className="flex items-center gap-1.5">
+            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+            <span>CRITICAL ALERT: APPLICATION UNHEALTHY</span>
+          </div>
+          <span className="font-mono text-[10px] uppercase tracking-wider bg-rose-500/30 px-1.5 py-0.5 rounded text-rose-200">
+            {app.health?.status || 'DOWN'}
+          </span>
+        </div>
+      )}
+
       <div className="min-w-0">
         {/* Card Header: Icon, Title, Status & Provenance */}
         <div className="flex items-start justify-between gap-3 mb-3">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="w-10 h-10 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 font-bold text-base shrink-0">
+            <div
+              className={`w-10 h-10 rounded-lg flex items-center justify-center font-bold text-base shrink-0 border ${
+                isCritical
+                  ? 'bg-rose-500/20 border-rose-500/40 text-rose-400'
+                  : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+              }`}
+            >
               {app.manifest.displayName.substring(0, 2).toUpperCase()}
             </div>
             <div className="min-w-0">
-              <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm truncate">
-                {app.manifest.displayName}
+              <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm truncate flex items-center gap-1.5">
+                <span>{app.manifest.displayName}</span>
+                {isCritical && (
+                  <span className="inline-block w-2 h-2 rounded-full bg-rose-500 animate-ping shrink-0" title="Unhealthy" />
+                )}
               </h3>
               <p className="text-xs text-slate-500 font-mono truncate">
                 Port {app.manifest.port} • {app.manifest.basePath}
@@ -37,15 +67,19 @@ export function FleetAppCard({ app, onOpenApp, onInspectComposition }: FleetAppC
               aheadCount={app.composition?.ahead_count}
               behindCount={app.composition?.behind_count}
             />
-            {app.health && (
+            {app.health ? (
               <span
-                className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
+                className={`text-[10px] font-mono px-1.5 py-0.5 rounded font-semibold ${
                   isHealthy
                     ? 'bg-emerald-500/10 text-emerald-400'
-                    : 'bg-rose-500/10 text-rose-400'
+                    : 'bg-rose-500/20 text-rose-300 border border-rose-500/40 animate-pulse'
                 }`}
               >
-                {latency}ms
+                {isHealthy ? `${latency}ms` : 'FAIL'}
+              </span>
+            ) : (
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40 animate-pulse font-semibold">
+                OFFLINE
               </span>
             )}
           </div>
@@ -57,10 +91,20 @@ export function FleetAppCard({ app, onOpenApp, onInspectComposition }: FleetAppC
         </p>
 
         {/* Release & Live Deployment Telemetry */}
-        <div className="rounded-lg bg-slate-50 dark:bg-slate-950/60 border border-slate-100 dark:border-slate-800/80 p-3 mb-4 space-y-1.5 text-xs min-w-0 overflow-hidden">
+        <div
+          className={`rounded-lg border p-3 mb-4 space-y-1.5 text-xs min-w-0 overflow-hidden ${
+            isCritical
+              ? 'bg-rose-950/40 border-rose-800/60'
+              : 'bg-slate-50 dark:bg-slate-950/60 border border-slate-100 dark:border-slate-800/80'
+          }`}
+        >
           <div className="flex items-center justify-between gap-2">
             <span className="text-slate-500 shrink-0">Live Release:</span>
-            <span className="font-mono text-slate-800 dark:text-slate-200 truncate text-right">
+            <span
+              className={`font-mono truncate text-right font-medium ${
+                isCritical ? 'text-rose-300' : 'text-slate-800 dark:text-slate-200'
+              }`}
+            >
               {release ? release.release_id : app.health?.version ? `v${app.health.version} (Legacy)` : 'Unreachable'}
             </span>
           </div>
@@ -99,7 +143,11 @@ export function FleetAppCard({ app, onOpenApp, onInspectComposition }: FleetAppC
           onClick={() =>
             onOpenApp(`https://wsh.panoramadr.com${app.manifest.basePath}`)
           }
-          className="py-1.5 px-3 rounded-lg text-xs font-medium bg-emerald-600 hover:bg-emerald-500 text-white transition-colors whitespace-nowrap flex items-center gap-1"
+          className={`py-1.5 px-3 rounded-lg text-xs font-medium text-white transition-colors whitespace-nowrap flex items-center gap-1 ${
+            isCritical
+              ? 'bg-rose-600 hover:bg-rose-500'
+              : 'bg-emerald-600 hover:bg-emerald-500'
+          }`}
         >
           <span>Open</span>
           <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

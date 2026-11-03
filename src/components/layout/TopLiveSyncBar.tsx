@@ -1,4 +1,5 @@
 import { NetworkPosture } from '../../lib/types';
+import { AlertCircle } from 'lucide-react';
 
 interface TopLiveSyncBarProps {
   networkPosture: NetworkPosture;
@@ -19,6 +20,8 @@ export function TopLiveSyncBar({
   isSyncing,
   onRefresh,
 }: TopLiveSyncBarProps) {
+  const hasFleetAlert = totalAppCount > 0 && prodHealthyCount < totalAppCount;
+
   return (
     <header className="h-14 border-b border-slate-200 dark:border-slate-800 bg-white/50 dark:bg-slate-900/50 backdrop-blur-md px-6 flex items-center justify-between gap-3 z-10 select-none">
       {/* Left: Network Posture Indicator & Fleet Counters */}
@@ -52,15 +55,22 @@ export function TopLiveSyncBar({
           </span>
         </div>
 
-        {/* Production Fleet Health Compact Counter */}
+        {/* Production Fleet Health Compact Counter / High Alert */}
         <div className="hidden md:flex items-center gap-1.5 text-xs text-slate-400 border-l border-slate-200 dark:border-slate-800 pl-3 shrink-0 whitespace-nowrap">
           <span>Prod:</span>
-          <span className="inline-flex items-center gap-1">
-            <span className={`w-1.5 h-1.5 rounded-full ${prodHealthyCount === totalAppCount ? 'bg-emerald-400' : 'bg-rose-400 animate-pulse'}`} />
-            <span className={`font-mono font-medium ${prodHealthyCount === totalAppCount ? 'text-emerald-400' : 'text-rose-400'}`}>
-              {prodHealthyCount}/{totalAppCount} healthy
+          {hasFleetAlert ? (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/50 shadow-[0_0_12px_rgba(244,63,94,0.3)] animate-pulse font-semibold">
+              <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+              <span>CRITICAL: {totalAppCount - prodHealthyCount} UNHEALTHY</span>
             </span>
-          </span>
+          ) : (
+            <span className="inline-flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+              <span className="font-mono font-medium text-emerald-400">
+                {prodHealthyCount}/{totalAppCount} healthy
+              </span>
+            </span>
+          )}
         </div>
       </div>
 

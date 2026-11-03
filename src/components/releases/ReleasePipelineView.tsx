@@ -191,6 +191,8 @@ export function ReleasePipelineView({
             const needsDeploy = undeployedCount > 0 || isLocalDirty || appComp?.state === 'AHEAD' || appComp?.state === 'LOCAL_WIP';
             const isDeploying = !!getAppDeployJob(app.manifest.slug);
             const isSelected = selectedApp?.manifest.slug === app.manifest.slug;
+            const isHealthy = app.health?.status === 'healthy';
+            const isCritical = !isHealthy || app.provenanceState === 'PROD_UNREACHABLE' || app.provenanceState === 'DIRTY_PROD';
 
             return (
               <div
@@ -200,7 +202,11 @@ export function ReleasePipelineView({
                   setRollbackTag('');
                 }}
                 className={`p-3.5 rounded-lg border cursor-pointer transition-all flex flex-col justify-between space-y-2.5 ${
-                  isSelected
+                  isCritical
+                    ? isSelected
+                      ? 'bg-rose-950/40 border-rose-500 shadow-[0_0_16px_rgba(244,63,94,0.3)] ring-1 ring-rose-500'
+                      : 'bg-rose-950/20 hover:bg-rose-950/30 border-rose-500/60 shadow-[0_0_10px_rgba(244,63,94,0.15)]'
+                    : isSelected
                     ? 'bg-slate-950 border-emerald-500/50 shadow-md ring-1 ring-emerald-500/40'
                     : 'bg-slate-950/60 hover:bg-slate-950 border-slate-800/90'
                 }`}
@@ -209,7 +215,7 @@ export function ReleasePipelineView({
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <h4 className="text-xs font-bold text-slate-100 truncate flex items-center gap-1.5">
-                      <span className={`w-2 h-2 rounded-full ${app.health?.status === 'healthy' ? 'bg-emerald-400' : 'bg-slate-500'}`} />
+                      <span className={`w-2 h-2 rounded-full ${isHealthy ? 'bg-emerald-400' : 'bg-rose-500 animate-ping'}`} />
                       {app.manifest.displayName}
                     </h4>
                     <span className="text-[10px] text-slate-500 font-mono block">
@@ -217,14 +223,19 @@ export function ReleasePipelineView({
                     </span>
                   </div>
 
-                  {isDeploying ? (
+                  {isCritical ? (
+                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-rose-500/20 text-rose-300 border border-rose-500/50 flex items-center gap-1 shrink-0 animate-pulse">
+                      <AlertTriangle className="w-2.5 h-2.5 text-rose-400" />
+                      UNHEALTHY
+                    </span>
+                  ) : isDeploying ? (
                     <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1 shrink-0 animate-pulse">
                       <Loader2 className="w-2.5 h-2.5 animate-spin" />
                       DEPLOYING
                     </span>
                   ) : needsDeploy ? (
                     <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30 shrink-0">
-                      NEEDS DEPLOY ({undeployedCount})
+                      BEHIND ({undeployedCount})
                     </span>
                   ) : (
                     <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 shrink-0">
