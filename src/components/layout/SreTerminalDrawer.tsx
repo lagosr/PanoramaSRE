@@ -20,6 +20,8 @@ export interface TerminalTab {
   lines: string[];
   isRunning: boolean;
   exitCode?: number;
+  createdAt?: string;
+  finishedAt?: string;
 }
 
 interface SreTerminalDrawerProps {

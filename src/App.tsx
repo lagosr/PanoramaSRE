@@ -66,6 +66,8 @@ export const App: React.FC = () => {
             lines: string[];
             is_running: boolean;
             exit_code: number | null;
+            created_at?: string | null;
+            updated_at?: string | null;
           }>
         >('get_saved_console_sessions');
 
@@ -76,9 +78,11 @@ export const App: React.FC = () => {
             lines: s.lines,
             isRunning: false, // past runs are not running across app launch
             exitCode: s.exit_code ?? undefined,
+            createdAt: s.created_at ?? undefined,
+            finishedAt: s.updated_at ?? undefined,
           }));
           setTerminalTabs(loadedTabs);
-          setActiveTerminalTabId(loadedTabs[loadedTabs.length - 1].id);
+          setActiveTerminalTabId(loadedTabs[0].id);
         }
       } catch (err) {
         console.warn('Failed to hydrate console sessions from DB:', err);
@@ -591,6 +595,7 @@ export const App: React.FC = () => {
       title: `Snapshot: ${app.manifest.displayName}`,
       lines: [`[PanoramaSRE] Pulling remote SQLite backup for ${app.manifest.displayName}...`],
       isRunning: true,
+      createdAt: new Date().toISOString(),
     };
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
@@ -624,6 +629,7 @@ export const App: React.FC = () => {
       title: `ApplyLocal: ${app.manifest.displayName}`,
       lines: [`[PanoramaSRE] Extracting ${archivePath.split('\\').pop()} to local SQLite...`],
       isRunning: true,
+      createdAt: new Date().toISOString(),
     };
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
@@ -669,6 +675,7 @@ export const App: React.FC = () => {
         `Archive: ${archivePath}`,
       ],
       isRunning: true,
+      createdAt: new Date().toISOString(),
     };
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
@@ -728,6 +735,7 @@ export const App: React.FC = () => {
       title,
       lines: [`[PanoramaSRE] Invoking ${cmdSpec.command} ${cmdSpec.args.join(' ')}...`],
       isRunning: true,
+      createdAt: new Date().toISOString(),
     };
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
@@ -770,6 +778,7 @@ export const App: React.FC = () => {
       title,
       lines: [`[PanoramaSRE] Invoking deploy-cloudflare-tunnel.ps1 -${action}...`],
       isRunning: true,
+      createdAt: new Date().toISOString(),
     };
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
@@ -805,6 +814,7 @@ export const App: React.FC = () => {
       title: `Deploy: ${app.manifest.displayName}`,
       lines: [`[PanoramaSRE] Initiating release pipeline for ${app.manifest.displayName}...`],
       isRunning: true,
+      createdAt: new Date().toISOString(),
     };
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
@@ -948,7 +958,7 @@ export const App: React.FC = () => {
       setTerminalTabs((prev) =>
         prev.map((t) => {
           if (t.id === jobId) {
-            const updated = { ...t, isRunning: false, exitCode };
+            const updated = { ...t, isRunning: false, exitCode, finishedAt: new Date().toISOString() };
             saveTabToDb(updated);
             return updated;
           }
@@ -969,6 +979,7 @@ export const App: React.FC = () => {
               isRunning: false,
               lines: [...t.lines, `[ERROR] ${errMsg}`],
               exitCode: -1,
+              finishedAt: new Date().toISOString(),
             };
             saveTabToDb(updated);
             return updated;
@@ -1083,6 +1094,7 @@ export const App: React.FC = () => {
                   title: actionLabel,
                   lines: [`[PanoramaSRE] Executing ${actionLabel}...`],
                   isRunning: true,
+                  createdAt: new Date().toISOString(),
                 };
                 setTerminalTabs((prev) => [...prev, newTab]);
                 setActiveTerminalTabId(jobId);
@@ -1125,6 +1137,7 @@ export const App: React.FC = () => {
                   title: `Rollback: ${app.manifest.displayName}`,
                   lines: [`[PanoramaSRE] Swapping container to image tag ${tag}...`],
                   isRunning: true,
+                  createdAt: new Date().toISOString(),
                 };
                 setTerminalTabs((prev) => [...prev, newTab]);
                 setActiveTerminalTabId(jobId);
@@ -1166,6 +1179,7 @@ export const App: React.FC = () => {
                   title: 'GFS Full Backup',
                   lines: ['[PanoramaSRE] Triggering BackupManager.ps1 full backup...'],
                   isRunning: true,
+                  createdAt: new Date().toISOString(),
                 };
                 setTerminalTabs((prev) => [...prev, newTab]);
                 setActiveTerminalTabId(jobId);

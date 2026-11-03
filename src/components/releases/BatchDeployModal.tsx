@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { DiscoveredApp } from '../../lib/types';
 import { 
   Rocket, 
@@ -49,18 +49,26 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
   const [allowDirty, setAllowDirty] = useState<boolean>(false);
   const [confirmText, setConfirmText] = useState<string>('');
 
+  const wasOpenRef = useRef(false);
+
   useEffect(() => {
-    if (isOpen) {
-      // By default, prioritize PanoramaAuth first (IdP requirement), then the rest
+    if (isOpen && !wasOpenRef.current) {
+      // First time the modal opens: initialize state
+      wasOpenRef.current = true;
       const initialSorted = [
         ...apps.filter((a) => a.manifest.slug === 'auth'),
         ...apps.filter((a) => a.manifest.slug !== 'auth'),
       ];
       setOrderedApps(initialSorted);
 
-      // By default, pre-select apps that have undeployed changes or drift, or all if none
       const drifted = apps.filter(
-        (a) => (a.composition?.undeployed_commits?.length || 0) > 0 || a.composition?.local_dirty || a.provenanceState === 'AHEAD'
+        (a) =>
+          (a.composition?.undeployed_commits?.length || 0) > 0 ||
+          (a.composition?.ahead_count || 0) > 0 ||
+          a.composition?.local_dirty ||
+          a.provenanceState === 'AHEAD' ||
+          a.provenanceState === 'DIRTY_PROD' ||
+          a.provenanceState === 'DIVERGED'
       );
       if (drifted.length > 0) {
         setSelectedSlugs(new Set(drifted.map((a) => a.manifest.slug)));
@@ -68,6 +76,22 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
         setSelectedSlugs(new Set(apps.map((a) => a.manifest.slug)));
       }
       setConfirmText('');
+    } else if (!isOpen && wasOpenRef.current) {
+      // Modal closed: reset open flag
+      wasOpenRef.current = false;
+    } else if (isOpen && wasOpenRef.current) {
+      // Modal remains open, but `apps` prop updated (e.g. periodic ping):
+      // Update app data inside orderedApps preserving custom sequence
+      setOrderedApps((prev) => {
+        const updated = prev.map((oldApp) => {
+          const fresh = apps.find((a) => a.manifest.slug === oldApp.manifest.slug);
+          return fresh || oldApp;
+        });
+        const existingSlugs = new Set(prev.map((a) => a.manifest.slug));
+        const newlyAdded = apps.filter((a) => !existingSlugs.has(a.manifest.slug));
+        return [...updated, ...newlyAdded];
+      });
+      // CRITICAL: Preserve user's checkboxes and confirmText without disruption
     }
   }, [isOpen, apps]);
 
@@ -96,7 +120,13 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
 
   const selectOnlyDrifted = () => {
     const drifted = apps.filter(
-      (a) => (a.composition?.undeployed_commits?.length || 0) > 0 || a.composition?.local_dirty || a.provenanceState === 'AHEAD'
+      (a) =>
+        (a.composition?.undeployed_commits?.length || 0) > 0 ||
+        (a.composition?.ahead_count || 0) > 0 ||
+        a.composition?.local_dirty ||
+        a.provenanceState === 'AHEAD' ||
+        a.provenanceState === 'DIRTY_PROD' ||
+        a.provenanceState === 'DIVERGED'
     );
     setSelectedSlugs(new Set(drifted.map((a) => a.manifest.slug)));
   };

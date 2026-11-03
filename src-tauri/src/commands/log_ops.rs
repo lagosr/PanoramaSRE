@@ -10,6 +10,8 @@ pub struct ConsoleSessionRecord {
     pub lines: Vec<String>,
     pub is_running: bool,
     pub exit_code: Option<i32>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
 }
 
 #[tauri::command]
@@ -51,12 +53,14 @@ pub async fn get_saved_console_sessions(
     let raw = guard.get_saved_console_sessions().map_err(|e| e.to_string())?;
     Ok(raw
         .into_iter()
-        .map(|(id, title, lines, is_running, exit_code)| ConsoleSessionRecord {
+        .map(|(id, title, lines, is_running, exit_code, created_at, updated_at)| ConsoleSessionRecord {
             id,
             title,
             lines,
             is_running,
             exit_code,
+            created_at,
+            updated_at,
         })
         .collect())
 }

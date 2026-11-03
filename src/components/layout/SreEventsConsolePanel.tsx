@@ -19,6 +19,7 @@ import {
   ListFilter
 } from 'lucide-react';
 import { formatConsoleLine } from './ConsoleColorizer';
+import { parseUtcDate, formatLocalDateTime } from '../../lib/formatters';
 
 export interface TerminalTab {
   id: string;
@@ -26,6 +27,8 @@ export interface TerminalTab {
   lines: string[];
   isRunning: boolean;
   exitCode?: number;
+  createdAt?: string;
+  finishedAt?: string;
 }
 
 export interface SystemEventItem {
@@ -64,6 +67,65 @@ function getTabCategory(title: string): string {
   if (lower.includes('rollback')) return 'Rollbacks';
   if (lower.includes('build') || lower.includes('test')) return 'Build & Test';
   return 'Operations';
+}
+
+// Finished time and timestamp extractor
+export function getTabFinishedDetails(tab: TerminalTab): { label: string; timestampMs: number } {
+  if (tab.isRunning) {
+    return {
+      label: 'Running now',
+      timestampMs: Date.now() + 1000000000, // Always pin running streams to the top
+    };
+  }
+
+  // 1. Explicit finishedAt timestamp
+  let dateObj = parseUtcDate(tab.finishedAt);
+
+  // 2. Scan tail of console lines for ISO or standard timestamps
+  if (!dateObj && tab.lines && tab.lines.length > 0) {
+    for (let i = tab.lines.length - 1; i >= Math.max(0, tab.lines.length - 15); i--) {
+      const line = tab.lines[i];
+      const matchIso = line.match(/(?:completed at|finished at|timestamp)[\s:=]+([0-9]{4}-[0-9]{2}-[0-9]{2}[T\s][0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:?[0-9]{2})?)/i);
+      if (matchIso && matchIso[1]) {
+        dateObj = parseUtcDate(matchIso[1]);
+        if (dateObj) break;
+      }
+      const matchStandard = line.match(/\b([0-9]{4}-[0-9]{2}-[0-9]{2}[\sT][0-9]{2}:[0-9]{2}:[0-9]{2})\b/);
+      if (matchStandard && matchStandard[1]) {
+        dateObj = parseUtcDate(matchStandard[1]);
+        if (dateObj) break;
+      }
+    }
+  }
+
+  // 3. Fallback to createdAt
+  if (!dateObj && tab.createdAt) {
+    dateObj = parseUtcDate(tab.createdAt);
+  }
+
+  // 4. Fallback: try parsing timestamp from tab ID (e.g. 1793674549831)
+  if (!dateObj) {
+    const numMatch = tab.id.match(/(\d{10,13})/);
+    if (numMatch) {
+      const ms = parseInt(numMatch[1], 10);
+      const testDate = new Date(ms < 10000000000 ? ms * 1000 : ms);
+      if (!isNaN(testDate.getTime())) {
+        dateObj = testDate;
+      }
+    }
+  }
+
+  if (dateObj) {
+    return {
+      label: formatLocalDateTime(dateObj),
+      timestampMs: dateObj.getTime(),
+    };
+  }
+
+  return {
+    label: 'Completed',
+    timestampMs: 0,
+  };
 }
 
 export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
@@ -122,9 +184,20 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
     return Array.from(set);
   }, [tabs]);
 
+  // Sorted tabs: newest at the top, running processes prioritized
+  const sortedTabs = useMemo(() => {
+    return [...tabs].sort((a, b) => {
+      if (a.isRunning && !b.isRunning) return -1;
+      if (!a.isRunning && b.isRunning) return 1;
+      const timeA = getTabFinishedDetails(a).timestampMs;
+      const timeB = getTabFinishedDetails(b).timestampMs;
+      return timeB - timeA;
+    });
+  }, [tabs]);
+
   // Filtered and searched tabs for the picker dropdown
   const filteredTabs = useMemo(() => {
-    return tabs.filter((t) => {
+    return sortedTabs.filter((t) => {
       // Search match
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
@@ -141,7 +214,7 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
 
       return true;
     });
-  }, [tabs, searchQuery, statusFilter, categoryFilter]);
+  }, [sortedTabs, searchQuery, statusFilter, categoryFilter]);
 
   // When drawer is closed, render only the bottom status bar trigger
   if (!isOpen) {
@@ -428,6 +501,7 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
                     filteredTabs.map((tab) => {
                       const isSelected = tab.id === activeTabId;
                       const category = getTabCategory(tab.title);
+                      const finishDetails = getTabFinishedDetails(tab);
 
                       return (
                         <div
@@ -456,10 +530,15 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
                               <p className="text-xs font-semibold text-slate-200 truncate">
                                 {tab.title}
                               </p>
-                              <div className="flex items-center gap-1.5 text-[10px] text-slate-500 font-mono">
-                                <span>{category}</span>
+                              <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500 font-mono">
+                                <span className="text-slate-400">{category}</span>
                                 <span>•</span>
                                 <span>{tab.lines.length} lines</span>
+                                <span>•</span>
+                                <span className={tab.isRunning ? "text-emerald-400 font-semibold flex items-center gap-1" : "text-slate-400 flex items-center gap-1"}>
+                                  <Clock className="w-2.5 h-2.5 text-slate-500 shrink-0" />
+                                  <span>{finishDetails.label}</span>
+                                </span>
                               </div>
                             </div>
                           </div>
@@ -502,7 +581,7 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
 
           {/* Quick-Access Compact Strip (Shows Most Recent Active Streams with auto-scroll) */}
           <div className="flex items-center space-x-1 overflow-x-auto min-w-0 flex-1 custom-scrollbar">
-            {tabs.slice(-8).map((tab) => {
+            {tabs.slice(-3).map((tab) => {
               const isActive = tab.id === activeTabId;
               return (
                 <div

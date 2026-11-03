@@ -121,12 +121,12 @@ impl SreDatabase {
         Ok(())
     }
 
-    pub fn get_saved_console_sessions(&self) -> Result<Vec<(String, String, Vec<String>, bool, Option<i32>)>> {
+    pub fn get_saved_console_sessions(&self) -> Result<Vec<(String, String, Vec<String>, bool, Option<i32>, Option<String>, Option<String>)>> {
         // Auto-purge > 28 days first
         let _ = self.purge_old_entries(28);
 
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, lines_json, is_running, exit_code FROM console_sessions ORDER BY datetime(created_at) ASC"
+            "SELECT id, title, lines_json, is_running, exit_code, created_at, updated_at FROM console_sessions ORDER BY datetime(COALESCE(updated_at, created_at)) DESC"
         )?;
         let rows = stmt.query_map([], |row| {
             let id: String = row.get(0)?;
@@ -134,8 +134,10 @@ impl SreDatabase {
             let lines_raw: String = row.get(2)?;
             let is_running_int: i32 = row.get(3)?;
             let exit_code: Option<i32> = row.get(4)?;
+            let created_at: Option<String> = row.get(5)?;
+            let updated_at: Option<String> = row.get(6)?;
             let lines: Vec<String> = serde_json::from_str(&lines_raw).unwrap_or_default();
-            Ok((id, title, lines, is_running_int == 1, exit_code))
+            Ok((id, title, lines, is_running_int == 1, exit_code, created_at, updated_at))
         })?;
 
         let mut res = Vec::new();
