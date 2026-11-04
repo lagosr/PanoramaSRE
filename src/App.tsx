@@ -111,7 +111,12 @@ export const App: React.FC = () => {
           );
 
           if (shouldMinimize) {
-            await appWindow.hide();
+            try {
+              await appWindow.hide();
+            } catch (hideErr) {
+              console.warn('Failed to hide window directly, falling back to minimize:', hideErr);
+              await appWindow.minimize().catch(() => {});
+            }
           } else {
             // User chose Quit Completely
             await invoke('exit_app_completely');
