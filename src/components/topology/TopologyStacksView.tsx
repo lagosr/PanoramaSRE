@@ -1,114 +1,206 @@
-import { WshSnapshot } from '../../lib/types';
-import { Network, Server, Layers, ArrowRight } from 'lucide-react';
+import { useState, useMemo } from 'react';
+import {
+  Network,
+  Server,
+  Layers,
+  Sliders,
+  Cloud,
+  Zap,
+} from 'lucide-react';
+import { WshSnapshot, DiscoveredApp } from '../../lib/types';
+import {
+  synthesizeTopology,
+  TopologyRouteItem,
+  IngressHop,
+} from '../../lib/topology-synthesizer';
+import { buildRemoteSshCommand } from '../../lib/script-adapters';
+import { NetworkBoundaryCanvas } from './NetworkBoundaryCanvas';
+import { LighttpdRoutingMatrix } from './LighttpdRoutingMatrix';
+import { DietPiHardwareNetworkCard } from './DietPiHardwareNetworkCard';
+import { CloudflareTunnelTopologyCard } from './CloudflareTunnelTopologyCard';
+import { DockerNetworkRulesAdvisor } from './DockerNetworkRulesAdvisor';
+import { DockerNetworkInspectorDrawer } from './DockerNetworkInspectorDrawer';
 
 interface TopologyStacksViewProps {
   snapshot: WshSnapshot | null;
+  apps?: DiscoveredApp[];
   isLoading?: boolean;
+  onRefresh?: () => void;
+  onRunAuditCommand?: (label: string, cmd: string, args: string[]) => void;
+  onTriggerTunnelAction?: (action: 'status' | 'check_update' | 'update' | 'update_force') => void;
 }
 
-export function TopologyStacksView({ snapshot }: TopologyStacksViewProps) {
-  const routes = (snapshot?.lighttpd_routes_raw || '')
-    .split(',')
-    .filter((r) => r.includes(':'))
-    .map((r) => {
-      const [slug, port] = r.split(':');
-      return { slug, port };
-    });
+export function TopologyStacksView({
+  snapshot,
+  apps = [],
+  isLoading = false,
+  onRefresh,
+  onRunAuditCommand,
+  onTriggerTunnelAction,
+}: TopologyStacksViewProps) {
+  const [activeTab, setActiveTab] = useState<'visual' | 'matrix' | 'hardware' | 'tunnel' | 'rules'>('visual');
+  const [selectedRouteSlug, setSelectedRouteSlug] = useState<string | null>(null);
+
+  // Inspector Drawer State
+  const [isInspectorOpen, setIsInspectorOpen] = useState(false);
+  const [drawerRoute, setDrawerRoute] = useState<TopologyRouteItem | null>(null);
+  const [drawerHop, setDrawerHop] = useState<IngressHop | null>(null);
+
+  // Synthesize deterministic topology model
+  const topology = useMemo(() => synthesizeTopology(apps, snapshot), [apps, snapshot]);
+
+  const handleOpenInspector = (route: TopologyRouteItem | null, hop: IngressHop | null) => {
+    setDrawerRoute(route);
+    setDrawerHop(hop);
+    setIsInspectorOpen(true);
+  };
+
+  const handleRunTestHop = (route: TopologyRouteItem) => {
+    if (onRunAuditCommand) {
+      const endpoint = `${route.app?.manifest.basePath || `/${route.slug}`}/api/health`;
+      const bashCmd = `curl -i -s -w "\\n[METRICS] HTTP: %{http_code} | Latency: %{time_total}s | DNS: %{time_namelookup}s | Connect: %{time_connect}s\\n" http://127.0.0.1:${route.port}${endpoint}`;
+      const sshSpec = buildRemoteSshCommand(bashCmd);
+      onRunAuditCommand(
+        `Test Hop: /${route.slug}`,
+        sshSpec.command,
+        sshSpec.args
+      );
+    }
+  };
 
   return (
-    <div className="p-8 max-w-7xl mx-auto space-y-8">
-      {/* Header */}
-      <div>
-        <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-          <Network className="w-5 h-5 text-emerald-400" />
-          Network Topology, Lighttpd Proxy & Container Stacks
-        </h2>
-        <p className="text-sm text-slate-500 mt-0.5">
-          Real-time mapping of public subpath routing to internal host ports and active Docker containers
-        </p>
-      </div>
+    <div className="p-6 max-w-7xl mx-auto space-y-6">
+      {/* Top Banner & Cockpit Header */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2">
+            <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+              <Network className="w-5 h-5" />
+            </div>
+            <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+              Network Topology, Lighttpd Proxy & Container Stacks
+            </h2>
+          </div>
+          <p className="text-xs text-slate-500 mt-1 font-mono">
+            Interactive multi-zone ingress mapping, DietPi hardware networking, and Docker boundary rules
+          </p>
+        </div>
 
-      {/* Network Edge to Container Flow */}
-      <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-sm">
-        <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm mb-4">
-          End-to-End Ingress Path
-        </h3>
-        <div className="flex flex-wrap items-center gap-3 text-xs font-mono">
-          <div className="px-3 py-2 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-300">
-            Client Browser (LAN/WAN)
-          </div>
-          <ArrowRight className="w-4 h-4 text-emerald-400" />
-          <div className="px-3 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
-            Lighttpd (:443 Reverse Proxy)
-          </div>
-          <ArrowRight className="w-4 h-4 text-emerald-400" />
-          <div className="px-3 py-2 rounded-lg bg-blue-500/10 border border-blue-500/30 text-blue-400">
-            Docker Container (:3000 - :3004)
-          </div>
-          <ArrowRight className="w-4 h-4 text-emerald-400" />
-          <div className="px-3 py-2 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-300">
-            SQLite WAL (/var/data/&lt;app&gt;)
-          </div>
+        {/* View Switcher Tabs */}
+        <div className="flex flex-wrap items-center gap-1.5 p-1 rounded-xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/60 text-xs font-mono">
+          <button
+            onClick={() => setActiveTab('visual')}
+            className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${
+              activeTab === 'visual'
+                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm font-semibold'
+                : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+            }`}
+          >
+            <Zap className="w-3.5 h-3.5 text-emerald-500" />
+            Visual Boundary Map
+          </button>
+
+          <button
+            onClick={() => setActiveTab('matrix')}
+            className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${
+              activeTab === 'matrix'
+                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm font-semibold'
+                : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+            }`}
+          >
+            <Server className="w-3.5 h-3.5 text-sky-500" />
+            Proxy Routing Table
+          </button>
+
+          <button
+            onClick={() => setActiveTab('hardware')}
+            className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${
+              activeTab === 'hardware'
+                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm font-semibold'
+                : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+            }`}
+          >
+            <Layers className="w-3.5 h-3.5 text-purple-500" />
+            DietPi Hardware
+          </button>
+
+          <button
+            onClick={() => setActiveTab('tunnel')}
+            className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${
+              activeTab === 'tunnel'
+                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm font-semibold'
+                : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+            }`}
+          >
+            <Cloud className="w-3.5 h-3.5 text-indigo-500" />
+            Cloudflare Tunnel
+          </button>
+
+          <button
+            onClick={() => setActiveTab('rules')}
+            className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${
+              activeTab === 'rules'
+                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm font-semibold'
+                : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+            }`}
+          >
+            <Sliders className="w-3.5 h-3.5 text-amber-500" />
+            Rules & Advisor
+          </button>
         </div>
       </div>
 
-      {/* Lighttpd Proxy Routes Table */}
-      <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4">
-        <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm flex items-center gap-2">
-          <Server className="w-4 h-4 text-emerald-400" />
-          Lighttpd Proxy Routing Rules ({routes.length})
-        </h3>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs font-mono">
-            <thead>
-              <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-500">
-                <th className="pb-2">Subpath Prefix</th>
-                <th className="pb-2">Proxy Target Port</th>
-                <th className="pb-2">Public Canonical URL</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-              {routes.map((rt, idx) => (
-                <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                  <td className="py-2 text-emerald-400 font-semibold">/{rt.slug}</td>
-                  <td className="py-2 text-slate-300">127.0.0.1:{rt.port}</td>
-                  <td className="py-2 text-slate-400">https://wsh.panoramadr.com/{rt.slug}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      {/* Main View Area */}
+      {activeTab === 'visual' && (
+        <NetworkBoundaryCanvas
+          topology={topology}
+          selectedRouteSlug={selectedRouteSlug}
+          onSelectRouteSlug={setSelectedRouteSlug}
+          onOpenInspector={handleOpenInspector}
+        />
+      )}
 
-      {/* Running Docker Containers */}
-      <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4">
-        <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm flex items-center gap-2">
-          <Layers className="w-4 h-4 text-emerald-400" />
-          Active Docker Containers ({snapshot?.containers?.length || 0})
-        </h3>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs font-mono">
-            <thead>
-              <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-500">
-                <th className="pb-2">Container Name</th>
-                <th className="pb-2">Image</th>
-                <th className="pb-2">Status</th>
-                <th className="pb-2">Ports</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-              {(snapshot?.containers || []).map((c, idx) => (
-                <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                  <td className="py-2 text-emerald-400 font-semibold">{c.Names || c.ID}</td>
-                  <td className="py-2 text-slate-400 truncate max-w-xs">{c.Image}</td>
-                  <td className="py-2 text-slate-300">{c.Status}</td>
-                  <td className="py-2 text-slate-400">{c.Ports || 'Host'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      {activeTab === 'matrix' && (
+        <LighttpdRoutingMatrix
+          routes={topology.routes}
+          isLoading={isLoading}
+          selectedRouteSlug={selectedRouteSlug}
+          onSelectRouteSlug={(slug) => {
+            setSelectedRouteSlug(slug);
+            const found = topology.routes.find((r) => r.slug === slug);
+            if (found) handleOpenInspector(found, null);
+          }}
+          onRunTestHop={handleRunTestHop}
+        />
+      )}
+
+      {activeTab === 'hardware' && (
+        <DietPiHardwareNetworkCard topology={topology} onRefresh={onRefresh} />
+      )}
+
+      {activeTab === 'tunnel' && (
+        <CloudflareTunnelTopologyCard
+          topology={topology}
+          snapshot={snapshot}
+          onTriggerTunnelAction={onTriggerTunnelAction}
+        />
+      )}
+
+      {activeTab === 'rules' && (
+        <DockerNetworkRulesAdvisor
+          topology={topology}
+          onRunAuditCommand={onRunAuditCommand}
+        />
+      )}
+
+      {/* Inspector Slide-Out Drawer */}
+      <DockerNetworkInspectorDrawer
+        isOpen={isInspectorOpen}
+        onClose={() => setIsInspectorOpen(false)}
+        selectedRoute={drawerRoute}
+        activeHop={drawerHop}
+        onRunTestHop={handleRunTestHop}
+      />
     </div>
   );
 }

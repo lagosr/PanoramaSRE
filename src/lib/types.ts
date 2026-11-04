@@ -191,6 +191,69 @@ export interface BackupLedgerSummary {
   recent_records: BackupRecord[];
 }
 
+export interface DockerNetworkContainerAttachment {
+  Name: string;
+  EndpointID?: string;
+  MacAddress: string;
+  IPv4Address: string;
+  IPv6Address?: string;
+}
+
+export interface DockerNetworkDetail {
+  Name: string;
+  Id: string;
+  Created?: string;
+  Scope: string;
+  Driver: string;
+  EnableIPv6?: boolean;
+  IPAM?: {
+    Driver?: string;
+    Config?: Array<{
+      Subnet?: string;
+      Gateway?: string;
+    }>;
+  };
+  Internal?: boolean;
+  Attachable?: boolean;
+  Containers?: Record<string, DockerNetworkContainerAttachment>;
+  Options?: Record<string, string>;
+  Labels?: Record<string, string>;
+}
+
+export interface NetworkInterfaceAddrInfo {
+  family: string;
+  local: string;
+  prefixlen: number;
+  broadcast?: string;
+  scope: string;
+  label?: string;
+}
+
+export interface NetworkInterfaceDetail {
+  ifindex?: number;
+  ifname: string;
+  flags: string[];
+  mtu: number;
+  qdisc?: string;
+  operstate: string;
+  group?: string;
+  txqlen?: number;
+  link_type?: string;
+  address?: string;
+  broadcast?: string;
+  addr_info?: NetworkInterfaceAddrInfo[];
+}
+
+export interface NetworkRouteDetail {
+  dst: string;
+  dev: string;
+  protocol?: string;
+  scope?: string;
+  prefsrc?: string;
+  gateway?: string;
+  flags?: string[];
+}
+
 export interface WshSnapshot {
   mode: string;
   hostname: string;
@@ -237,6 +300,10 @@ export interface WshSnapshot {
   data_volumes_raw: string;
   docker_df: Array<Record<string, unknown>>;
   release_ledgers: Record<string, unknown>;
+  docker_networks?: DockerNetworkDetail[];
+  network_interfaces?: NetworkInterfaceDetail[];
+  network_routes?: NetworkRouteDetail[];
+  listening_sockets_raw?: string;
 }
 
 export type SslHealthStatus = 'HEALTHY' | 'EXPIRING_SOON' | 'CRITICAL' | 'EXPIRED' | 'MISSING' | 'ERROR';

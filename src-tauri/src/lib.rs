@@ -33,6 +33,31 @@ use scheduler::TelemetryScheduler;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
+pub fn resolve_sre_db_path() -> std::path::PathBuf {
+    // 1. If running in local dev repository or directory with existing data/sre.sqlite, use local
+    let local_data = std::path::Path::new("data/sre.sqlite");
+    if local_data.exists() || std::path::Path::new("data").is_dir() {
+        return local_data.to_path_buf();
+    }
+
+    // 2. Fallback to AppData Local directory (e.g. C:\Users\<user>\AppData\Local\com.panoramadr.sre\data\sre.sqlite)
+    #[cfg(windows)]
+    if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+        let app_dir = std::path::Path::new(&local_app_data).join("com.panoramadr.sre").join("data");
+        std::fs::create_dir_all(&app_dir).ok();
+        return app_dir.join("sre.sqlite");
+    }
+
+    #[cfg(not(windows))]
+    if let Ok(home) = std::env::var("HOME") {
+        let app_dir = std::path::Path::new(&home).join(".local").join("share").join("com.panoramadr.sre").join("data");
+        std::fs::create_dir_all(&app_dir).ok();
+        return app_dir.join("sre.sqlite");
+    }
+
+    local_data.to_path_buf()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let job_manager = Arc::new(JobManager::new());
@@ -42,9 +67,10 @@ pub fn run() {
     let scheduler = Arc::new(TelemetryScheduler::new());
     let scheduler_clone = Arc::clone(&scheduler);
 
-    // Initialize SQLite DB in data/sre.sqlite
+    // Initialize SQLite DB in resolved persistent path
+    let db_path = resolve_sre_db_path();
     let sre_db = Arc::new(Mutex::new(
-        SreDatabase::new("data/sre.sqlite").unwrap_or_else(|_| {
+        SreDatabase::new(&db_path).unwrap_or_else(|_| {
             SreDatabase::new("sre.sqlite").expect("Failed to initialize SQLite database")
         })
     ));
@@ -68,6 +94,8 @@ pub fn run() {
         .manage(sre_db)
         .invoke_handler(tauri::generate_handler![
             discover_suite_apps,
+            get_workspace_setting,
+            save_workspace_setting,
             run_process_stream,
             abort_process,
             list_active_jobs,

@@ -120,3 +120,23 @@ export function buildCloudflareTunnelCommand(
     workingDir: `${toolsPath}\\cloudflare-tunnel`,
   };
 }
+
+export function buildRemoteSshCommand(remoteBashCommand: string): {
+  command: string;
+  args: string[];
+} {
+  const defaultKeyPath = 'C:\\Users\\rodrigo\\.ssh\\rsa-key-deployment';
+  return {
+    command: 'ssh.exe',
+    args: [
+      '-o',
+      'BatchMode=yes',
+      '-o',
+      'StrictHostKeyChecking=accept-new',
+      '-i',
+      defaultKeyPath,
+      'root@wsh.panoramadr.com',
+      remoteBashCommand,
+    ],
+  };
+}

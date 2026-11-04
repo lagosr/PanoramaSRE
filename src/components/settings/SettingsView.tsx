@@ -1,9 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Sliders, Shield, Terminal, Database, Check, RefreshCw, Info, Trash2, Search, Sun, Moon, Laptop } from 'lucide-react';
+import { Sliders, Shield, Terminal, Database, Check, RefreshCw, Info, Trash2, Search, Sun, Moon, Laptop, FolderOpen } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { CustomSelect } from '../ui/CustomSelect';
 import { APP_VERSION_INFO } from '../../lib/version';
 import { useTheme } from '../../context/ThemeContext';
+
+interface SettingsViewProps {
+  onWorkspaceChanged?: () => void;
+}
 
 interface SystemLogEntry {
   id: number;
@@ -16,13 +21,72 @@ interface SystemLogEntry {
 
 type SettingsTab = 'general' | 'ssh' | 'logs' | 'database';
 
-export const SettingsView: React.FC = () => {
+export const SettingsView: React.FC<SettingsViewProps> = ({ onWorkspaceChanged }) => {
   const { theme, resolvedTheme, setTheme } = useTheme();
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const [minimizeToTray, setMinimizeToTray] = useState(true);
   const [toastAlerts, setToastAlerts] = useState(true);
   const [pollInterval, setPollInterval] = useState('15');
   const [isSaved, setIsSaved] = useState(false);
+  const [workspaceRoot, setWorkspaceRoot] = useState<string>('');
+  const [workspaceFeedback, setWorkspaceFeedback] = useState<string | null>(null);
+
+  // Load configured workspace directory on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const root = await invoke<string>('get_workspace_setting');
+        if (root) {
+          setWorkspaceRoot(root);
+        }
+      } catch (err) {
+        console.warn('Failed to load workspace setting:', err);
+      }
+    })();
+  }, []);
+
+  const handleSelectWorkspaceFolder = async () => {
+    try {
+      const selected = await openDialog({
+        directory: true,
+        multiple: false,
+        title: 'Select Panorama Suite Repositories Directory (e.g. AG Projects)',
+        defaultPath: workspaceRoot || undefined,
+      });
+
+      if (selected && typeof selected === 'string') {
+        setWorkspaceRoot(selected);
+        const resolved = await invoke<string>('save_workspace_setting', {
+          workspaceRoot: selected,
+        });
+        setWorkspaceRoot(resolved);
+        setWorkspaceFeedback('Workspace directory updated');
+        setTimeout(() => setWorkspaceFeedback(null), 3000);
+        if (onWorkspaceChanged) {
+          onWorkspaceChanged();
+        }
+      }
+    } catch (err) {
+      console.error('Failed to select workspace folder:', err);
+    }
+  };
+
+  const handleSaveWorkspaceRoot = async () => {
+    try {
+      const resolved = await invoke<string>('save_workspace_setting', {
+        workspaceRoot: workspaceRoot,
+      });
+      setWorkspaceRoot(resolved);
+      setWorkspaceFeedback('Workspace directory saved');
+      setTimeout(() => setWorkspaceFeedback(null), 3000);
+      if (onWorkspaceChanged) {
+        onWorkspaceChanged();
+      }
+    } catch (err) {
+      setWorkspaceFeedback(`Error: ${String(err)}`);
+      setTimeout(() => setWorkspaceFeedback(null), 4000);
+    }
+  };
 
   // Application Logs state
   const [logs, setLogs] = useState<SystemLogEntry[]>([]);
@@ -196,6 +260,52 @@ export const SettingsView: React.FC = () => {
               </div>
             </div>
 
+            {/* Suite Repositories & Workspace Directory Configuration */}
+            <div className="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4 shadow-sm">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Suite Repositories Workspace</h3>
+                  <p className="text-xs text-slate-500">Root folder containing child application repositories with panorama.app.json manifests.</p>
+                </div>
+                {workspaceFeedback && (
+                  <span className="text-xs font-mono px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
+                    {workspaceFeedback}
+                  </span>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={workspaceRoot}
+                    onChange={(e) => setWorkspaceRoot(e.target.value)}
+                    placeholder="e.g. C:\Users\<Username>\Documents\AG Projects"
+                    className="flex-1 px-3 py-2 text-xs font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleSelectWorkspaceFolder}
+                    className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
+                    title="Browse for folder"
+                  >
+                    <FolderOpen className="w-4 h-4" />
+                    <span>Browse...</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveWorkspaceRoot}
+                    className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-sm transition-colors cursor-pointer"
+                  >
+                    Apply
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-400 dark:text-slate-500 font-mono">
+                  Default search path: <span className="text-slate-600 dark:text-slate-400">%USERPROFILE%\Documents\AG Projects</span>
+                </p>
+              </div>
+            </div>
+
             {/* Version & Build Provenance Card */}
             <div className="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-3 shadow-sm">
               <div className="flex items-center justify-between">
@@ -283,7 +393,8 @@ export const SettingsView: React.FC = () => {
               <div className="text-slate-600 dark:text-slate-400 font-semibold mb-2">TARGET HOST CONNECTION</div>
               <div className="text-slate-800 dark:text-slate-300"><span className="text-slate-500">Host:</span> wsh.panoramadr.com</div>
               <div className="text-slate-800 dark:text-slate-300"><span className="text-slate-500">User:</span> root</div>
-              <div className="text-slate-800 dark:text-slate-300"><span className="text-slate-500">Key:</span> D:\Google\My Drive\RSA\rsa-key-deployment.ppk</div>
+              <div className="text-slate-800 dark:text-slate-300"><span className="text-slate-500">Key:</span> C:\Users\rodrigo\.ssh\rsa-key-deployment</div>
+              <div className="text-slate-800 dark:text-slate-300"><span className="text-slate-500">Key Type:</span> OpenSSH Private Key (RSA)</div>
             </div>
           </div>
         )}

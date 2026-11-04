@@ -189,7 +189,7 @@ pub async fn check_pageant_status(custom_key_path: Option<String>) -> Result<Pag
         const CREATE_NO_WINDOW: u32 = 0x08000000;
 
         let key_path = custom_key_path.unwrap_or_else(|| {
-            "D:\\Google\\My Drive\\RSA\\rsa-key-deployment.ppk".to_string()
+            crate::commands::dietpi_ops::default_ssh_key_path()
         });
 
         let pageant_executable = {
@@ -267,7 +267,7 @@ pub async fn check_pageant_status(custom_key_path: Option<String>) -> Result<Pag
 pub async fn launch_pageant_with_key(custom_key_path: Option<String>) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
         let key_path = custom_key_path.unwrap_or_else(|| {
-            "D:\\Google\\My Drive\\RSA\\rsa-key-deployment.ppk".to_string()
+            crate::commands::dietpi_ops::default_ssh_key_path()
         });
 
         let pageant_executable = {

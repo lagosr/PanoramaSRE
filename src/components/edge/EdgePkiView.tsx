@@ -2,18 +2,14 @@ import React, { useState } from 'react';
 import { WshSnapshot, SslFleetSummary } from '../../lib/types';
 import { SslDualProbeTable } from './SslDualProbeTable';
 import { ConfirmDangerModal } from '../ui/ConfirmDangerModal';
-import { formatConsoleLine } from '../layout/ConsoleColorizer';
 import {
   ShieldCheck,
-  Cloud,
   KeyRound,
   RefreshCw,
   Zap,
-  AlertTriangle,
   RotateCw,
+  AlertTriangle,
   CheckCircle2,
-  Copy,
-  Check,
 } from 'lucide-react';
 
 interface EdgePkiViewProps {
@@ -28,19 +24,15 @@ interface EdgePkiViewProps {
     deployTargets?: string[];
     targetDevice?: string;
   }) => void;
-  onTriggerTunnelAction?: (action: 'status' | 'check_update' | 'update' | 'update_force') => void;
 }
 
 export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
-  snapshot,
   sslFleet,
   isLoadingSsl = false,
   onRefreshSsl,
   onTriggerRenewal,
-  onTriggerTunnelAction,
 }) => {
   const [isForceModalOpen, setIsForceModalOpen] = useState(false);
-  const [copiedTunnelLogs, setCopiedTunnelLogs] = useState(false);
 
   const totalDomains = sslFleet?.total_domains ?? 5;
   const healthyCount = sslFleet?.healthy_count ?? 0;
@@ -85,8 +77,8 @@ export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-            <ShieldCheck className="w-5 h-5 text-emerald-400" />
-            Edge Routing, Cloudflare Tunnel & PKI Certificates
+            <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+            PKI & SSL/TLS Certificates
           </h2>
           <p className="text-sm text-slate-500 mt-0.5">
             5-Domain X.509 dual-probe TLS validation, drift detection & automated Let's Encrypt lifecycle
@@ -146,18 +138,18 @@ export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
           <div className="text-xs font-medium text-slate-500 dark:text-slate-400">Fleet Expiry Health</div>
           <div className="mt-1 flex items-center gap-2">
             {criticalCount > 0 ? (
-              <span className="text-xl font-bold text-rose-400 flex items-center gap-1.5">
-                <AlertTriangle className="w-5 h-5 text-rose-400" />
+              <span className="text-xl font-bold text-rose-600 dark:text-rose-400 flex items-center gap-1.5">
+                <AlertTriangle className="w-5 h-5 text-rose-600 dark:text-rose-400" />
                 {criticalCount} Critical
               </span>
             ) : expiringCount > 0 ? (
-              <span className="text-xl font-bold text-amber-400 flex items-center gap-1.5">
-                <AlertTriangle className="w-5 h-5 text-amber-400" />
+              <span className="text-xl font-bold text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
+                <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400" />
                 {expiringCount} Expiring
               </span>
             ) : (
-              <span className="text-xl font-bold text-emerald-400 flex items-center gap-1.5">
-                <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+              <span className="text-xl font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
+                <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
                 {healthyCount}/{totalDomains} Healthy
               </span>
             )}
@@ -172,13 +164,13 @@ export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
           <div className="text-xs font-medium text-slate-500 dark:text-slate-400">Cryptographic Drift</div>
           <div className="mt-1">
             {driftCount > 0 ? (
-              <span className="text-xl font-bold text-amber-400 flex items-center gap-1.5">
-                <AlertTriangle className="w-5 h-5 text-amber-400" />
+              <span className="text-xl font-bold text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
+                <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400" />
                 {driftCount} Drift Detected
               </span>
             ) : (
-              <span className="text-xl font-bold text-emerald-400 flex items-center gap-1.5">
-                <ShieldCheck className="w-5 h-5 text-emerald-400" />
+              <span className="text-xl font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
+                <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
                 0 Drift Detected
               </span>
             )}
@@ -200,173 +192,11 @@ export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
         </div>
       </div>
 
-      {/* Cloudflare Tunnel Status Card */}
-      {(() => {
-        const versionRaw = snapshot?.cloudflared?.version_raw || '';
-        const versionMatch = versionRaw.match(/version\s+([0-9.]+)/i);
-        const detectedVersion = versionMatch ? `v${versionMatch[1]}` : (versionRaw ? versionRaw : 'v2026.10.7');
-        const isUpToDate = !versionMatch || versionMatch[1] === '2026.10.7' || versionMatch[1] >= '2026.10.7';
-        const tunnelLogs = (snapshot?.cloudflared?.recent_logs || '').trim();
-        const logLines = tunnelLogs ? tunnelLogs.split('\n') : [];
-
-        return (
-          <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-sm space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <Cloud className="w-5 h-5 text-emerald-400 shrink-0" />
-                <div>
-                  <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm">
-                    Cloudflare Zero Trust Tunnel
-                  </h3>
-                  <p className="text-xs text-slate-500 font-mono">
-                    {versionRaw || 'cloudflared daemon'}
-                  </p>
-                </div>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
-                  {detectedVersion}
-                </span>
-                {isUpToDate ? (
-                  <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
-                    <CheckCircle2 className="w-3.5 h-3.5" /> Up to Date (Latest Upstream Release)
-                  </span>
-                ) : (
-                  <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-300 border border-amber-500/30 flex items-center gap-1">
-                    <AlertTriangle className="w-3.5 h-3.5" /> Upgrade Recommended
-                  </span>
-                )}
-                <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-                  ACTIVE QUIC TUNNEL
-                </span>
-
-                {/* Automation actions backed by deploy-cloudflare-tunnel.ps1 */}
-                <div className="flex items-center gap-1.5 ml-1">
-                  <button
-                    onClick={() => onTriggerTunnelAction?.('check_update')}
-                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors"
-                    title="Check upstream GitHub releases via deploy-cloudflare-tunnel.ps1 -CheckUpdate"
-                  >
-                    <RefreshCw className="w-3 h-3 text-sky-400" />
-                    Check Updates
-                  </button>
-                  <button
-                    onClick={() => onTriggerTunnelAction?.(isUpToDate ? 'update_force' : 'update')}
-                    className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
-                      isUpToDate
-                        ? 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700'
-                        : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm ring-1 ring-emerald-400'
-                    }`}
-                    title={
-                      isUpToDate
-                        ? 'Re-deploy and verify container via deploy-cloudflare-tunnel.ps1 -Update -Force'
-                        : 'Upgrade container to latest release via deploy-cloudflare-tunnel.ps1 -Update'
-                    }
-                  >
-                    <Cloud className="w-3 h-3" />
-                    {isUpToDate ? 'Re-Deploy Tunnel' : 'Update Tunnel Now'}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-xs font-mono text-slate-400">
-                <div className="flex items-center gap-3">
-                  <span>Recent Connection Logs:</span>
-                  {logLines.length > 0 && (
-                    <button
-                      onClick={async () => {
-                        try {
-                          await navigator.clipboard.writeText(logLines.join('\n'));
-                          setCopiedTunnelLogs(true);
-                          setTimeout(() => setCopiedTunnelLogs(false), 2000);
-                        } catch (err) {
-                          console.warn('Failed to copy tunnel logs:', err);
-                        }
-                      }}
-                      className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors"
-                      title="Copy all connection logs to clipboard"
-                    >
-                      {copiedTunnelLogs ? (
-                        <>
-                          <Check className="w-3 h-3 text-emerald-400" />
-                          <span className="text-emerald-400">Copied!</span>
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="w-3 h-3 text-slate-400" />
-                          <span>Copy Logs</span>
-                        </>
-                      )}
-                    </button>
-                  )}
-                </div>
-                <span className="text-[11px] text-slate-500">
-                  Upstream: <strong className="text-emerald-400">v2026.10.7</strong> (Verified latest upstream release)
-                </span>
-              </div>
-              <div className="font-mono text-xs bg-slate-900 dark:bg-slate-950 p-3 rounded-lg border border-slate-200 dark:border-slate-800 overflow-x-auto max-h-56 space-y-1">
-                {logLines.length > 0 ? (
-                  logLines.map((line, idx) => {
-                    const match = line.match(/^(\S+)\s+(ERR|WRN|INF|DBG)\s+(.*)$/);
-                    if (match) {
-                      const [, timestamp, level, rest] = match;
-                      const isErr = level === 'ERR';
-                      const isWrn = level === 'WRN';
-
-                      return (
-                        <div
-                          key={idx}
-                          className={`flex items-start gap-2.5 px-2.5 py-1 rounded text-xs font-mono transition-colors ${
-                            isErr
-                              ? 'bg-rose-500/15 border border-rose-500/30 text-rose-300 shadow-sm'
-                              : isWrn
-                              ? 'bg-amber-500/10 border border-amber-500/20 text-amber-300'
-                              : 'hover:bg-slate-800/60 dark:hover:bg-slate-900/60 text-slate-300'
-                          }`}
-                        >
-                          <span className="text-[11px] text-slate-400 dark:text-slate-500 shrink-0 select-none">
-                            {timestamp}
-                          </span>
-                          <span
-                            className={`px-1.5 py-0.2 rounded text-[10px] font-bold shrink-0 tracking-wider uppercase ${
-                              isErr
-                                ? 'bg-rose-500/30 text-rose-200 border border-rose-500/50'
-                                : isWrn
-                                ? 'bg-amber-500/25 text-amber-200 border border-amber-500/40'
-                                : 'bg-sky-500/15 text-sky-300 border border-sky-500/30'
-                            }`}
-                          >
-                            {level}
-                          </span>
-                          <span className={`break-all leading-relaxed ${isErr ? 'text-rose-200 font-semibold' : isWrn ? 'text-amber-200' : 'text-slate-300'}`}>
-                            {rest}
-                          </span>
-                        </div>
-                      );
-                    }
-
-                    return (
-                      <div key={idx} className="leading-relaxed whitespace-pre-wrap break-all px-2 py-0.5">
-                        {formatConsoleLine(line)}
-                      </div>
-                    );
-                  })
-                ) : (
-                  <span className="text-slate-500">No recent log stream captured.</span>
-                )}
-              </div>
-            </div>
-          </div>
-        );
-      })()}
-
       {/* 5-Domain SSL Certificate Matrix with Live Dual-Probe */}
       <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4">
         <div className="flex items-center justify-between">
           <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm flex items-center gap-2">
-            <KeyRound className="w-4 h-4 text-emerald-400" />
+            <KeyRound className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
             Home Lab PKI Dual-Probe Matrix & Drift Inspector
           </h3>
           {sslFleet?.probed_at && (

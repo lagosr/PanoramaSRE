@@ -41,7 +41,7 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
     { id: 'releases', label: 'Releases & Drift', icon: GitBranch },
     { id: 'topology', label: 'Topology & Stacks', icon: Network },
     { id: 'dietpi', label: 'DietPi Host', icon: Server },
-    { id: 'edge', label: 'Edge & PKI', icon: ShieldCheck },
+    { id: 'edge', label: 'PKI & Certificates', icon: ShieldCheck },
     { id: 'backups', label: 'Database Backups & DR', icon: HardDrive, badge: backupFailureCount, badgeColor: 'bg-rose-500' },
     { id: 'settings', label: 'Settings', icon: SettingsIcon },
   ];

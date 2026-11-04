@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::process::Command;
+use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WshSnapshot {
@@ -22,6 +23,25 @@ pub struct WshSnapshot {
     pub data_volumes_raw: String,
     pub docker_df: Vec<serde_json::Value>,
     pub release_ledgers: serde_json::Value,
+    #[serde(default)]
+    pub docker_networks: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub network_interfaces: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub network_routes: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub listening_sockets_raw: String,
+}
+
+pub fn default_ssh_key_path() -> String {
+    #[cfg(windows)]
+    if let Ok(userprofile) = std::env::var("USERPROFILE") {
+        let ssh_key = Path::new(&userprofile).join(".ssh").join("rsa-key-deployment");
+        if ssh_key.exists() {
+            return ssh_key.to_string_lossy().to_string();
+        }
+    }
+    "C:\\Users\\rodrigo\\.ssh\\rsa-key-deployment".to_string()
 }
 
 #[tauri::command]
@@ -30,44 +50,72 @@ pub async fn fetch_wsh_snapshot(
     mode: Option<String>,
 ) -> Result<WshSnapshot, String> {
     tokio::task::spawn_blocking(move || {
-        let key = ssh_key_path.unwrap_or_else(|| {
-            "D:\\Google\\My Drive\\RSA\\rsa-key-deployment.ppk".to_string()
-        });
+        let key = ssh_key_path.unwrap_or_else(default_ssh_key_path);
         let run_mode = mode.unwrap_or_else(|| "--fast".to_string());
-        let script_path = "C:\\Users\\rodrigo\\Documents\\AG Projects\\PanoramaSRE\\scripts\\wsh_snapshot.sh";
-
-        #[cfg(windows)]
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-
-        let raw_script = std::fs::read_to_string(script_path)
-            .map_err(|e| format!("Failed to read wsh_snapshot.sh: {}", e))?;
+        
+        // Embed the bash script directly into the binary so it runs in installed MSI/NSIS without filesystem dependencies
+        let embedded_script = include_str!("../../../scripts/wsh_snapshot.sh");
+        
+        // Also check if local filesystem script exists (e.g. for development overrides)
+        let raw_script = if let Ok(custom) = std::fs::read_to_string("C:\\Users\\rodrigo\\Documents\\AG Projects\\PanoramaSRE\\scripts\\wsh_snapshot.sh") {
+            custom
+        } else {
+            embedded_script.to_string()
+        };
         
         // Strictly sanitize CRLF to LF so remote bash doesn't choke on Windows line endings
         let sanitized_script = raw_script.replace("\r\n", "\n").replace('\r', "\n");
 
-        let mut child = Command::new("plink.exe")
-            .args([
-                "-batch",
-                "-ssh",
-                "-i",
-                &key,
+        // Prefer OpenSSH (ssh.exe) when using standard OpenSSH private keys
+        let use_ssh_exe = !key.to_lowercase().ends_with(".ppk");
+
+        let mut child = if use_ssh_exe {
+            let mut cmd = Command::new("ssh.exe");
+            cmd.args([
+                "-o", "BatchMode=yes",
+                "-o", "StrictHostKeyChecking=accept-new",
+                "-i", &key,
                 "root@wsh.panoramadr.com",
                 &format!("bash -s -- {}", run_mode),
-            ])
+            ]);
+            cmd
+        } else {
+            let mut cmd = Command::new("plink.exe");
+            cmd.args([
+                "-batch",
+                "-ssh",
+                "-i", &key,
+                "root@wsh.panoramadr.com",
+                &format!("bash -s -- {}", run_mode),
+            ]);
+            cmd
+        };
+
+        let mut child_proc = child
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .creation_flags(CREATE_NO_WINDOW)
-            .spawn()
-            .map_err(|e| format!("Failed to spawn plink.exe: {}. Ensure PuTTY is installed.", e))?;
+            .stderr(std::process::Stdio::piped());
 
-        if let Some(mut stdin) = child.stdin.take() {
+        #[cfg(windows)]
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        #[cfg(windows)]
+        use std::os::windows::process::CommandExt;
+
+        #[cfg(windows)]
+        {
+            child_proc = child_proc.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        let mut spawned = child_proc
+            .spawn()
+            .map_err(|e| format!("Failed to spawn SSH process: {}. Ensure ssh.exe or plink.exe is available in PATH.", e))?;
+
+        if let Some(mut stdin) = spawned.stdin.take() {
             use std::io::Write;
             let _ = stdin.write_all(sanitized_script.as_bytes());
         }
 
-        let output = child
+        let output = spawned
             .wait_with_output()
             .map_err(|e| format!("SSH snapshot execution failed: {}", e))?;
 

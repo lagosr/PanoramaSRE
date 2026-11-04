@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use tauri::State;
+use crate::db::SreDatabase;
 
 #[tauri::command]
 pub async fn exit_app_completely(
@@ -71,33 +74,55 @@ pub struct DiscoveredAppDto {
     pub manifest_path: String,
 }
 
-#[tauri::command]
-pub fn discover_suite_apps(workspace_root: Option<String>) -> Result<Vec<DiscoveredAppDto>, String> {
-    let root = match workspace_root {
-        Some(r) => PathBuf::from(r),
-        None => {
-            // Find root by checking standard AG Projects parent directory
-            // or searching up until we find child apps with panorama.app.json
-            let mut candidate = std::env::current_dir().map_err(|e| e.to_string())?;
-            if let Ok(exe) = std::env::current_exe() {
-                if let Some(exe_dir) = exe.parent() {
-                    candidate = exe_dir.to_path_buf();
-                }
-            }
+fn dir_has_suite_apps(dir: &Path) -> bool {
+    if let Ok(entries) = fs::read_dir(dir) {
+        entries.flatten().any(|e| {
+            e.path().is_dir() && e.path().join("panorama.app.json").exists()
+        })
+    } else {
+        false
+    }
+}
 
-            // Climb up looking for the workspace umbrella directory containing child apps
-            let mut search_dir = candidate.clone();
-            let mut resolved = candidate.clone();
+pub fn resolve_suite_workspace_root(configured: Option<&str>) -> PathBuf {
+    // 1. If explicitly configured by user setting or parameter, verify and return if valid
+    if let Some(cfg) = configured {
+        let p = PathBuf::from(cfg.trim());
+        if !p.as_os_str().is_empty() && p.exists() {
+            return p;
+        }
+    }
+
+    // 2. Check environment variable PANORAMA_WORKSPACE_ROOT
+    if let Ok(env_root) = std::env::var("PANORAMA_WORKSPACE_ROOT") {
+        let p = PathBuf::from(env_root.trim());
+        if !p.as_os_str().is_empty() && p.exists() {
+            return p;
+        }
+    }
+
+    // 3. Search up from current working directory
+    if let Ok(cwd) = std::env::current_dir() {
+        let mut search_dir = cwd;
+        for _ in 0..6 {
+            if dir_has_suite_apps(&search_dir) {
+                return search_dir;
+            }
+            if let Some(parent) = search_dir.parent() {
+                search_dir = parent.to_path_buf();
+            } else {
+                break;
+            }
+        }
+    }
+
+    // 4. Search up from current executable directory (useful during cargo run/debug)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let mut search_dir = exe_dir.to_path_buf();
             for _ in 0..6 {
-                // Check if this dir contains directories with panorama.app.json
-                if let Ok(entries) = fs::read_dir(&search_dir) {
-                    let has_child_apps = entries.flatten().any(|e| {
-                        e.path().is_dir() && e.path().join("panorama.app.json").exists()
-                    });
-                    if has_child_apps {
-                        resolved = search_dir;
-                        break;
-                    }
+                if dir_has_suite_apps(&search_dir) {
+                    return search_dir;
                 }
                 if let Some(parent) = search_dir.parent() {
                     search_dir = parent.to_path_buf();
@@ -105,9 +130,98 @@ pub fn discover_suite_apps(workspace_root: Option<String>) -> Result<Vec<Discove
                     break;
                 }
             }
-            resolved
         }
+    }
+
+    // 5. Well-known user development locations fallback (crucial for MSI / installed exe in Program Files)
+    let mut candidate_locations: Vec<PathBuf> = Vec::new();
+
+    #[cfg(windows)]
+    {
+        if let Ok(userprofile) = std::env::var("USERPROFILE") {
+            let up = PathBuf::from(&userprofile);
+            candidate_locations.push(up.join("Documents").join("AG Projects"));
+            candidate_locations.push(up.join("Documents").join("Projects"));
+            candidate_locations.push(up.join("source").join("repos"));
+            candidate_locations.push(up.join("Projects"));
+        }
+        if let Ok(onedrive) = std::env::var("OneDrive") {
+            let odp = PathBuf::from(&onedrive);
+            candidate_locations.push(odp.join("Documents").join("AG Projects"));
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            let hp = PathBuf::from(&home);
+            candidate_locations.push(hp.join("Documents").join("AG Projects"));
+            candidate_locations.push(hp.join("Projects"));
+        }
+    }
+
+    for candidate in candidate_locations {
+        if candidate.exists() && (dir_has_suite_apps(&candidate) || candidate.is_dir()) {
+            if dir_has_suite_apps(&candidate) {
+                return candidate;
+            }
+        }
+    }
+
+    // Default fallback to current dir
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+#[tauri::command]
+pub async fn get_workspace_setting(
+    db: State<'_, Arc<Mutex<SreDatabase>>>,
+) -> Result<String, String> {
+    let configured = {
+        let guard = db.lock().map_err(|e| e.to_string())?;
+        guard.get_setting("workspace_root").map_err(|e| e.to_string())?
     };
+
+    let resolved = resolve_suite_workspace_root(configured.as_deref());
+    Ok(resolved.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn save_workspace_setting(
+    db: State<'_, Arc<Mutex<SreDatabase>>>,
+    workspace_root: String,
+) -> Result<String, String> {
+    let clean = workspace_root.trim().to_string();
+    let p = PathBuf::from(&clean);
+    if !clean.is_empty() && !p.exists() {
+        return Err(format!("Specified workspace directory does not exist: {}", clean));
+    }
+
+    {
+        let guard = db.lock().map_err(|e| e.to_string())?;
+        guard.set_setting("workspace_root", &clean).map_err(|e| e.to_string())?;
+    }
+
+    let resolved = resolve_suite_workspace_root(if clean.is_empty() { None } else { Some(&clean) });
+    Ok(resolved.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn discover_suite_apps(
+    db: State<'_, Arc<Mutex<SreDatabase>>>,
+    workspace_root: Option<String>,
+) -> Result<Vec<DiscoveredAppDto>, String> {
+    let configured = if let Some(r) = workspace_root {
+        if !r.trim().is_empty() {
+            Some(r)
+        } else {
+            None
+        }
+    } else {
+        let guard = db.lock().map_err(|e| e.to_string())?;
+        guard.get_setting("workspace_root").map_err(|e| e.to_string())?
+    };
+
+    let root = resolve_suite_workspace_root(configured.as_deref());
 
     let mut apps = Vec::new();
     let entries = fs::read_dir(&root).map_err(|e| format!("Failed to read workspace root: {}", e))?;
@@ -166,4 +280,22 @@ pub fn discover_suite_apps(workspace_root: Option<String>) -> Result<Vec<Discove
     // Sort stably by port
     apps.sort_by_key(|a| a.manifest.port);
     Ok(apps)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_dir_has_suite_apps_on_non_existent_path() {
+        let dummy = Path::new("C:/non/existent/path/for/unit/test");
+        assert!(!dir_has_suite_apps(dummy));
+    }
+
+    #[test]
+    fn test_resolve_suite_workspace_root_prefers_valid_explicit() {
+        let cwd = std::env::current_dir().unwrap();
+        let resolved = resolve_suite_workspace_root(Some(&cwd.to_string_lossy()));
+        assert_eq!(resolved, cwd);
+    }
 }

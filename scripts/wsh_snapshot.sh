@@ -21,19 +21,7 @@ SVC_SSH=$(systemctl is-active ssh 2>/dev/null || echo "unknown")
 LISTEN_PORTS=$(ss -tlnH 2>/dev/null | awk '{print $4}' | awk -F: '{print $NF}' | grep -E '^[0-9]+$' | sort -nu | paste -sd "," - || echo "")
 
 # Lighttpd proxy blocks: slug:port pairs
-PROXY_ROUTES=$(awk '
-  /\$HTTP\["url"\]\s*=~\s*"\^\/[a-zA-Z0-9_-]+"/ {
-    match($0, /\^\/[a-zA-Z0-9_-]+/);
-    slug = substr($0, RSTART+2, RLENGTH-2);
-  }
-  slug != "" && /"port"\s*=>\s*[0-9]+/ {
-    match($0, /"port"\s*=>\s*[0-9]+/);
-    pstr = substr($0, RSTART, RLENGTH);
-    sub(/.*=>\s*/, "", pstr);
-    printf "%s:%s,", slug, pstr;
-    slug = "";
-  }
-' /etc/lighttpd/lighttpd.conf /etc/lighttpd/conf-enabled/*.conf 2>/dev/null | sed 's/,$//')
+PROXY_ROUTES=$(sed -n 's/.*HTTP\["url"\].*"^\/\([a-zA-Z0-9_-]*\).*/\1/p; s/.*"port"[[:space:]]*=>[[:space:]]*\([0-9]*\).*/:\1/p' /etc/lighttpd/lighttpd.conf 2>/dev/null | tr -d '\r' | paste - - | awk '{printf "%s%s,", $1, $2}' | sed 's/,$//')
 
 # Docker containers JSON array
 CONTAINERS_JSON=$(docker ps -a --format '{{json .}}' 2>/dev/null | paste -sd "," - || echo "")
@@ -41,6 +29,27 @@ CONTAINERS_JSON=$(docker ps -a --format '{{json .}}' 2>/dev/null | paste -sd ","
 STATS_JSON=$(docker stats --no-stream --format '{{json .}}' 2>/dev/null | paste -sd "," - || echo "")
 # Local Docker images for rollback verification
 IMAGES_JSON=$(docker images --format '{{json .}}' 2>/dev/null | paste -sd "," - || echo "")
+
+# Docker networks JSON inspect
+DOCKER_NET_IDS=$(docker network ls -q 2>/dev/null)
+DOCKER_NETS_JSON="[]"
+if [ -n "$DOCKER_NET_IDS" ]; then
+  INSPECT_OUT=$(docker network inspect $DOCKER_NET_IDS 2>/dev/null | tr -d '\r')
+  if [ -n "$INSPECT_OUT" ]; then
+    DOCKER_NETS_JSON="$INSPECT_OUT"
+  fi
+fi
+
+# Network interfaces (iproute2 JSON)
+IFACES_JSON=$(ip -j addr 2>/dev/null | tr -d '\r')
+[ -z "$IFACES_JSON" ] && IFACES_JSON="[]"
+
+# Kernel IP routes
+ROUTES_JSON=$(ip -j route 2>/dev/null | tr -d '\r')
+[ -z "$ROUTES_JSON" ] && ROUTES_JSON="[]"
+
+# Listening sockets full detail
+LISTEN_SOCKETS=$(ss -tulpnH 2>/dev/null | json_escape || echo "")
 
 # Cloudflared recent status lines
 CF_VERSION=$(docker exec cloudflared cloudflared --version 2>/dev/null | head -n 1 | json_escape || echo "")
@@ -93,6 +102,10 @@ cat <<EOF
   "containers": [${CONTAINERS_JSON}],
   "container_stats": [${STATS_JSON}],
   "images": [${IMAGES_JSON}],
+  "docker_networks": ${DOCKER_NETS_JSON},
+  "network_interfaces": ${IFACES_JSON},
+  "network_routes": ${ROUTES_JSON},
+  "listening_sockets_raw": "${LISTEN_SOCKETS}",
   "cloudflared": {
     "version_raw": "${CF_VERSION}",
     "recent_logs": "${CF_LOGS}"

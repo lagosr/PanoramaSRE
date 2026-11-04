@@ -1106,7 +1106,7 @@ export const App: React.FC = () => {
           onNavigateToBackups={() => setActiveTab('backups')}
         />
 
-        <div className={`flex-1 overflow-y-auto ${isDrawerOpen ? 'pb-96' : 'pb-12'}`}>
+        <div className="flex-1 min-h-0 overflow-y-auto">
           {activeTab === 'hud' && (
             <CommandCenterView
               apps={apps}
@@ -1134,7 +1134,45 @@ export const App: React.FC = () => {
           )}
 
           {activeTab === 'topology' && (
-            <TopologyStacksView snapshot={wshSnapshot} isLoading={false} />
+            <TopologyStacksView
+              snapshot={wshSnapshot}
+              apps={apps}
+              isLoading={isManualSyncing}
+              onRefresh={refreshWshTelemetry}
+              onRunAuditCommand={(actionLabel, cmd, args) => {
+                const jobId = `audit-${Date.now()}`;
+                const newTab: TerminalTab = {
+                  id: jobId,
+                  title: actionLabel,
+                  lines: [`[PanoramaSRE] Executing ${actionLabel}...`],
+                  isRunning: true,
+                  createdAt: new Date().toISOString(),
+                };
+                setTerminalTabs((prev) => [...prev, newTab]);
+                setActiveTerminalTabId(jobId);
+                setIsDrawerOpen(true);
+                saveTabToDb(newTab);
+
+                runStreamJob({
+                  jobId,
+                  label: actionLabel,
+                  command: cmd,
+                  args,
+                  workingDir: 'C:\\Users\\rodrigo',
+                  lockType: 'None',
+                  onLine: (line) => {
+                    appendTerminalLine(jobId, line);
+                  },
+                  onComplete: (exitCode) => {
+                    finalizeTerminalJob(jobId, exitCode);
+                  },
+                  onError: (err) => {
+                    failTerminalJob(jobId, `Action failed: ${err}`);
+                  },
+                });
+              }}
+              onTriggerTunnelAction={handleTriggerTunnelAction}
+            />
           )}
 
           {activeTab === 'dietpi' && (
@@ -1241,11 +1279,12 @@ export const App: React.FC = () => {
               isLoadingSsl={isLoadingSsl}
               onRefreshSsl={refreshSslStatus}
               onTriggerRenewal={handleTriggerSslRenewal}
-              onTriggerTunnelAction={handleTriggerTunnelAction}
             />
           )}
 
-          {activeTab === 'settings' && <SettingsView />}
+          {activeTab === 'settings' && (
+            <SettingsView onWorkspaceChanged={() => syncFullTelemetry(true)} />
+          )}
 
           {activeTab !== 'hud' &&
             activeTab !== 'local-dev' &&

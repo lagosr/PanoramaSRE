@@ -37,41 +37,41 @@ export const SslDualProbeTable: React.FC<SslDualProbeTableProps> = ({
   const renderHealthBadge = (status: SslHealthStatus, daysRemaining: number) => {
     if (status === 'MISSING') {
       return (
-        <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-800 text-slate-400 border border-slate-700">
+        <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-400 border border-slate-300 dark:border-slate-700">
           MISSING
         </span>
       );
     }
     if (status === 'ERROR') {
       return (
-        <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/30">
+        <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-rose-500/10 text-rose-700 dark:text-rose-400 border border-rose-500/30">
           PARSE ERROR
         </span>
       );
     }
     if (status === 'EXPIRED') {
       return (
-        <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-red-500/20 text-red-400 border border-red-500/40">
+        <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-red-500/20 text-red-700 dark:text-red-400 border border-red-500/40">
           EXPIRED
         </span>
       );
     }
     if (status === 'CRITICAL') {
       return (
-        <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/30">
+        <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-rose-500/10 text-rose-700 dark:text-rose-400 border border-rose-500/30">
           {daysRemaining}d CRITICAL
         </span>
       );
     }
     if (status === 'EXPIRING_SOON') {
       return (
-        <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/30">
+        <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/30">
           {daysRemaining}d EXPIRING
         </span>
       );
     }
     return (
-      <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+      <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20">
         {daysRemaining}d HEALTHY
       </span>
     );
@@ -81,33 +81,33 @@ export const SslDualProbeTable: React.FC<SslDualProbeTableProps> = ({
     switch (status) {
       case 'IN_SYNC':
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30">
             <ShieldCheck className="w-3.5 h-3.5" />
             IN SYNC
           </span>
         );
       case 'DRIFT_DETECTED':
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-500/15 text-amber-400 border border-amber-500/40 animate-pulse">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/40 animate-pulse">
             <AlertTriangle className="w-3.5 h-3.5" />
             DRIFT DETECTED
           </span>
         );
       case 'LOCAL_ONLY':
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-800 text-slate-300 border border-slate-700">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-300 dark:border-slate-700">
             LOCAL ONLY
           </span>
         );
       case 'LIVE_ONLY':
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-500/10 text-blue-400 border border-blue-500/30">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-500/10 text-blue-700 dark:text-blue-400 border border-blue-500/30">
             LIVE ONLY
           </span>
         );
       default:
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-800 text-slate-400 border border-slate-700">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-400 border border-slate-300 dark:border-slate-700">
             <HelpCircle className="w-3.5 h-3.5" />
             UNKNOWN
           </span>
@@ -165,7 +165,7 @@ export const SslDualProbeTable: React.FC<SslDualProbeTableProps> = ({
                           href={`https://${item.domain}`}
                           target="_blank"
                           rel="noreferrer"
-                          className="text-emerald-400 hover:text-emerald-300 inline-flex items-center gap-1 font-mono text-[11px] mt-0.5"
+                          className="text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 inline-flex items-center gap-1 font-mono text-[11px] mt-0.5"
                         >
                           {item.domain}
                           <ExternalLink className="w-2.5 h-2.5 opacity-60" />
@@ -274,7 +274,7 @@ export const SslDualProbeTable: React.FC<SslDualProbeTableProps> = ({
                       {onRenewCert && (
                         <button
                           onClick={() => onRenewCert(item.device_key, true)}
-                          className="px-2.5 py-1 rounded text-xs font-sans font-medium text-emerald-300 hover:text-emerald-200 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 transition-colors whitespace-nowrap flex-shrink-0"
+                          className="px-2.5 py-1 rounded text-xs font-sans font-medium text-emerald-700 dark:text-emerald-300 hover:text-emerald-800 dark:hover:text-emerald-200 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 transition-colors whitespace-nowrap flex-shrink-0 cursor-pointer"
                           title={`Request fresh Let's Encrypt certificate and deploy to ${item.display_name}`}
                         >
                           Renew Cert
@@ -283,7 +283,7 @@ export const SslDualProbeTable: React.FC<SslDualProbeTableProps> = ({
                       {onDeployTarget && item.deploy_target_type !== 'LOCAL_VERIFY' && (
                         <button
                           onClick={() => onDeployTarget(item.device_key)}
-                          className="px-2.5 py-1 rounded text-xs font-sans font-medium text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 transition-colors whitespace-nowrap flex-shrink-0"
+                          className="px-2.5 py-1 rounded text-xs font-sans font-medium text-slate-700 dark:text-slate-200 hover:text-slate-900 dark:hover:text-white bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-300 dark:border-slate-700 transition-colors whitespace-nowrap flex-shrink-0 cursor-pointer"
                           title={`Push current certificate to ${item.display_name} without re-requesting from Let's Encrypt`}
                         >
                           Deploy
