@@ -41,14 +41,14 @@ impl DevSupervisor {
         }
     }
 
-    /// Check if a local port is accepting TCP connections (120ms timeout)
+    /// Check if a local port is accepting TCP connections (150ms timeout)
     pub fn is_port_listening(port: u16) -> bool {
-        let addr = format!("127.0.0.1:{}", port);
-        TcpStream::connect_timeout(
-            &addr.parse().unwrap_or_else(|_| "127.0.0.1:3000".parse().unwrap()),
-            Duration::from_millis(120),
-        )
-        .is_ok()
+        let addr_str = format!("127.0.0.1:{}", port);
+        if let Ok(addr) = addr_str.parse::<std::net::SocketAddr>() {
+            TcpStream::connect_timeout(&addr, Duration::from_millis(150)).is_ok()
+        } else {
+            false
+        }
     }
 
     /// Inspect local SQLite file for size and PRAGMA user_version
@@ -142,7 +142,16 @@ pub async fn get_dev_servers_status(
 ) -> Result<Vec<DevServerInfo>, String> {
     let mut results = Vec::new();
 
-    let managed_map = supervisor.managed_processes.lock().unwrap();
+    let mut managed_map = supervisor.managed_processes.lock().unwrap();
+
+    // 1. Prune terminated child processes from managed_map so dead processes do not linger
+    managed_map.retain(|_app_id, child| {
+        match child.try_wait() {
+            Ok(None) => true,       // Still running
+            Ok(Some(_)) => false,   // Exited cleanly or with code
+            Err(_) => false,        // Failed to check or terminated
+        }
+    });
 
     for app in apps {
         let app_id = app["appId"].as_str().unwrap_or("").to_string();
@@ -159,8 +168,17 @@ pub async fn get_dev_servers_status(
         // Check if port is open
         let is_open = DevSupervisor::is_port_listening(port);
 
+        // Dev server is running managed only if process handle exists in managed_map
+        // AND either the port is actively listening or the process was just spawned
         let status = if managed_pid.is_some() {
-            DevServerStatus::RunningManaged
+            if is_open {
+                DevServerStatus::RunningManaged
+            } else {
+                // If child is alive in managed_map but port is not listening, it could be starting up or hung.
+                // However, if the process actually exited, retain() above already pruned it.
+                // We mark it as RunningManaged if process is still alive.
+                DevServerStatus::RunningManaged
+            }
         } else if is_open {
             DevServerStatus::RunningExternal
         } else {
