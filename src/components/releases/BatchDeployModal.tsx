@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { DiscoveredApp } from '../../lib/types';
+import { DiscoveredApp, isAppDeployCandidate } from '../../lib/types';
 import { 
   Rocket, 
   X, 
@@ -9,7 +9,8 @@ import {
   Square, 
   Layers, 
   Info,
-  Lock
+  Lock,
+  AlertTriangle
 } from 'lucide-react';
 import { CustomSelect, SelectOption } from '../ui/CustomSelect';
 
@@ -61,15 +62,7 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
       ];
       setOrderedApps(initialSorted);
 
-      const drifted = apps.filter(
-        (a) =>
-          (a.composition?.undeployed_commits?.length || 0) > 0 ||
-          (a.composition?.ahead_count || 0) > 0 ||
-          a.composition?.local_dirty ||
-          a.provenanceState === 'AHEAD' ||
-          a.provenanceState === 'DIRTY_PROD' ||
-          a.provenanceState === 'DIVERGED'
-      );
+      const drifted = apps.filter(isAppDeployCandidate);
       if (drifted.length > 0) {
         setSelectedSlugs(new Set(drifted.map((a) => a.manifest.slug)));
       } else {
@@ -119,15 +112,7 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
   };
 
   const selectOnlyDrifted = () => {
-    const drifted = apps.filter(
-      (a) =>
-        (a.composition?.undeployed_commits?.length || 0) > 0 ||
-        (a.composition?.ahead_count || 0) > 0 ||
-        a.composition?.local_dirty ||
-        a.provenanceState === 'AHEAD' ||
-        a.provenanceState === 'DIRTY_PROD' ||
-        a.provenanceState === 'DIVERGED'
-    );
+    const drifted = apps.filter(isAppDeployCandidate);
     setSelectedSlugs(new Set(drifted.map((a) => a.manifest.slug)));
   };
 
@@ -221,6 +206,8 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
             const isAuth = app.manifest.slug === 'auth';
             const undeployedCount = app.composition?.undeployed_commits?.length || 0;
             const hasDrift = undeployedCount > 0 || app.composition?.local_dirty;
+            const isHealthy = app.health?.status === 'healthy';
+            const isCritical = !isHealthy || app.provenanceState === 'PROD_UNREACHABLE' || app.provenanceState === 'DIRTY_PROD';
             const queuePosition = executionQueue.findIndex((a) => a.manifest.slug === app.manifest.slug);
 
             return (
@@ -257,7 +244,13 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
                           Central IdP
                         </span>
                       )}
-                      {hasDrift && (
+                      {isCritical && (
+                        <span className="px-1.5 py-0.2 rounded text-[10px] font-mono font-semibold bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/40 flex items-center gap-1">
+                          <AlertTriangle className="w-2.5 h-2.5 text-rose-500" />
+                          Unhealthy / Must Deploy
+                        </span>
+                      )}
+                      {!isCritical && hasDrift && (
                         <span className="px-1.5 py-0.2 rounded text-[10px] font-mono font-semibold bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30">
                           {undeployedCount} commits behind
                         </span>

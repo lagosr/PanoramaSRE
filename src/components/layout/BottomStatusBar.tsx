@@ -1,5 +1,5 @@
 import React from 'react';
-import { Terminal, ChevronUp, ChevronDown, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
+import { Terminal, ChevronUp, ChevronDown, CheckCircle2, AlertCircle, Loader2, X } from 'lucide-react';
 import { TerminalTab } from './SreTerminalDrawer';
 
 interface BottomStatusBarProps {
@@ -7,6 +7,7 @@ interface BottomStatusBarProps {
     message: string;
     type: 'pending' | 'success' | 'error';
   } | null;
+  onClearFeedback?: () => void;
   tabs: TerminalTab[];
   activeTabId: string;
   isDrawerOpen: boolean;
@@ -15,6 +16,7 @@ interface BottomStatusBarProps {
 
 export const BottomStatusBar: React.FC<BottomStatusBarProps> = ({
   actionFeedback,
+  onClearFeedback,
   tabs,
   isDrawerOpen,
   onToggleDrawer,
@@ -47,6 +49,16 @@ export const BottomStatusBar: React.FC<BottomStatusBarProps> = ({
             >
               {actionFeedback.message}
             </span>
+            {onClearFeedback && (
+              <button
+                type="button"
+                onClick={onClearFeedback}
+                className="p-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors shrink-0"
+                title="Dismiss message"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
           </div>
         ) : (
           <div className="flex items-center space-x-2 text-slate-500 dark:text-slate-400 truncate">

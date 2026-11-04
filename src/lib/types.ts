@@ -358,3 +358,21 @@ export interface SslFleetSummary {
   items: DomainSslDualProbe[];
   probed_at: string;
 }
+
+/**
+ * Authoritative check to determine if an app has unreleased changes, local drift,
+ * or is in an unhealthy / unreachable production state that requires deployment.
+ */
+export function isAppDeployCandidate(app: DiscoveredApp): boolean {
+  const isHealthy = app.health?.status === 'healthy';
+  const isCritical = !isHealthy || app.provenanceState === 'PROD_UNREACHABLE' || app.provenanceState === 'DIRTY_PROD';
+  const hasDrift =
+    (app.composition?.undeployed_commits?.length || 0) > 0 ||
+    (app.composition?.ahead_count || 0) > 0 ||
+    !!app.composition?.local_dirty ||
+    app.provenanceState === 'AHEAD' ||
+    app.provenanceState === 'LOCAL_WIP' ||
+    app.provenanceState === 'DIVERGED';
+
+  return isCritical || hasDrift;
+}

@@ -25,6 +25,7 @@ import {
   WshSnapshot,
   BackupLedgerSummary,
   SslFleetSummary,
+  isAppDeployCandidate,
 } from './lib/types';
 import { buildSslCertCommand, buildCloudflareTunnelCommand } from './lib/script-adapters';
 
@@ -921,6 +922,7 @@ export const App: React.FC = () => {
       setIsDeployingAll(false);
       haltDeploymentsRef.current = false;
       currentRunningDeployJobIdRef.current = null;
+      syncFullTelemetry(false);
     }
   };
 
@@ -934,19 +936,37 @@ export const App: React.FC = () => {
       } catch (err) {
         console.error('Failed to abort running deploy job:', err);
       }
+      finalizeTerminalJob(activeJobId, 130);
+      currentRunningDeployJobIdRef.current = null;
     }
+    // Finalize any running deployment tabs immediately
+    setTerminalTabs((prev) =>
+      prev.map((t) =>
+        t.isRunning && t.id.startsWith('deploy-')
+          ? { ...t, isRunning: false, exitCode: 130, finishedAt: new Date().toISOString() }
+          : t
+      )
+    );
     setIsDeployingAll(false);
     setActionFeedback({
       message: 'Suite deployments successfully halted.',
       type: 'error',
     });
+    syncFullTelemetry(false);
   };
   const handleAbortJob = async (id: string) => {
     try {
       await invoke('abort_process', { jobId: id });
+      appendTerminalLine(id, '\n[PanoramaSRE] Process terminated by user request.\n');
     } catch (err) {
       console.error('Failed to abort process:', err);
     }
+    if (currentRunningDeployJobIdRef.current === id) {
+      currentRunningDeployJobIdRef.current = null;
+      setIsDeployingAll(false);
+    }
+    finalizeTerminalJob(id, 130);
+    syncFullTelemetry(false);
   };
 
   // Helper to append a line to a terminal tab and schedule DB persistence
@@ -1089,17 +1109,8 @@ export const App: React.FC = () => {
       ? backupLedger?.latest_app_details.filter((a) => a.status.toLowerCase() === 'failed').length || 0
       : 0;
 
-  // Count apps behind on releases (undeployed commits, dirty tree, ahead, diverged)
-  const behindReleasesCount = apps.filter(
-    (a) =>
-      (a.composition?.undeployed_commits?.length || 0) > 0 ||
-      (a.composition?.ahead_count || 0) > 0 ||
-      a.composition?.local_dirty ||
-      a.provenanceState === 'AHEAD' ||
-      a.provenanceState === 'LOCAL_WIP' ||
-      a.provenanceState === 'DIRTY_PROD' ||
-      a.provenanceState === 'DIVERGED'
-  ).length;
+  // Count apps requiring release deployment (drifted, ahead, dirty, diverged, or unhealthy/unreachable)
+  const behindReleasesCount = apps.filter(isAppDeployCandidate).length;
 
   // Count packages to be installed on DietPi host (upgradable Debian packages + DietPi OS updates)
   const dietpiPackagesCount = (() => {
@@ -1355,6 +1366,7 @@ export const App: React.FC = () => {
       onPurgeAllTabs={handlePurgeAllTabs}
       onAbortJob={handleAbortJob}
       actionFeedback={actionFeedback}
+      onClearFeedback={() => setActionFeedback(null)}
       eventsHistory={eventsHistory}
       onClearEvents={() => setEventsHistory([])}
       runningJobsCount={terminalTabs.filter((t) => t.isRunning).length}

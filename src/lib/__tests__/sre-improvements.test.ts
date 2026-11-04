@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { isAppDeployCandidate } from '../types';
 import { BLAST_RADIUS_CONFIG } from '../../components/ui/BlastRadiusBadge';
 
 describe('PanoramaSRE Application Improvements & Architecture', () => {
@@ -48,31 +49,31 @@ libc-bin/stable 2.36-9+deb12u9 arm64 [upgradable from: 2.36-9+deb12u8]
     });
 
     it('detects behind releases from composition and provenance states', () => {
-      const sampleApps = [
+      const sampleApps: any[] = [
         {
           provenanceState: 'IN_SYNC',
+          health: { status: 'healthy' },
           composition: { undeployed_commits: [], local_dirty: false, ahead_count: 0 },
         },
         {
           provenanceState: 'AHEAD',
+          health: { status: 'healthy' },
           composition: { undeployed_commits: [{ sha: 'abc1234', subject: 'feat' }], local_dirty: false, ahead_count: 1 },
         },
         {
           provenanceState: 'DIRTY_PROD',
+          health: { status: 'healthy' },
           composition: { undeployed_commits: [], local_dirty: true, ahead_count: 0 },
+        },
+        {
+          provenanceState: 'PROD_UNREACHABLE',
+          health: { status: 'unhealthy' },
+          composition: { undeployed_commits: [], local_dirty: false, ahead_count: 0 },
         },
       ];
 
-      const behindCount = sampleApps.filter(
-        (a) =>
-          (a.composition?.undeployed_commits?.length || 0) > 0 ||
-          (a.composition?.ahead_count || 0) > 0 ||
-          a.composition?.local_dirty ||
-          a.provenanceState === 'AHEAD' ||
-          a.provenanceState === 'DIRTY_PROD'
-      ).length;
-
-      expect(behindCount).toBe(2);
+      const candidates = sampleApps.filter(isAppDeployCandidate);
+      expect(candidates.length).toBe(3);
     });
   });
 

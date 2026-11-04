@@ -52,6 +52,7 @@ interface SreEventsConsolePanelProps {
     message: string;
     type: 'pending' | 'success' | 'error';
   } | null;
+  onClearFeedback?: () => void;
   eventsHistory: SystemEventItem[];
   onClearEvents: () => void;
   runningJobsCount: number;
@@ -139,6 +140,7 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
   onPurgeAllTabs,
   onAbortJob,
   actionFeedback,
+  onClearFeedback,
   eventsHistory,
   onClearEvents,
   runningJobsCount,
@@ -240,6 +242,16 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
                 <AlertCircle className="w-3.5 h-3.5 text-rose-500 dark:text-rose-400 shrink-0" />
               )}
               <span className="truncate text-slate-700 dark:text-slate-300 text-[11px]">{actionFeedback.message}</span>
+              {onClearFeedback && (
+                <button
+                  type="button"
+                  onClick={onClearFeedback}
+                  className="p-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors shrink-0"
+                  title="Dismiss message"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
             </div>
           ) : (
             <span className="text-slate-500 dark:text-slate-400 text-[11px] truncate">Ready • SRE Telemetry Active</span>
@@ -347,6 +359,16 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
               <AlertCircle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
             )}
             <span className="truncate">{actionFeedback.message}</span>
+            {onClearFeedback && (
+              <button
+                type="button"
+                onClick={onClearFeedback}
+                className="p-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors shrink-0 ml-1"
+                title="Dismiss message"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
           </div>
         )}
 

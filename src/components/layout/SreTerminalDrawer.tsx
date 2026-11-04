@@ -38,6 +38,7 @@ interface SreTerminalDrawerProps {
     message: string;
     type: 'pending' | 'success' | 'error';
   } | null;
+  onClearFeedback?: () => void;
 }
 
 export const SreTerminalDrawer: React.FC<SreTerminalDrawerProps> = ({
@@ -51,6 +52,7 @@ export const SreTerminalDrawer: React.FC<SreTerminalDrawerProps> = ({
   onPurgeAllTabs,
   onAbortJob,
   actionFeedback,
+  onClearFeedback,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const [copiedState, setCopiedState] = useState(false);
@@ -101,6 +103,16 @@ export const SreTerminalDrawer: React.FC<SreTerminalDrawerProps> = ({
                 <AlertCircle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
               )}
               <span className="truncate max-w-[200px]">{actionFeedback.message}</span>
+              {onClearFeedback && (
+                <button
+                  type="button"
+                  onClick={onClearFeedback}
+                  className="p-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors shrink-0 ml-1"
+                  title="Dismiss message"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
             </div>
           )}
 

@@ -273,7 +273,7 @@ export function ReleasePipelineView({
             </h3>
           </div>
           <span className="text-xs font-mono text-slate-400">
-            {apps.filter((a) => (a.composition?.undeployed_commits?.length || 0) > 0 || a.composition?.local_dirty).length} of {apps.length} apps have undeployed changes
+            {apps.filter((a) => (a.composition?.undeployed_commits?.length || 0) > 0 || a.composition?.local_dirty || a.health?.status !== 'healthy' || a.provenanceState === 'PROD_UNREACHABLE').length} of {apps.length} apps have undeployed changes or need remediation
           </span>
         </div>
 
