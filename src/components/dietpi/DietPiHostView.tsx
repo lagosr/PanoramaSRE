@@ -1,5 +1,6 @@
 import { WshSnapshot } from '../../lib/types';
 import { RefreshCw, Server, Terminal, ShieldAlert, Cpu } from 'lucide-react';
+import { buildRemoteSshCommand } from '../../lib/script-adapters';
 
 interface DietPiHostViewProps {
   snapshot: WshSnapshot | null;
@@ -76,13 +77,10 @@ export function DietPiHostView({
             </div>
           </div>
           <button
-            onClick={() =>
-              onTriggerAction('Reboot WSH', 'powershell.exe', [
-                '-NoProfile',
-                '-Command',
-                'plink.exe -batch -ssh -i "D:\\Google\\My Drive\\RSA\\rsa-key-deployment.ppk" root@wsh.panoramadr.com "reboot"',
-              ])
-            }
+            onClick={() => {
+              const sshCmd = buildRemoteSshCommand('reboot');
+              onTriggerAction('Reboot WSH', sshCmd.command, sshCmd.args);
+            }}
             className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white whitespace-nowrap"
           >
             Reboot WSH Now
@@ -153,13 +151,12 @@ export function DietPiHostView({
 
           <div className="flex items-center gap-2">
             <button
-              onClick={() =>
-                onTriggerAction('Upgrade APT Packages', 'powershell.exe', [
-                  '-NoProfile',
-                  '-Command',
-                  'plink.exe -batch -ssh -i "D:\\Google\\My Drive\\RSA\\rsa-key-deployment.ppk" root@wsh.panoramadr.com "DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y"',
-                ])
-              }
+              onClick={() => {
+                const sshCmd = buildRemoteSshCommand(
+                  'DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y'
+                );
+                onTriggerAction('Upgrade APT Packages', sshCmd.command, sshCmd.args);
+              }}
               className="px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-600 hover:bg-emerald-500 text-white transition-colors"
             >
               Upgrade All Packages

@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { buildDeployCommand, buildDbManagerCommand, buildSslCertCommand, buildCloudflareTunnelCommand } from '../script-adapters';
+import {
+  buildDeployCommand,
+  buildDbManagerCommand,
+  buildSslCertCommand,
+  buildCloudflareTunnelCommand,
+  buildRemoteSshCommand,
+} from '../script-adapters';
 
 describe('script-adapters CLI builders', () => {
   it('correctly constructs deploy-docker arguments with test and allowDirty flags', () => {
@@ -60,5 +66,20 @@ describe('script-adapters CLI builders', () => {
     expect(forceCmd.args).toContain('-Update');
     expect(forceCmd.args).toContain('-Force');
     expect(forceCmd.lockType).toBe('WshRemoteMutation');
+  });
+
+  it('correctly constructs remote SSH command with OpenSSH batch mode flags', () => {
+    const sshCmd = buildRemoteSshCommand('apt-get update');
+    expect(sshCmd.command).toBe('ssh.exe');
+    expect(sshCmd.args).toEqual([
+      '-o',
+      'BatchMode=yes',
+      '-o',
+      'StrictHostKeyChecking=accept-new',
+      '-i',
+      'C:\\Users\\rodrigo\\.ssh\\rsa-key-deployment',
+      'root@wsh.panoramadr.com',
+      'apt-get update',
+    ]);
   });
 });
