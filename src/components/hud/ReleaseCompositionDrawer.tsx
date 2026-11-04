@@ -1,5 +1,8 @@
+import { useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { DiscoveredApp } from '../../lib/types';
 import { ProvenanceBadge } from '../ui/ProvenanceBadge';
+import { BlastRadiusBadge } from '../ui/BlastRadiusBadge';
 
 interface ReleaseCompositionDrawerProps {
   app: DiscoveredApp | null;
@@ -8,15 +11,32 @@ interface ReleaseCompositionDrawerProps {
 }
 
 export function ReleaseCompositionDrawer({ app, isOpen, onClose }: ReleaseCompositionDrawerProps) {
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen || !app) return null;
 
   const comp = app.composition;
 
-  return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/80 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="w-full max-w-xl h-full bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col">
+  const content = (
+    <div
+      className="fixed inset-0 z-[70] flex justify-end bg-slate-900/80 backdrop-blur-sm animate-in fade-in duration-200"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-xl h-full bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
-        <div className="p-6 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+        <div className="p-6 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 font-bold">
               {app.manifest.displayName.substring(0, 2).toUpperCase()}
@@ -41,6 +61,7 @@ export function ReleaseCompositionDrawer({ app, isOpen, onClose }: ReleaseCompos
           <button
             onClick={onClose}
             className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
+            title="Close inspection (Esc)"
           >
             <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M18 6L6 18M6 6l12 12" />
@@ -81,12 +102,7 @@ export function ReleaseCompositionDrawer({ app, isOpen, onClose }: ReleaseCompos
             {comp && comp.blast_radius_badges.length > 0 ? (
               <div className="flex flex-wrap gap-2">
                 {comp.blast_radius_badges.map((b) => (
-                  <span
-                    key={b}
-                    className="px-2.5 py-1 rounded-md text-xs font-mono font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30"
-                  >
-                    {b}
-                  </span>
+                  <BlastRadiusBadge key={b} badge={b} size="md" />
                 ))}
               </div>
             ) : (
@@ -153,16 +169,21 @@ export function ReleaseCompositionDrawer({ app, isOpen, onClose }: ReleaseCompos
           </div>
         </div>
 
-        {/* Footer */}
-        <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 flex justify-end">
+        {/* Footer with generous above-the-fold clearance and prominent action buttons */}
+        <div className="p-4 sm:p-5 pb-6 sm:pb-8 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 flex items-center justify-between gap-3 shrink-0">
+          <span className="text-[11px] text-slate-500 font-mono hidden sm:inline">
+            Press <kbd className="px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-300 dark:border-slate-700">Esc</kbd> or click outside to dismiss
+          </span>
           <button
             onClick={onClose}
-            className="px-4 py-2 rounded-lg text-xs font-medium bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 transition-colors"
+            className="px-5 py-2.5 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white shadow-md transition-colors ml-auto flex items-center gap-2"
           >
-            Close
+            <span>Close Inspection</span>
           </button>
         </div>
       </div>
     </div>
   );
+
+  return typeof document !== 'undefined' ? createPortal(content, document.body) : content;
 }

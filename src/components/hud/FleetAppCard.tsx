@@ -1,5 +1,6 @@
 import { DiscoveredApp, AppBackupDetail } from '../../lib/types';
 import { ProvenanceBadge } from '../ui/ProvenanceBadge';
+import { BlastRadiusBadge } from '../ui/BlastRadiusBadge';
 import { AlertCircle, HardDriveDownload, XCircle } from 'lucide-react';
 
 interface FleetAppCardProps {
@@ -161,12 +162,7 @@ export function FleetAppCard({ app, backupStatus, onOpenApp, onInspectCompositio
           {app.composition && app.composition.blast_radius_badges.length > 0 && (
             <div className="pt-1.5 flex flex-wrap gap-1 border-t border-slate-200/50 dark:border-slate-800/50">
               {app.composition.blast_radius_badges.map((badge) => (
-                <span
-                  key={badge}
-                  className="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-amber-500/15 text-amber-900 dark:text-amber-300 border border-amber-500/30"
-                >
-                  {badge}
-                </span>
+                <BlastRadiusBadge key={badge} badge={badge} />
               ))}
             </div>
           )}

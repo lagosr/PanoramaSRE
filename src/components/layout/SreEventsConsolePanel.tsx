@@ -279,7 +279,7 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
   return (
     <div
       className={`bg-white dark:bg-[#050b14] border-t border-slate-200 dark:border-slate-800 flex flex-col shadow-2xl transition-all duration-200 select-none ${
-        isExpanded ? 'fixed inset-0 z-50 h-full' : 'shrink-0 h-88 w-full z-30'
+        isExpanded ? 'fixed inset-0 z-[60] h-full' : 'shrink-0 h-88 w-full relative z-50'
       }`}
     >
       {/* Top Main Section Switcher & Window Control Bar */}

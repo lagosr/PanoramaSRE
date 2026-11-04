@@ -20,7 +20,7 @@ export const DockerNetworkInspectorDrawer: React.FC<DockerNetworkInspectorDrawer
   if (!isOpen || (!selectedRoute && !activeHop)) return null;
 
   return (
-    <div className="fixed inset-y-0 right-0 z-50 w-full max-w-xl bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col transition-all duration-300">
+    <div className="fixed inset-y-0 right-0 z-30 w-full max-w-xl bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col transition-all duration-300">
       {/* Drawer Header */}
       <div className="p-5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50 dark:bg-slate-950/50">
         <div className="flex items-center gap-3">

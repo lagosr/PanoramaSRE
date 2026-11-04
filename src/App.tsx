@@ -1089,29 +1089,65 @@ export const App: React.FC = () => {
       ? backupLedger?.latest_app_details.filter((a) => a.status.toLowerCase() === 'failed').length || 0
       : 0;
 
-  return (
-    <div className="flex h-screen w-screen bg-slate-50 dark:bg-[#050b14] text-slate-900 dark:text-slate-100 overflow-hidden font-sans">
-      <SidebarRail
-        activeTab={activeTab}
-        onSelectTab={setActiveTab}
-        unhealthyCount={unhealthyCount}
-        backupFailureCount={backupFailureCount}
-      />
+  // Count apps behind on releases (undeployed commits, dirty tree, ahead, diverged)
+  const behindReleasesCount = apps.filter(
+    (a) =>
+      (a.composition?.undeployed_commits?.length || 0) > 0 ||
+      (a.composition?.ahead_count || 0) > 0 ||
+      a.composition?.local_dirty ||
+      a.provenanceState === 'AHEAD' ||
+      a.provenanceState === 'LOCAL_WIP' ||
+      a.provenanceState === 'DIRTY_PROD' ||
+      a.provenanceState === 'DIVERGED'
+  ).length;
 
-      <main className="flex-1 flex flex-col h-full overflow-hidden relative">
-        <TopLiveSyncBar
-          networkPosture={networkPosture}
-          devRunningCount={devRunningCount}
-          totalAppCount={apps.length}
-          prodHealthyCount={prodHealthyCount}
-          lastSyncTime={lastSyncTime}
-          isSyncing={isManualSyncing}
-          onRefresh={() => syncFullTelemetry(true)}
+  // Count packages to be installed on DietPi host (upgradable Debian packages + DietPi OS updates)
+  const dietpiPackagesCount = (() => {
+    let count = 0;
+    if (wshSnapshot?.apt_upgradable_raw) {
+      count += wshSnapshot.apt_upgradable_raw
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0 && !l.startsWith('Listing...')).length;
+    }
+    if (
+      wshSnapshot?.dietpi_update_available &&
+      wshSnapshot.dietpi_update_available.trim().length > 0 &&
+      wshSnapshot.dietpi_update_available.toLowerCase() !== 'false' &&
+      wshSnapshot.dietpi_update_available.toLowerCase() !== 'none'
+    ) {
+      count += 1;
+    }
+    return count;
+  })();
+
+  return (
+    <div className="flex flex-col h-screen w-screen bg-slate-50 dark:bg-[#050b14] text-slate-900 dark:text-slate-100 overflow-hidden font-sans">
+      {/* Upper Area: Sidebar Navigation + Main Application Content */}
+      <div className="flex flex-1 min-h-0 w-full overflow-hidden relative">
+        <SidebarRail
+          activeTab={activeTab}
+          onSelectTab={setActiveTab}
+          unhealthyCount={unhealthyCount}
           backupFailureCount={backupFailureCount}
-          onNavigateToBackups={() => setActiveTab('backups')}
+          behindReleasesCount={behindReleasesCount}
+          dietpiPackagesCount={dietpiPackagesCount}
         />
 
-        <div className="flex-1 min-h-0 overflow-y-auto">
+        <main className="flex-1 flex flex-col h-full overflow-hidden relative">
+          <TopLiveSyncBar
+            networkPosture={networkPosture}
+            devRunningCount={devRunningCount}
+            totalAppCount={apps.length}
+            prodHealthyCount={prodHealthyCount}
+            lastSyncTime={lastSyncTime}
+            isSyncing={isManualSyncing}
+            onRefresh={() => syncFullTelemetry(true)}
+            backupFailureCount={backupFailureCount}
+            onNavigateToBackups={() => setActiveTab('backups')}
+          />
+
+          <div className="flex-1 min-h-0 overflow-y-auto">
           {activeTab === 'hud' && (
             <CommandCenterView
               apps={apps}
@@ -1304,26 +1340,27 @@ export const App: React.FC = () => {
               </div>
             )}
         </div>
-
-        {/* Global SRE Unified Console & Events Panel (Flush to bottom-0, zero gap) */}
-        <SreEventsConsolePanel
-          isOpen={isDrawerOpen}
-          onClose={() => setIsDrawerOpen(false)}
-          tabs={terminalTabs}
-          activeTabId={activeTerminalTabId}
-          onSelectTab={setActiveTerminalTabId}
-          onCloseTab={handleCloseTab}
-          onClearTab={handleClearTab}
-          onPurgeAllTabs={handlePurgeAllTabs}
-          onAbortJob={handleAbortJob}
-          actionFeedback={actionFeedback}
-          eventsHistory={eventsHistory}
-          onClearEvents={() => setEventsHistory([])}
-          runningJobsCount={terminalTabs.filter((t) => t.isRunning).length}
-          onToggleDrawer={() => setIsDrawerOpen((prev) => !prev)}
-        />
       </main>
     </div>
+
+    {/* Global SRE Unified Console & Events Panel (Spans full application width, docked at bottom, pushing upper UI up) */}
+    <SreEventsConsolePanel
+      isOpen={isDrawerOpen}
+      onClose={() => setIsDrawerOpen(false)}
+      tabs={terminalTabs}
+      activeTabId={activeTerminalTabId}
+      onSelectTab={setActiveTerminalTabId}
+      onCloseTab={handleCloseTab}
+      onClearTab={handleClearTab}
+      onPurgeAllTabs={handlePurgeAllTabs}
+      onAbortJob={handleAbortJob}
+      actionFeedback={actionFeedback}
+      eventsHistory={eventsHistory}
+      onClearEvents={() => setEventsHistory([])}
+      runningJobsCount={terminalTabs.filter((t) => t.isRunning).length}
+      onToggleDrawer={() => setIsDrawerOpen((prev) => !prev)}
+    />
+  </div>
   );
 };
 

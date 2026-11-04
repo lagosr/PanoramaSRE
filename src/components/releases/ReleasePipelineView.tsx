@@ -18,12 +18,16 @@ import {
   Loader2,
   Container,
   Check,
-  Square
+  Square,
+  Eye,
+  XCircle
 } from 'lucide-react';
 import { BatchDeployModal, BatchDeployOptions } from './BatchDeployModal';
 import { CustomSelect } from '../ui/CustomSelect';
 import { formatLocalDateTime, formatRelativeTime } from '../../lib/formatters';
 import { TerminalTab } from '../layout/SreTerminalDrawer';
+import { ReleaseCompositionDrawer } from '../hud/ReleaseCompositionDrawer';
+import { BlastRadiusBadge } from '../ui/BlastRadiusBadge';
 
 interface ReleasePipelineViewProps {
   apps: DiscoveredApp[];
@@ -49,6 +53,7 @@ export function ReleasePipelineView({
   const [allowDirty, setAllowDirty] = useState<boolean>(false);
   const [rollbackTag, setRollbackTag] = useState<string>('');
   const [showDeployAllModal, setShowDeployAllModal] = useState<boolean>(false);
+  const [inspectApp, setInspectApp] = useState<DiscoveredApp | null>(null);
 
   const selectedApp = apps.find((a) => a.manifest.slug === selectedAppSlug) || apps[0];
   const comp = selectedApp?.composition;
@@ -62,26 +67,114 @@ export function ReleasePipelineView({
     );
   };
 
-  // Inspect last lines of active job to determine current stage
+  // Deterministically and monotonically parse deployment progress & exact build steps
   const getDeploymentStage = (tab?: TerminalTab) => {
     if (!tab) return null;
-    const allText = tab.lines.slice(-15).join(' ');
-    if (/transferring context|RUN apk|RUN npm|DONE|deps/i.test(allText)) {
-      return { stage: 2, label: 'Building Docker Image (Buildx)', icon: Container };
+
+    const isFinished = !tab.isRunning && tab.exitCode === 0;
+    const isFailed = !tab.isRunning && tab.exitCode !== undefined && tab.exitCode !== 0;
+
+    let maxStage = 1;
+    let label = 'Preparing Pre-flight & Git State';
+    let subStep = 'Initializing pre-flight environment';
+
+    const lines = tab.lines;
+    const fullText = lines.join('\n');
+
+    // Stage 1: SemVer, Git & Pre-flight
+    if (fullText.includes('TypeScript') || fullText.includes('database backup')) {
+      maxStage = 1;
+      label = 'Pre-flight & TypeScript Validation';
+      subStep = 'Compiling TypeScript (tsc --noEmit)';
     }
-    if (/transferring image|scp|tar/i.test(allText)) {
-      return { stage: 3, label: 'Transferring Image to DietPi (SSH)', icon: Rocket };
+
+    // Stage 2: Multi-stage Docker Buildx build
+    if (/Building and packaging Docker image|docker buildx build|RUN apk|RUN npm|DONE|transferring context|CACHED/i.test(fullText)) {
+      maxStage = 2;
+      label = 'Building Docker Image (Buildx)';
+      const tail = lines.slice(-20).join(' ');
+      if (/npm run build|Creating an optimized production build|Compiled successfully/i.test(tail)) {
+        subStep = 'Next.js App Build (npm run build)';
+      } else if (/npm (?:ci|install)|apk add/i.test(tail)) {
+        subStep = 'Installing Dependencies (npm ci)';
+      } else if (/exporting to image|writing image|saving/i.test(tail)) {
+        subStep = 'Exporting Container Archive to Tar';
+      } else if (/transferring context/i.test(tail)) {
+        subStep = 'Transferring Build Context';
+      } else {
+        subStep = 'Compiling ARM64 Container Layers';
+      }
     }
-    if (/rolling swap|container swap|docker-compose up|pull/i.test(allText)) {
-      return { stage: 4, label: 'Rolling Container Swap', icon: RotateCcw };
+
+    // Stage 3: SSH staging & SCP image transfer
+    if (/Preparing remote environment|Uploading archive and configurations|Files staged on server|Invoke-PscpUpload|pscp|scp\.exe/i.test(fullText)) {
+      maxStage = 3;
+      label = 'Transferring Image to DietPi (SCP)';
+      const tail = lines.slice(-20).join(' ');
+      if (/Uploading archive|tar|pscp|scp/i.test(tail)) {
+        subStep = 'Uploading Docker Tar via SCP to Host';
+      } else if (/lighttpd/i.test(tail)) {
+        subStep = 'Configuring Ingress Proxy (Lighttpd)';
+      } else {
+        subStep = 'Staging Artifacts on DietPi';
+      }
     }
-    if (/sync webhook|POST \/auth\/api\/admin\/apps\/sync/i.test(allText)) {
-      return { stage: 5, label: 'Syncing Manifest with IdP', icon: Layers };
+
+    // Stage 4: Rolling container swap & zero-downtime startup
+    if (/Executing deployment|Deploying container on remote server|docker load|docker compose up|container is live/i.test(fullText)) {
+      maxStage = 4;
+      label = 'Rolling Container Swap';
+      const tail = lines.slice(-20).join(' ');
+      if (/docker load/i.test(tail)) {
+        subStep = 'Loading Tar into Docker Engine';
+      } else if (/docker compose up|Recreate/i.test(tail)) {
+        subStep = 'Starting New Container Instance';
+      } else if (/retention|prune/i.test(tail)) {
+        subStep = 'Pruning Old Tags (N-3 Retention)';
+      } else {
+        subStep = 'Executing Rolling Container Swap';
+      }
     }
-    if (/health check|verifying health|probing/i.test(allText)) {
-      return { stage: 6, label: 'Validating Health Probes', icon: Activity };
+
+    // Stage 5: Post-deployment health verification & probes
+    if (/POST-DEPLOYMENT VERIFICATION|Checking Health Endpoint|Checking GEMINI_API_KEY|Checking Auth|Checking Write Permissions|Updated local git tag/i.test(fullText)) {
+      maxStage = 5;
+      label = 'Validating Health Probes';
+      const tail = lines.slice(-20).join(' ');
+      if (/Checking Health Endpoint|curl.*\/api\/health/i.test(tail)) {
+        subStep = 'Probing /api/health Endpoint';
+      } else if (/Checking Auth|Checking GEMINI|Write Permissions/i.test(tail)) {
+        subStep = 'Verifying Runtime Configuration';
+      } else if (/deployed\/prod/i.test(tail)) {
+        subStep = 'Updating Local Git Provenance Tag';
+      } else {
+        subStep = 'Executing Post-Deploy Checks';
+      }
     }
-    return { stage: 1, label: 'Preparing Build Context', icon: Loader2 };
+
+    // Stage 6: Manifest sync with PanoramaAuth IdP
+    if (/Notifying PanoramaAuth to sync|Manifest synchronization triggered|Verify at: https/i.test(fullText) || isFinished) {
+      maxStage = 6;
+      label = 'Syncing Manifest with IdP';
+      subStep = isFinished ? 'All 6 Release Stages Completed' : 'Triggering Manifest Webhook';
+    }
+
+    const icon =
+      maxStage === 1 ? Loader2 :
+      maxStage === 2 ? Container :
+      maxStage === 3 ? Rocket :
+      maxStage === 4 ? RotateCcw :
+      maxStage === 5 ? Activity :
+      Layers;
+
+    return {
+      stage: maxStage,
+      label,
+      subStep,
+      icon,
+      isFinished,
+      isFailed,
+    };
   };
 
   const activeSelectedDeployJob = selectedApp ? getAppDeployJob(selectedApp.manifest.slug) : undefined;
@@ -189,7 +282,13 @@ export function ReleasePipelineView({
             const appComp = app.composition;
             const undeployedCount = appComp?.undeployed_commits?.length || 0;
             const isLocalDirty = !!appComp?.local_dirty;
-            const needsDeploy = undeployedCount > 0 || isLocalDirty || appComp?.state === 'AHEAD' || appComp?.state === 'LOCAL_WIP';
+            const needsDeploy =
+              undeployedCount > 0 ||
+              isLocalDirty ||
+              appComp?.state === 'AHEAD' ||
+              appComp?.state === 'LOCAL_WIP' ||
+              app.provenanceState === 'DIRTY_PROD' ||
+              app.provenanceState === 'DIVERGED';
             const isDeploying = !!getAppDeployJob(app.manifest.slug);
             const isSelected = selectedApp?.manifest.slug === app.manifest.slug;
             const isHealthy = app.health?.status === 'healthy';
@@ -205,8 +304,12 @@ export function ReleasePipelineView({
                 className={`p-3.5 rounded-lg border cursor-pointer transition-all flex flex-col justify-between space-y-2.5 ${
                   isCritical
                     ? isSelected
-                      ? 'bg-rose-50 dark:bg-rose-950/40 border-rose-500 shadow-[0_0_16px_rgba(244,63,94,0.3)] ring-1 ring-rose-500'
+                      ? 'bg-rose-50 dark:bg-rose-950/40 border-rose-500 shadow-[0_0_18px_rgba(244,63,94,0.35)] ring-2 ring-rose-500'
                       : 'bg-rose-50/50 dark:bg-rose-950/20 hover:bg-rose-100 dark:hover:bg-rose-950/30 border-rose-500/60 shadow-[0_0_10px_rgba(244,63,94,0.15)]'
+                    : needsDeploy
+                    ? isSelected
+                      ? 'bg-rose-500/10 dark:bg-rose-950/30 border-rose-500 shadow-[0_0_20px_rgba(244,63,94,0.4)] ring-2 ring-rose-500/80'
+                      : 'bg-rose-500/[0.04] dark:bg-rose-950/20 hover:bg-rose-500/[0.08] dark:hover:bg-rose-950/30 border-rose-500/70 shadow-[0_0_14px_rgba(244,63,94,0.25)]'
                     : isSelected
                     ? 'bg-slate-50 dark:bg-slate-950 border-emerald-500/50 shadow-md ring-1 ring-emerald-500/40'
                     : 'bg-white dark:bg-slate-950/60 hover:bg-slate-50 dark:hover:bg-slate-950 border-slate-200 dark:border-slate-800/90'
@@ -235,8 +338,9 @@ export function ReleasePipelineView({
                       DEPLOYING
                     </span>
                   ) : needsDeploy ? (
-                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 shrink-0">
-                      BEHIND ({undeployedCount})
+                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/50 shadow-[0_0_8px_rgba(244,63,94,0.25)] flex items-center gap-1 shrink-0 animate-pulse">
+                      <AlertTriangle className="w-2.5 h-2.5 text-rose-500 dark:text-rose-400" />
+                      BEHIND ({undeployedCount}{isLocalDirty ? '+' : ''})
                     </span>
                   ) : (
                     <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20 shrink-0">
@@ -245,12 +349,26 @@ export function ReleasePipelineView({
                   )}
                 </div>
 
-                {/* Drift Details */}
+                {/* Drift Details & Inspect Diff Trigger */}
                 <div className="text-[11px] font-mono flex items-center justify-between text-slate-500 dark:text-slate-400 border-t border-slate-100 dark:border-slate-900 pt-2">
-                  <span>Pending Commits:</span>
-                  <span className={`font-bold ${undeployedCount > 0 ? 'text-amber-400' : 'text-slate-500'}`}>
-                    {undeployedCount} {isLocalDirty ? '(+ uncommitted)' : ''}
-                  </span>
+                  <div className="flex items-center gap-1.5 truncate">
+                    <span>Pending:</span>
+                    <span className={`font-bold ${undeployedCount > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-500'}`}>
+                      {undeployedCount} {isLocalDirty ? '(+ uncommitted)' : ''}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setInspectApp(app);
+                    }}
+                    className="px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700/60 transition-colors flex items-center gap-1 shrink-0"
+                    title={`Inspect git diff & provenance for ${app.manifest.displayName}`}
+                  >
+                    <Eye className="w-3 h-3 text-emerald-500 dark:text-emerald-400" />
+                    <span>Inspect Diff</span>
+                  </button>
                 </div>
               </div>
             );
@@ -263,7 +381,7 @@ export function ReleasePipelineView({
           {/* Active Live Deployment Progress Banner (when deployment is executing) */}
           {activeSelectedDeployJob && (
             <div className="p-4 rounded-xl border border-amber-500/40 bg-gradient-to-r from-amber-500/10 via-slate-900 to-slate-900 shadow-lg space-y-3">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
                   <div className="w-8 h-8 rounded-lg bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400">
                     <Loader2 className="w-4 h-4 animate-spin" />
@@ -275,9 +393,16 @@ export function ReleasePipelineView({
                         ({selectedApp.manifest.displayName})
                       </span>
                     </h4>
-                    <p className="text-xs text-slate-300 mt-0.5">
-                      Current Stage: <span className="font-semibold text-emerald-400">{currentStageInfo?.label || 'Executing Pipeline'}</span>
-                    </p>
+                    <div className="flex flex-wrap items-center gap-2 mt-0.5">
+                      <p className="text-xs text-slate-300">
+                        Stage: <span className="font-semibold text-emerald-400">{currentStageInfo?.label || 'Executing Pipeline'}</span>
+                      </p>
+                      {currentStageInfo?.subStep && (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-950/80 text-amber-300 border border-amber-500/30">
+                          {currentStageInfo.subStep}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
 
@@ -290,33 +415,53 @@ export function ReleasePipelineView({
               {/* 6-Stage Visual Stepper */}
               <div className="grid grid-cols-2 md:grid-cols-6 gap-2 pt-2 border-t border-slate-800/80 text-xs font-mono">
                 {[
-                  { num: 1, name: 'SemVer & Git', done: (currentStageInfo?.stage || 1) > 1, active: (currentStageInfo?.stage || 1) === 1 },
-                  { num: 2, name: 'Buildx Image', done: (currentStageInfo?.stage || 1) > 2, active: (currentStageInfo?.stage || 1) === 2 },
-                  { num: 3, name: 'SSH & SCP', done: (currentStageInfo?.stage || 1) > 3, active: (currentStageInfo?.stage || 1) === 3 },
-                  { num: 4, name: 'Rolling Swap', done: (currentStageInfo?.stage || 1) > 4, active: (currentStageInfo?.stage || 1) === 4 },
-                  { num: 5, name: 'Manifest Sync', done: (currentStageInfo?.stage || 1) > 5, active: (currentStageInfo?.stage || 1) === 5 },
-                  { num: 6, name: 'Health Probe', done: false, active: (currentStageInfo?.stage || 1) === 6 },
-                ].map((st) => (
-                  <div
-                    key={st.num}
-                    className={`p-2 rounded border flex items-center gap-2 ${
-                      st.active
-                        ? 'bg-amber-500/10 border-amber-500/40 text-amber-300'
-                        : st.done
-                        ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
-                        : 'bg-slate-950/40 border-slate-800 text-slate-500'
-                    }`}
-                  >
-                    {st.active ? (
-                      <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400 shrink-0" />
-                    ) : st.done ? (
-                      <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                    ) : (
-                      <span className="w-3.5 h-3.5 rounded-full border border-slate-700 flex items-center justify-center text-[10px] shrink-0">{st.num}</span>
-                    )}
-                    <span className="truncate">{st.name}</span>
-                  </div>
-                ))}
+                  { num: 1, name: 'SemVer & Git', key: 'semver' },
+                  { num: 2, name: 'Docker Buildx', key: 'build' },
+                  { num: 3, name: 'SSH & SCP', key: 'scp' },
+                  { num: 4, name: 'Rolling Swap', key: 'swap' },
+                  { num: 5, name: 'Health Probe', key: 'health' },
+                  { num: 6, name: 'Manifest Sync', key: 'sync' },
+                ].map((st) => {
+                  const currentStageNum = currentStageInfo?.stage || 1;
+                  const isDone = currentStageInfo?.isFinished || currentStageNum > st.num;
+                  const isActive = !currentStageInfo?.isFinished && currentStageNum === st.num;
+                  const isFailed = currentStageInfo?.isFailed && currentStageNum === st.num;
+
+                  return (
+                    <div
+                      key={st.num}
+                      className={`p-2 rounded border flex flex-col gap-1 transition-all ${
+                        isFailed
+                          ? 'bg-rose-500/10 border-rose-500/50 text-rose-300'
+                          : isActive
+                          ? 'bg-amber-500/15 border-amber-500/50 text-amber-300 shadow-[0_0_10px_rgba(245,158,11,0.2)]'
+                          : isDone
+                          ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                          : 'bg-slate-950/40 border-slate-800 text-slate-500'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5">
+                        {isFailed ? (
+                          <XCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                        ) : isActive ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400 shrink-0" />
+                        ) : isDone ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                        ) : (
+                          <span className="w-3.5 h-3.5 rounded-full border border-slate-700 flex items-center justify-center text-[10px] shrink-0">
+                            {st.num}
+                          </span>
+                        )}
+                        <span className="truncate font-semibold">{st.name}</span>
+                      </div>
+                      {isActive && currentStageInfo?.subStep && (
+                        <span className="text-[10px] text-amber-400/90 truncate font-mono">
+                          {currentStageInfo.subStep}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -431,9 +576,20 @@ export function ReleasePipelineView({
                   </p>
                 </div>
 
-                <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-mono">
-                  {comp?.state || 'IN_SYNC'}
-                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setInspectApp(selectedApp)}
+                    className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 flex items-center gap-1.5 transition-colors shadow-xs"
+                    title={`Inspect full git diff and file list for ${selectedApp.manifest.displayName}`}
+                  >
+                    <Eye className="w-3.5 h-3.5 text-emerald-500 dark:text-emerald-400" />
+                    <span>Inspect Diff</span>
+                  </button>
+                  <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-mono">
+                    {comp?.state || 'IN_SYNC'}
+                  </span>
+                </div>
               </div>
 
               {/* Blast-Radius Badges */}
@@ -441,12 +597,7 @@ export function ReleasePipelineView({
                 <span className="text-xs font-medium text-slate-500">Blast Radius:</span>
                 {comp?.blast_radius_badges && comp.blast_radius_badges.length > 0 ? (
                   comp.blast_radius_badges.map((b, idx) => (
-                    <span
-                      key={idx}
-                      className="px-2 py-0.5 rounded text-[11px] font-mono font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/30"
-                    >
-                      {b}
-                    </span>
+                    <BlastRadiusBadge key={idx} badge={b} size="sm" />
                   ))
                 ) : (
                   <span className="text-xs text-slate-400 font-mono">No sensitive boundaries detected</span>
@@ -648,6 +799,13 @@ export function ReleasePipelineView({
           onTriggerDeployAll(options.selectedApps, options.bumpVersion, options.allowDirty);
         }}
         onCancel={() => setShowDeployAllModal(false)}
+      />
+
+      {/* Release Composition & Diff Inspector Drawer */}
+      <ReleaseCompositionDrawer
+        app={inspectApp}
+        isOpen={!!inspectApp}
+        onClose={() => setInspectApp(null)}
       />
     </div>
   );
