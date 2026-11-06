@@ -65,7 +65,7 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
           <div className="hidden md:block">
             <h1 className="text-sm font-bold tracking-tight text-slate-900 dark:text-slate-100">PanoramaSRE</h1>
             <p className="text-[10px] text-slate-500 dark:text-slate-400 font-mono">
-              Control Plane v1.0.0 {APP_VERSION_INFO.buildDate ? `(${APP_VERSION_INFO.buildDate})` : ''}
+              Control Plane v{APP_VERSION_INFO.version} {APP_VERSION_INFO.buildDate ? `(${APP_VERSION_INFO.buildDate})` : ''}
             </p>
           </div>
         </div>

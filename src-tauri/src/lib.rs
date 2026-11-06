@@ -101,6 +101,7 @@ pub fn run() {
             list_active_jobs,
             compute_app_composition,
             detect_network_posture,
+            probe_host_tcp,
             probe_app_health,
             probe_appliances,
             get_dev_servers_status,

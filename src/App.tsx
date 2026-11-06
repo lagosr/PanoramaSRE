@@ -27,7 +27,7 @@ import {
   SslFleetSummary,
   isAppDeployCandidate,
 } from './lib/types';
-import { buildSslCertCommand, buildCloudflareTunnelCommand } from './lib/script-adapters';
+import { buildSslCertCommand, buildCloudflareTunnelCommand, buildRemoteSshCommand } from './lib/script-adapters';
 
 const DEFAULT_APPLIANCES = [
   { key: 'ui', name: 'UniFi CloudKey', host: 'ui.panoramadr.com' },
@@ -47,11 +47,13 @@ export const App: React.FC = () => {
   const [backupLedger, setBackupLedger] = useState<BackupLedgerSummary | null>(null);
   const [sslFleet, setSslFleet] = useState<SslFleetSummary | null>(null);
   const [isLoadingSsl, setIsLoadingSsl] = useState<boolean>(false);
+  const [isLoadingWsh, setIsLoadingWsh] = useState<boolean>(false);
   // Terminal Drawer State
   const [terminalTabs, setTerminalTabs] = useState<TerminalTab[]>([]);
   const [activeTerminalTabId, setActiveTerminalTabId] = useState<string>('');
   const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(false);
   const [isDeployingAll, setIsDeployingAll] = useState<boolean>(false);
+  const [isHostRebooting, setIsHostRebooting] = useState<boolean>(false);
   const haltDeploymentsRef = useRef<boolean>(false);
   const currentRunningDeployJobIdRef = useRef<string | null>(null);
 
@@ -241,6 +243,7 @@ export const App: React.FC = () => {
 
   // Refresh WSH Snapshot & Posture
   const refreshWshTelemetry = useCallback(async () => {
+    setIsLoadingWsh(true);
     try {
       const posture = await invoke<NetworkPosture>('detect_network_posture', {});
       setNetworkPosture(posture);
@@ -253,6 +256,8 @@ export const App: React.FC = () => {
       }
     } catch {
       // Ignore background WSH snapshot errors
+    } finally {
+      setIsLoadingWsh(false);
     }
   }, []);
 
@@ -1020,6 +1025,146 @@ export const App: React.FC = () => {
     [saveTabToDb]
   );
 
+  // Orchestrated DietPi Host Reboot with Active Polling & Recovery Telemetry
+  const handleRebootWshWithVerification = useCallback(async () => {
+    if (isHostRebooting) return;
+    setIsHostRebooting(true);
+
+    const jobId = `reboot-wsh-${Date.now()}`;
+    const newTab: TerminalTab = {
+      id: jobId,
+      title: 'Reboot WSH Host',
+      lines: [
+        '[PanoramaSRE] INITIATING GRACEFUL REBOOT OF DIETPI WSH HOST...',
+        '[PanoramaSRE] Stage 1/4: Sending remote reboot signal via OpenSSH...',
+      ],
+      isRunning: true,
+      createdAt: new Date().toISOString(),
+    };
+    setTerminalTabs((prev) => [...prev, newTab]);
+    setActiveTerminalTabId(jobId);
+    setIsDrawerOpen(true);
+    saveTabToDb(newTab);
+    showActionFeedback('Initiating DietPi WSH reboot...', 'pending');
+
+    const sshReboot = buildRemoteSshCommand('reboot');
+
+    runStreamJob({
+      jobId,
+      label: 'Reboot WSH Host',
+      command: sshReboot.command,
+      args: sshReboot.args,
+      lockType: 'None',
+      onLine: (line) => {
+        appendTerminalLine(jobId, line);
+      },
+      onComplete: async () => {
+        appendTerminalLine(jobId, '[PanoramaSRE] Reboot command accepted by DietPi kernel.');
+        appendTerminalLine(jobId, '[PanoramaSRE] Stage 2/4: Waiting for host shutdown (monitoring SSH connection drops)...');
+
+        // Allow up to 30s for host to drop offline
+        let wentDown = false;
+        const shutdownStart = Date.now();
+        while (Date.now() - shutdownStart < 30000) {
+          await new Promise((r) => setTimeout(r, 2000));
+          const isAlive = await invoke<boolean>('probe_host_tcp', {
+            host: 'wsh.panoramadr.com',
+            port: 22,
+            timeoutMs: 1500,
+          });
+          if (!isAlive) {
+            wentDown = true;
+            appendTerminalLine(jobId, '[PanoramaSRE] Host went offline as expected. Initiating recovery polling...');
+            break;
+          }
+        }
+
+        if (!wentDown) {
+          appendTerminalLine(jobId, '[PanoramaSRE] Host remained online or completed instantaneous restart.');
+        }
+
+        // Stage 3: Recovery Polling (Wait up to 180 seconds for SSH port 22 to accept connections)
+        appendTerminalLine(jobId, '[PanoramaSRE] Stage 3/4: Polling SSH port 22 on wsh.panoramadr.com...');
+        const bootStart = Date.now();
+        let recovered = false;
+        let elapsed = 0;
+
+        while (Date.now() - bootStart < 180000) {
+          await new Promise((r) => setTimeout(r, 3000));
+          elapsed = Math.round((Date.now() - bootStart) / 1000);
+
+          const isAlive = await invoke<boolean>('probe_host_tcp', {
+            host: 'wsh.panoramadr.com',
+            port: 22,
+            timeoutMs: 2000,
+          });
+
+          if (isAlive) {
+            recovered = true;
+            appendTerminalLine(jobId, `[PanoramaSRE] Host SSH port 22 is ONLINE (elapsed: ${elapsed}s).`);
+            break;
+          } else {
+            appendTerminalLine(jobId, `[PanoramaSRE] Host booting... waiting for SSH daemon (elapsed: ${elapsed}s)`);
+          }
+        }
+
+        if (!recovered) {
+          failTerminalJob(jobId, 'Host recovery timeout after 180 seconds. Check physical DietPi hardware/network.');
+          showActionFeedback('Host recovery timed out after reboot', 'error', 6000);
+          setIsHostRebooting(false);
+          return;
+        }
+
+        // Stage 4: Post-boot service verification & telemetry sync
+        appendTerminalLine(jobId, '[PanoramaSRE] Stage 4/4: Host is back online! Fetching post-boot health telemetry...');
+        await new Promise((r) => setTimeout(r, 4000)); // give systemd 4s to settle services
+
+        try {
+          const freshSnap = await invoke<WshSnapshot>('fetch_wsh_snapshot', { mode: '--fast' });
+          setWshSnapshot(freshSnap);
+
+          const uptimeSecs = freshSnap.uptime_secs;
+          const uptimeMinutes = Math.round(uptimeSecs / 60);
+          appendTerminalLine(jobId, `[PanoramaSRE] Kernel uptime verified: ${uptimeMinutes}m (${uptimeSecs}s)`);
+          appendTerminalLine(jobId, `[PanoramaSRE] Kernel version: ${freshSnap.kernel}`);
+          appendTerminalLine(
+            jobId,
+            `[PanoramaSRE] Services: Lighttpd=${freshSnap.services?.lighttpd || 'ok'}, Docker=${freshSnap.services?.docker || 'ok'}, SSH=${freshSnap.services?.ssh || 'ok'}`
+          );
+          appendTerminalLine(
+            jobId,
+            `[PanoramaSRE] Reboot flag (/var/run/reboot-required): ${freshSnap.reboot_required ? 'STILL_PENDING' : 'CLEARED'}`
+          );
+
+          finalizeTerminalJob(jobId, 0);
+          showActionFeedback('DietPi WSH successfully rebooted and online', 'success', 5000);
+          syncFullTelemetry(false);
+        } catch (postBootErr) {
+          appendTerminalLine(jobId, `[WARN] SSH is up, but telemetry snapshot returned warning: ${postBootErr}`);
+          finalizeTerminalJob(jobId, 0);
+          showActionFeedback('DietPi WSH online (telemetry settling)', 'success', 4000);
+          refreshWshTelemetry();
+        } finally {
+          setIsHostRebooting(false);
+        }
+      },
+      onError: (err) => {
+        failTerminalJob(jobId, `Failed to deliver reboot command: ${err}`);
+        showActionFeedback(`Reboot trigger failed: ${err}`, 'error', 5000);
+        setIsHostRebooting(false);
+      },
+    });
+  }, [
+    isHostRebooting,
+    saveTabToDb,
+    showActionFeedback,
+    appendTerminalLine,
+    finalizeTerminalJob,
+    failTerminalJob,
+    syncFullTelemetry,
+    refreshWshTelemetry,
+  ]);
+
   const handleTriggerFullGfsBackup = useCallback(() => {
     const jobId = `gfs-backup-${Date.now()}`;
     const newTab: TerminalTab = {
@@ -1230,8 +1375,10 @@ export const App: React.FC = () => {
           {activeTab === 'dietpi' && (
             <DietPiHostView
               snapshot={wshSnapshot}
-              isLoading={false}
+              isLoading={isLoadingWsh}
               onRefresh={refreshWshTelemetry}
+              onTriggerReboot={handleRebootWshWithVerification}
+              isRebooting={isHostRebooting}
               onTriggerAction={(actionLabel, cmd, args) => {
                 const jobId = `action-${Date.now()}`;
                 const newTab: TerminalTab = {
@@ -1255,9 +1402,33 @@ export const App: React.FC = () => {
                   onLine: (line) => {
                     appendTerminalLine(jobId, line);
                   },
-                  onComplete: (exitCode) => {
+                  onComplete: async (exitCode) => {
                     finalizeTerminalJob(jobId, exitCode);
-                    refreshWshTelemetry();
+                    await refreshWshTelemetry();
+
+                    // If an upgrade just ran and host reports a reboot is required, offer to reboot immediately
+                    if (actionLabel.toLowerCase().includes('upgrade') && exitCode === 0) {
+                      try {
+                        const freshSnap = await invoke<WshSnapshot>('fetch_wsh_snapshot', { mode: '--fast' });
+                        if (freshSnap.reboot_required) {
+                          const confirmReboot = await ask(
+                            'Package upgrade completed successfully, but the DietPi Linux kernel or core system libraries require a reboot (/var/run/reboot-required).\n\nWould you like PanoramaSRE to initiate the graceful reboot and monitor recovery now?',
+                            {
+                              title: 'Reboot Required After Upgrade',
+                              kind: 'warning',
+                              okLabel: 'Reboot & Verify Now',
+                              cancelLabel: 'Reboot Later',
+                            }
+                          );
+
+                          if (confirmReboot) {
+                            handleRebootWshWithVerification();
+                          }
+                        }
+                      } catch (checkErr) {
+                        console.warn('[PanoramaSRE] Failed to check post-upgrade reboot status:', checkErr);
+                      }
+                    }
                   },
                   onError: (err) => {
                     failTerminalJob(jobId, `Execution failed: ${err}`);

@@ -11,7 +11,18 @@ KERNEL_VAL=$(uname -r 2>/dev/null || echo "unknown")
 UPTIME_SECS=$(awk '{print $1}' /proc/uptime 2>/dev/null || echo "0")
 DIETPI_VER=$( [ -f /boot/dietpi/.version ] && awk -F= '/G_DIETPI_VERSION_CORE/{c=$2} /G_DIETPI_VERSION_SUB/{s=$2} /G_DIETPI_VERSION_RC/{r=$2} END{printf "%s.%s.%s", c, s, r}' /boot/dietpi/.version || echo "unknown" )
 DIETPI_AVAIL=$( [ -f /run/dietpi/.update_available ] && cat /run/dietpi/.update_available | tr -d '\n\r' || echo "" )
-REBOOT_REQ=$( [ -f /var/run/reboot-required ] && echo "true" || echo "false" )
+
+# Reboot required: check standard reboot-required flag OR check if installed Linux kernel differs from running kernel
+REBOOT_REQ="false"
+if [ -f /var/run/reboot-required ] || [ -f /run/reboot-required ]; then
+  REBOOT_REQ="true"
+else
+  LATEST_INST_KERNEL=$(dpkg -l 2>/dev/null | grep -E '^ii  linux-image-[0-9]' | awk '{print $2}' | sed 's/linux-image-//' | sort -V | tail -n 1)
+  if [ -n "$LATEST_INST_KERNEL" ] && [ -n "$KERNEL_VAL" ] && [ "$LATEST_INST_KERNEL" != "$KERNEL_VAL" ]; then
+    REBOOT_REQ="true"
+  fi
+fi
+
 THROTTLED=$( command -v vcgencmd >/dev/null 2>&1 && vcgencmd get_throttled 2>/dev/null | cut -d= -f2 | tr -d '\n\r' || echo "0x0" )
 SVC_LIGHTTPD=$(systemctl is-active lighttpd 2>/dev/null || echo "unknown")
 SVC_DOCKER=$(systemctl is-active docker 2>/dev/null || echo "unknown")

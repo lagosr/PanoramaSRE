@@ -18,7 +18,15 @@ try {
 }
 
 const buildIdentifier = commitDate ? `Build ${commitDate}` : `Build ${new Date().toISOString().slice(0, 10).replace(/-/g, '')}`;
-const fullTitle = `PanoramaSRE Control Plane v1.0.0 (${buildIdentifier})`;
+
+let pkgVersion = '1.1.0';
+try {
+  const pkgContent = readFileSync(path.resolve(__dirname, '../package.json'), 'utf-8');
+  const pkg = JSON.parse(pkgContent);
+  if (pkg.version) pkgVersion = pkg.version;
+} catch (e) {}
+
+const fullTitle = `PanoramaSRE Control Plane v${pkgVersion} (${buildIdentifier})`;
 
 const tauriConfPath = path.resolve(__dirname, '../src-tauri/tauri.conf.json');
 try {

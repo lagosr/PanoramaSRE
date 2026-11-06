@@ -116,6 +116,36 @@ pub async fn detect_network_posture(target_host: Option<String>) -> NetworkPostu
     .unwrap_or(NetworkPosture::Offline)
 }
 
+/// Probes whether a specific host and port (defaulting to wsh.panoramadr.com:22) is actively accepting TCP connections.
+/// Used for reboot lifecycle monitoring and host recovery detection.
+#[tauri::command]
+pub async fn probe_host_tcp(
+    host: Option<String>,
+    port: Option<u16>,
+    timeout_ms: Option<u64>,
+) -> bool {
+    let target_host = host.unwrap_or_else(|| "wsh.panoramadr.com".to_string());
+    let target_port = port.unwrap_or(22);
+    let ms = timeout_ms.unwrap_or(1500);
+
+    tokio::task::spawn_blocking(move || {
+        let addr_str = format!("{}:{}", target_host, target_port);
+        match addr_str.to_socket_addrs() {
+            Ok(addrs) => {
+                for addr in addrs {
+                    if std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(ms)).is_ok() {
+                        return true;
+                    }
+                }
+                false
+            }
+            Err(_) => false,
+        }
+    })
+    .await
+    .unwrap_or(false)
+}
+
 /// Probes an app's /api/health endpoint asynchronously with latency tracking
 #[tauri::command]
 pub async fn probe_app_health(

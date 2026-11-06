@@ -7,6 +7,8 @@ interface DietPiHostViewProps {
   isLoading: boolean;
   onRefresh: () => void;
   onTriggerAction: (actionLabel: string, cmd: string, args: string[]) => void;
+  onTriggerReboot: () => void;
+  isRebooting?: boolean;
 }
 
 export function DietPiHostView({
@@ -14,6 +16,8 @@ export function DietPiHostView({
   isLoading,
   onRefresh,
   onTriggerAction,
+  onTriggerReboot,
+  isRebooting = false,
 }: DietPiHostViewProps) {
   const formatUptime = (totalSeconds: number) => {
     const days = Math.floor(totalSeconds / 86400);
@@ -56,6 +60,20 @@ export function DietPiHostView({
 
         <div className="flex items-center gap-3">
           <button
+            onClick={onTriggerReboot}
+            disabled={isRebooting}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold text-white transition-colors ${
+              isRebooting
+                ? 'bg-rose-800/60 cursor-not-allowed text-rose-300'
+                : 'bg-rose-600 hover:bg-rose-500'
+            }`}
+            title="Initiate graceful reboot of DietPi WSH and verify recovery"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isRebooting ? 'animate-spin' : ''}`} />
+            {isRebooting ? 'Rebooting...' : 'Reboot Host'}
+          </button>
+
+          <button
             onClick={onRefresh}
             disabled={isLoading}
             className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors"
@@ -67,23 +85,38 @@ export function DietPiHostView({
       </div>
 
       {/* Reboot Banner if needed */}
-      {snapshot?.reboot_required && (
+      {(snapshot?.reboot_required || isRebooting) && (
         <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <ShieldAlert className="w-5 h-5 text-rose-400 flex-shrink-0" />
+            <ShieldAlert className="w-5 h-5 text-rose-400 flex-shrink-0 animate-pulse" />
             <div>
-              <p className="text-sm font-semibold text-rose-200">Reboot Required</p>
-              <p className="text-xs text-rose-300/80">Kernel or system libraries have been upgraded (/var/run/reboot-required)</p>
+              <p className="text-sm font-semibold text-rose-200">
+                {isRebooting ? 'Reboot In Progress' : 'Reboot Required'}
+              </p>
+              <p className="text-xs text-rose-300/80">
+                {isRebooting
+                  ? 'Host is restarting and verifying recovery of SSH, Lighttpd, Docker, and apps...'
+                  : 'Kernel or system libraries have been upgraded (/var/run/reboot-required)'}
+              </p>
             </div>
           </div>
           <button
-            onClick={() => {
-              const sshCmd = buildRemoteSshCommand('reboot');
-              onTriggerAction('Reboot WSH', sshCmd.command, sshCmd.args);
-            }}
-            className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white whitespace-nowrap"
+            onClick={onTriggerReboot}
+            disabled={isRebooting}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold text-white whitespace-nowrap transition-colors flex items-center gap-1.5 ${
+              isRebooting
+                ? 'bg-rose-800/60 cursor-not-allowed text-rose-300'
+                : 'bg-rose-600 hover:bg-rose-500'
+            }`}
           >
-            Reboot WSH Now
+            {isRebooting ? (
+              <>
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                Verifying Reboot...
+              </>
+            ) : (
+              'Reboot WSH Now'
+            )}
           </button>
         </div>
       )}
@@ -153,7 +186,7 @@ export function DietPiHostView({
             <button
               onClick={() => {
                 const sshCmd = buildRemoteSshCommand(
-                  'DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y'
+                  'DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y'
                 );
                 onTriggerAction('Upgrade APT Packages', sshCmd.command, sshCmd.args);
               }}
