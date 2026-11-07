@@ -1047,7 +1047,9 @@ export const App: React.FC = () => {
     saveTabToDb(newTab);
     showActionFeedback('Initiating DietPi WSH reboot...', 'pending');
 
-    const sshReboot = buildRemoteSshCommand('reboot');
+    // Send reboot in background with nohup and immediate exit so SSH closes cleanly with exit code 0
+    // before systemd terminates network interfaces and kills active TCP sockets.
+    const sshReboot = buildRemoteSshCommand('nohup reboot >/dev/null 2>&1 & exit 0');
 
     runStreamJob({
       jobId,
