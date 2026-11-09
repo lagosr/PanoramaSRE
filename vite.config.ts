@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import path from 'path';
 import { execSync } from 'child_process';
+import { readFileSync } from 'fs';
 
 let commitHash = 'unknown';
 let commitDate = '';
@@ -16,6 +17,14 @@ try {
   commitDate = new Date().toISOString().slice(0, 10).replace(/-/g, '');
 }
 
+let pkgVersion = '1.2.0';
+try {
+  const pkg = JSON.parse(readFileSync(path.resolve(__dirname, './package.json'), 'utf-8'));
+  if (pkg.version) pkgVersion = pkg.version;
+} catch (e) {
+  // Fallback
+}
+
 const buildStamp = `${commitHash}${commitDate ? ` (${commitDate})` : ''}`;
 const buildNumber = `${commitDate || new Date().toISOString().slice(0, 10).replace(/-/g, '')}.${commitHash}`;
 
@@ -26,7 +35,7 @@ export default defineConfig({
     tailwindcss()
   ],
   define: {
-    __APP_VERSION__: JSON.stringify('1.0.0'),
+    __APP_VERSION__: JSON.stringify(pkgVersion),
     __BUILD_HASH__: JSON.stringify(commitHash),
     __BUILD_DATE__: JSON.stringify(commitDate),
     __BUILD_STAMP__: JSON.stringify(buildStamp),

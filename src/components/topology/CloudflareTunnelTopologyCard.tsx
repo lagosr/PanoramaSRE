@@ -57,7 +57,7 @@ export const CloudflareTunnelTopologyCard: React.FC<CloudflareTunnelTopologyCard
             </h3>
             <p className="text-xs text-slate-500 font-mono">
               Outbound Multiplexed QUIC Tunnel · Container Network Mode:{' '}
-              <code className="text-purple-600 dark:text-purple-400 font-bold">host</code>
+              <code className="text-purple-600 dark:text-purple-400 font-bold">{cloudflared.networkMode || 'cf-egress-net (100.64.250.0/24)'}</code>
             </p>
           </div>
         </div>

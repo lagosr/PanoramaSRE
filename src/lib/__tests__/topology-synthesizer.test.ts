@@ -110,6 +110,8 @@ describe('synthesizeTopology', () => {
       data_volumes_raw: '',
       docker_df: [],
       release_ledgers: {},
+      firewall_rules_raw:
+        '-N DOCKER-USER\n-A DOCKER-USER -d 10.0.0.0/8 -o eth0 -j DROP\n-A DOCKER-USER -d 172.16.0.0/12 -o eth0 -j DROP\n-A DOCKER-USER -d 192.168.0.0/16 -o eth0 -j DROP\n-N PANORAMA-INPUT\n-A PANORAMA-INPUT -i br-+ -p tcp -m tcp --dport 22 -j DROP\n',
     };
 
     const result = synthesizeTopology(mockApps, mockSnapshot);
@@ -124,11 +126,13 @@ describe('synthesizeTopology', () => {
     expect(result.routes[1].port).toBe(3001);
 
     expect(result.cloudflared.isHealthy).toBe(true);
-    expect(result.cloudflared.networkMode).toBe('host');
+    expect(result.cloudflared.networkMode).toBe('cf-egress-net (100.64.250.0/24)');
 
     // Security audit
     expect(result.securityAudit.score).toBe(100);
     expect(result.securityAudit.zeroBindViolations).toHaveLength(0);
+    expect(result.securityAudit.invariants).toHaveLength(8);
+    expect(result.securityAudit.securityViolationCount).toBe(0);
 
     // Ingress trace
     expect(result.ingressTraces['auth']).toBeDefined();
@@ -164,10 +168,13 @@ describe('synthesizeTopology', () => {
       data_volumes_raw: '',
       docker_df: [],
       release_ledgers: {},
+      firewall_rules_raw:
+        '-N DOCKER-USER\n-A DOCKER-USER -d 10.0.0.0/8 -o eth0 -j DROP\n-A DOCKER-USER -d 172.16.0.0/12 -o eth0 -j DROP\n-A DOCKER-USER -d 192.168.0.0/16 -o eth0 -j DROP\n-N PANORAMA-INPUT\n-A PANORAMA-INPUT -i br-+ -p tcp -m tcp --dport 22 -j DROP\n',
     };
 
     const result = synthesizeTopology(mockApps, mockSnapshot);
-    expect(result.securityAudit.score).toBe(65);
+    expect(result.securityAudit.score).toBe(85);
+    expect(result.securityAudit.securityViolationCount).toBe(1);
     expect(result.securityAudit.zeroBindViolations).toHaveLength(1);
     expect(result.securityAudit.recommendations[0]).toContain('CRITICAL');
   });
@@ -177,5 +184,67 @@ describe('synthesizeTopology', () => {
     expect(result.routes).toHaveLength(2);
     expect(result.routes.map((r) => r.slug)).toEqual(['auth', 'spendy']);
     expect(result.routes.map((r) => r.port)).toEqual([3000, 3001]);
+  });
+
+  it('does not flag administrative portainer 9442/https binding as application zero-bind violation', () => {
+    const mockSnapshot: WshSnapshot = {
+      mode: '--fast',
+      hostname: 'wsh-live',
+      kernel: '6.6.20',
+      uptime_secs: 100,
+      dietpi_version: '9.3.0',
+      dietpi_update_available: '',
+      reboot_required: false,
+      rpi_throttled: '0x0',
+      services: { lighttpd: 'active', docker: 'active', ssh: 'active' },
+      listening_ports: [80, 443, 3000, 3001, 9442],
+      lighttpd_routes_raw: 'auth:3000,spendy:3001',
+      containers: [
+        {
+          Names: 'panorama-auth',
+          State: 'running',
+          Ports: '127.0.0.1:3000->3000/tcp',
+        },
+        {
+          Names: 'spendy-ledger',
+          State: 'running',
+          Ports: '127.0.0.1:3001->3001/tcp',
+        },
+        {
+          Names: 'portainer',
+          State: 'running',
+          Ports: '8000/tcp, 9000/tcp, 0.0.0.0:9442->9443/tcp',
+        },
+      ],
+      container_stats: [],
+      images: [],
+      cloudflared: {},
+      apt_upgradable_raw: '',
+      data_volumes_raw: '',
+      docker_df: [],
+      release_ledgers: {},
+      firewall_rules_raw:
+        '-N DOCKER-USER\n-A DOCKER-USER -d 10.0.0.0/8 -o eth0 -j DROP\n-A DOCKER-USER -d 172.16.0.0/12 -o eth0 -j DROP\n-A DOCKER-USER -d 192.168.0.0/16 -o eth0 -j DROP\n-N PANORAMA-INPUT\n-A PANORAMA-INPUT -i br-+ -p tcp -m tcp --dport 22 -j DROP\n',
+    };
+
+    const result = synthesizeTopology(mockApps, mockSnapshot);
+    expect(result.securityAudit.score).toBe(100);
+    expect(result.securityAudit.securityViolationCount).toBe(0);
+    expect(result.securityAudit.zeroBindViolations).toHaveLength(0);
+    const sec02 = result.securityAudit.invariants.find((i) => i.id === 'SEC-02');
+    expect(sec02?.status).toBe('PASS');
+    const sec04 = result.securityAudit.invariants.find((i) => i.id === 'SEC-04');
+    expect(sec04?.status).toBe('PASS');
+  });
+
+  it('handles un-snapshotted initial state gracefully without raising false violations', () => {
+    // When app starts before initial sync finishes, snapshot is null
+    const result = synthesizeTopology(mockApps, null);
+    expect(result.securityAudit.securityViolationCount).toBe(0);
+    expect(result.securityAudit.score).toBe(100);
+    const sec03 = result.securityAudit.invariants.find((i) => i.id === 'SEC-03');
+    expect(sec03?.status).toBe('PASS');
+    const sec04 = result.securityAudit.invariants.find((i) => i.id === 'SEC-04');
+    expect(sec04?.status).toBe('PASS');
   });
 });

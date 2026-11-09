@@ -31,6 +31,10 @@ pub struct WshSnapshot {
     pub network_routes: Vec<serde_json::Value>,
     #[serde(default)]
     pub listening_sockets_raw: String,
+    #[serde(default)]
+    pub firewall_rules_raw: String,
+    #[serde(default)]
+    pub docker_daemon_raw: String,
 }
 
 pub fn default_ssh_key_path() -> String {

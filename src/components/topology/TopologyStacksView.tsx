@@ -28,6 +28,8 @@ interface TopologyStacksViewProps {
   onRefresh?: () => void;
   onRunAuditCommand?: (label: string, cmd: string, args: string[]) => void;
   onTriggerTunnelAction?: (action: 'status' | 'check_update' | 'update' | 'update_force') => void;
+  onRunPenetrationAudit?: () => void;
+  onReapplyHardening?: () => void;
 }
 
 export function TopologyStacksView({
@@ -37,6 +39,8 @@ export function TopologyStacksView({
   onRefresh,
   onRunAuditCommand,
   onTriggerTunnelAction,
+  onRunPenetrationAudit,
+  onReapplyHardening,
 }: TopologyStacksViewProps) {
   const [activeTab, setActiveTab] = useState<'visual' | 'matrix' | 'hardware' | 'tunnel' | 'rules'>('visual');
   const [selectedRouteSlug, setSelectedRouteSlug] = useState<string | null>(null);
@@ -145,7 +149,10 @@ export function TopologyStacksView({
             }`}
           >
             <Sliders className="w-3.5 h-3.5 text-amber-500" />
-            Rules & Advisor
+            Security & Rules Advisor
+            {topology.securityAudit.securityViolationCount > 0 && (
+              <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
+            )}
           </button>
         </div>
       </div>
@@ -190,6 +197,8 @@ export function TopologyStacksView({
         <DockerNetworkRulesAdvisor
           topology={topology}
           onRunAuditCommand={onRunAuditCommand}
+          onRunPenetrationAudit={onRunPenetrationAudit}
+          onReapplyHardening={onReapplyHardening}
         />
       )}
 

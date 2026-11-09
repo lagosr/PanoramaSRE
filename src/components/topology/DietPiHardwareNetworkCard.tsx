@@ -48,22 +48,32 @@ export const DietPiHardwareNetworkCard: React.FC<DietPiHardwareNetworkCardProps>
       {/* Hardware Interfaces Grid */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 font-mono text-xs">
         {/* Physical NIC: eth0 */}
-        <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
-              <Network className="w-4 h-4 text-emerald-500" />
-              Physical Interface: eth0
-            </span>
-            <span className="px-2 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-600 font-semibold">
-              UP / 1000 Mbps
-            </span>
-          </div>
-          <div className="space-y-1 text-slate-600 dark:text-slate-400 text-[11px]">
-            <div>IPv4: 192.168.1.5/24 (LAN PHY)</div>
-            <div>MTU: 1500 bytes · qdisc: mq</div>
-            <div>Default Gateway: 192.168.1.1 (Router)</div>
-          </div>
-        </div>
+        {(() => {
+          const eth0 = host.physicalInterfaces.find((i) => i.ifname === 'eth0') || host.physicalInterfaces[0];
+          const eth0Ipv4 = eth0?.addr_info?.find((a) => a.family === 'inet');
+          const ipDisplay = eth0Ipv4 ? `${eth0Ipv4.local}/${eth0Ipv4.prefixlen} (VLAN 500 Compute Systems)` : '172.25.25.5/24 (VLAN 500 Compute Systems)';
+          const mtuDisplay = eth0?.mtu ? `${eth0.mtu} bytes` : '1500 bytes';
+          const operstate = eth0?.operstate?.toUpperCase() || 'UP';
+
+          return (
+            <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                  <Network className="w-4 h-4 text-emerald-500" />
+                  Physical Interface: {eth0?.ifname || 'eth0'}
+                </span>
+                <span className="px-2 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-600 font-semibold">
+                  {operstate} / 1000 Mbps
+                </span>
+              </div>
+              <div className="space-y-1 text-slate-600 dark:text-slate-400 text-[11px]">
+                <div>IPv4: {ipDisplay}</div>
+                <div>MTU: {mtuDisplay} · qdisc: {eth0?.qdisc || 'mq'}</div>
+                <div>Default Gateway: 172.25.25.1 (UniFi Gateway Pro)</div>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Loopback Interface: lo */}
         <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 space-y-2">

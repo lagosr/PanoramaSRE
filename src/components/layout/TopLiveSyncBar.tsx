@@ -1,5 +1,5 @@
 import { NetworkPosture } from '../../lib/types';
-import { AlertCircle, Sun, Moon } from 'lucide-react';
+import { AlertCircle, Sun, Moon, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 
 interface TopLiveSyncBarProps {
@@ -8,10 +8,14 @@ interface TopLiveSyncBarProps {
   totalAppCount: number;
   prodHealthyCount: number;
   lastSyncTime: string | null;
+  lastSecurityAuditTime?: string | null;
+  securityAuditInterval?: string;
   isSyncing: boolean;
   onRefresh: () => void;
   backupFailureCount?: number;
   onNavigateToBackups?: () => void;
+  securityViolationCount?: number;
+  onNavigateToTopology?: () => void;
 }
 
 export function TopLiveSyncBar({
@@ -20,10 +24,14 @@ export function TopLiveSyncBar({
   totalAppCount,
   prodHealthyCount,
   lastSyncTime,
+  lastSecurityAuditTime,
+  securityAuditInterval = '5',
   isSyncing,
   onRefresh,
   backupFailureCount = 0,
   onNavigateToBackups,
+  securityViolationCount = 0,
+  onNavigateToTopology,
 }: TopLiveSyncBarProps) {
   const { theme, resolvedTheme, toggleTheme } = useTheme();
   const hasFleetAlert = totalAppCount > 0 && prodHealthyCount < totalAppCount;
@@ -36,7 +44,7 @@ export function TopLiveSyncBar({
           {networkPosture === 'LAN_DIRECT' && (
             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold bg-emerald-500/15 text-emerald-800 dark:text-emerald-400 border border-emerald-500/30 whitespace-nowrap">
               <span className="w-2 h-2 rounded-full bg-emerald-600 dark:bg-emerald-400 animate-pulse"></span>
-              LAN DIRECT (172.20.20.9)
+              LAN DIRECT (172.25.25.5)
             </span>
           )}
           {networkPosture === 'WAN_CLOUDFLARE' && (
@@ -90,6 +98,18 @@ export function TopLiveSyncBar({
             <span>BACKUP INCIDENT: {backupFailureCount} APP{backupFailureCount > 1 ? 'S' : ''} FAILED</span>
           </button>
         )}
+
+        {/* WSH Network & Container Hardening Security Violation Red Flag */}
+        {securityViolationCount > 0 && (
+          <button
+            onClick={onNavigateToTopology}
+            className="hidden lg:inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-rose-500/20 hover:bg-rose-500/30 text-rose-700 dark:text-rose-300 border border-rose-500/60 shadow-[0_0_12px_rgba(244,63,94,0.4)] animate-pulse font-semibold text-xs transition-colors cursor-pointer whitespace-nowrap"
+            title="WSH Network or Container Security Invariant Violation Detected! Click to inspect topology."
+          >
+            <ShieldAlert className="w-3.5 h-3.5 text-rose-500 dark:text-rose-400 shrink-0" />
+            <span>SECURITY VIOLATION: {securityViolationCount} CHECK{securityViolationCount > 1 ? 'S' : ''} FAILED</span>
+          </button>
+        )}
       </div>
 
       {/* Right: Sync Status & Manual Refresh & Theme Toggle */}
@@ -98,6 +118,19 @@ export function TopLiveSyncBar({
           <span className="text-xs text-slate-500 dark:text-slate-400 hidden md:inline">
             Last sync: <span className="font-mono text-slate-700 dark:text-slate-300">{lastSyncTime}</span>
           </span>
+        )}
+
+        {lastSecurityAuditTime && (
+          <button
+            onClick={onNavigateToTopology}
+            className="hidden md:inline-flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 border-l border-slate-200 dark:border-slate-800 pl-3 hover:text-slate-800 dark:hover:text-slate-200 transition-colors cursor-pointer select-none"
+            title="WSH Network Hardening & Penetration Audit Last Checked. Click to inspect topology & rules advisor."
+          >
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+            <span className="font-medium text-slate-600 dark:text-slate-400">Audit:</span>
+            <span className="font-mono text-slate-700 dark:text-slate-300">{lastSecurityAuditTime}</span>
+            <span className="text-[10px] font-mono text-slate-400">({securityAuditInterval}m)</span>
+          </button>
         )}
 
         {/* Quick Theme Toggle Button */}

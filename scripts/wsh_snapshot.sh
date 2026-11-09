@@ -62,6 +62,12 @@ ROUTES_JSON=$(ip -j route 2>/dev/null | tr -d '\r')
 # Listening sockets full detail
 LISTEN_SOCKETS=$(ss -tulpnH 2>/dev/null | json_escape || echo "")
 
+# Firewall rules (DOCKER-USER and PANORAMA-INPUT chains)
+FIREWALL_RULES=$(iptables -S 2>/dev/null | json_escape || echo "")
+
+# Docker daemon config
+DOCKER_DAEMON_JSON=$(cat /etc/docker/daemon.json 2>/dev/null | json_escape || echo "")
+
 # Cloudflared recent status lines
 CF_VERSION=$(docker exec cloudflared cloudflared --version 2>/dev/null | head -n 1 | json_escape || echo "")
 CF_LOGS=$(docker logs --tail 25 cloudflared 2>&1 | json_escape || echo "")
@@ -117,6 +123,8 @@ cat <<EOF
   "network_interfaces": ${IFACES_JSON},
   "network_routes": ${ROUTES_JSON},
   "listening_sockets_raw": "${LISTEN_SOCKETS}",
+  "firewall_rules_raw": "${FIREWALL_RULES}",
+  "docker_daemon_raw": "${DOCKER_DAEMON_JSON}",
   "cloudflared": {
     "version_raw": "${CF_VERSION}",
     "recent_logs": "${CF_LOGS}"

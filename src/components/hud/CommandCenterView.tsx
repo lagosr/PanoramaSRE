@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { openUrl } from '@tauri-apps/plugin-opener';
-import { DiscoveredApp, ApplianceStatus, SslFleetSummary, BackupLedgerSummary } from '../../lib/types';
+import { DiscoveredApp, ApplianceStatus, SslFleetSummary, BackupLedgerSummary, SecurityPostureInvariant } from '../../lib/types';
 import { FleetAppCard } from './FleetAppCard';
 import { ApplianceStatusStrip } from './ApplianceStatusStrip';
 import { ReleaseCompositionDrawer } from './ReleaseCompositionDrawer';
-import { ShieldAlert, HardDriveDownload, RefreshCw, AlertTriangle } from 'lucide-react';
+import { ShieldAlert, HardDriveDownload, RefreshCw, AlertTriangle, ShieldCheck, Network } from 'lucide-react';
 
 interface CommandCenterViewProps {
   apps: DiscoveredApp[];
@@ -14,6 +14,11 @@ interface CommandCenterViewProps {
   isLoading: boolean;
   onNavigateToBackups?: () => void;
   onTriggerFullGfsBackup?: () => void;
+  securityViolationCount?: number;
+  failingInvariants?: SecurityPostureInvariant[];
+  onReapplyHardening?: () => void;
+  onRunPenetrationAudit?: () => void;
+  onNavigateToTopology?: () => void;
 }
 
 export function CommandCenterView({ 
@@ -23,7 +28,12 @@ export function CommandCenterView({
   backupLedger,
   isLoading,
   onNavigateToBackups,
-  onTriggerFullGfsBackup
+  onTriggerFullGfsBackup,
+  securityViolationCount = 0,
+  failingInvariants = [],
+  onReapplyHardening,
+  onRunPenetrationAudit,
+  onNavigateToTopology,
 }: CommandCenterViewProps) {
   const [selectedApp, setSelectedApp] = useState<DiscoveredApp | null>(null);
 
@@ -53,6 +63,68 @@ export function CommandCenterView({
     <div className="p-4 sm:p-6 md:p-8 max-w-7xl mx-auto w-full min-w-0 space-y-6 overflow-hidden">
       {/* Home Lab Appliances Status Banner */}
       <ApplianceStatusStrip appliances={appliances} sslFleet={sslFleet} />
+
+      {/* Critical WSH Network & Container Security Incident Banner (Red Flag) */}
+      {securityViolationCount > 0 && (
+        <div className="rounded-xl border border-rose-500/80 bg-rose-50 dark:bg-rose-950/40 p-4 sm:p-5 shadow-[0_0_25px_rgba(244,63,94,0.15)] dark:shadow-[0_0_25px_rgba(244,63,94,0.35)] ring-1 ring-rose-500/50 space-y-3">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="flex items-start sm:items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-rose-500/20 border border-rose-500/50 flex items-center justify-center shrink-0">
+                <ShieldAlert className="w-6 h-6 text-rose-500 dark:text-rose-400" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-rose-500 text-white uppercase tracking-wider">
+                    SECURITY INCIDENT ALERT
+                  </span>
+                  <span className="text-xs text-rose-600 dark:text-rose-400 font-mono">
+                    WSH Hardening Monitor
+                  </span>
+                </div>
+                <h3 className="text-sm font-bold text-rose-900 dark:text-rose-200 tracking-wide mt-1">
+                  CRITICAL: {securityViolationCount} NETWORK & CONTAINER SECURITY INVARIANT{securityViolationCount > 1 ? 'S' : ''} FAILED
+                </h3>
+                <p className="text-xs text-rose-800 dark:text-rose-300/90 mt-0.5">
+                  Failing checks:{' '}
+                  <span className="font-semibold text-rose-950 dark:text-white">
+                    {failingInvariants.map((inv) => `${inv.id}: ${inv.title}`).join('; ')}
+                  </span>
+                  . Host perimeter or container containment is exposed.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0 flex-wrap">
+              {onReapplyHardening && (
+                <button
+                  onClick={onReapplyHardening}
+                  className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white shadow-sm transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Re-Apply Hardening</span>
+                </button>
+              )}
+              {onRunPenetrationAudit && (
+                <button
+                  onClick={onRunPenetrationAudit}
+                  className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 shadow-sm transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5"
+                >
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+                  <span>Run Penetration Audit</span>
+                </button>
+              )}
+              {onNavigateToTopology && (
+                <button
+                  onClick={onNavigateToTopology}
+                  className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 shadow-sm transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5"
+                >
+                  <Network className="w-3.5 h-3.5 text-indigo-500" />
+                  <span>Inspect Rules</span>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Critical Database Automated Backup Incident Banner (Red Flag) */}
       {isLastBackupFailed && failedBackupApps.length > 0 && (

@@ -19,7 +19,7 @@ try {
 
 const buildIdentifier = commitDate ? `Build ${commitDate}` : `Build ${new Date().toISOString().slice(0, 10).replace(/-/g, '')}`;
 
-let pkgVersion = '1.1.0';
+let pkgVersion = '1.2.0';
 try {
   const pkgContent = readFileSync(path.resolve(__dirname, '../package.json'), 'utf-8');
   const pkg = JSON.parse(pkgContent);
@@ -32,10 +32,11 @@ const tauriConfPath = path.resolve(__dirname, '../src-tauri/tauri.conf.json');
 try {
   const content = readFileSync(tauriConfPath, 'utf-8');
   const json = JSON.parse(content);
+  json.version = pkgVersion;
   if (json.app?.windows?.[0]) {
     json.app.windows[0].title = fullTitle;
     writeFileSync(tauriConfPath, JSON.stringify(json, null, 2) + '\n', 'utf-8');
-    console.log(`[sync-build-info] Updated window title to: "${fullTitle}"`);
+    console.log(`[sync-build-info] Updated window title to: "${fullTitle}" and version to: "${pkgVersion}"`);
   }
 } catch (err) {
   console.error('[sync-build-info] Failed to update tauri.conf.json:', err);

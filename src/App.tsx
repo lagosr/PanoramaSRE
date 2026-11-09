@@ -15,6 +15,7 @@ import { DietPiHostView } from './components/dietpi/DietPiHostView';
 import { EdgePkiView } from './components/edge/EdgePkiView';
 import { ReleasePipelineView } from './components/releases/ReleasePipelineView';
 import { BackupsRecoveryView } from './components/backups/BackupsRecoveryView';
+import { synthesizeTopology } from './lib/topology-synthesizer';
 import {
   DiscoveredApp,
   NetworkPosture,
@@ -43,6 +44,10 @@ export const App: React.FC = () => {
   const [networkPosture, setNetworkPosture] = useState<NetworkPosture>('LAN_DIRECT');
   const [isManualSyncing, setIsManualSyncing] = useState<boolean>(false);
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
+  const [securityAuditInterval, setSecurityAuditInterval] = useState<string>(() => {
+    return localStorage.getItem('panoramasre_security_audit_interval') || '5';
+  });
+  const [lastSecurityAuditTime, setLastSecurityAuditTime] = useState<string | null>(null);
   const [wshSnapshot, setWshSnapshot] = useState<WshSnapshot | null>(null);
   const [backupLedger, setBackupLedger] = useState<BackupLedgerSummary | null>(null);
   const [sslFleet, setSslFleet] = useState<SslFleetSummary | null>(null);
@@ -253,6 +258,7 @@ export const App: React.FC = () => {
           mode: '--fast',
         });
         setWshSnapshot(snap);
+        setLastSecurityAuditTime(new Date().toLocaleTimeString());
       }
     } catch {
       // Ignore background WSH snapshot errors
@@ -415,6 +421,7 @@ export const App: React.FC = () => {
             mode: '--fast',
           });
           setWshSnapshot(snap);
+          setLastSecurityAuditTime(new Date().toLocaleTimeString());
         } catch (snapErr) {
           console.warn('[PanoramaSRE] WSH snapshot warning:', snapErr);
         }
@@ -473,6 +480,18 @@ export const App: React.FC = () => {
       if (unlisten) unlisten();
     };
   }, [refreshDevServers, refreshAppliances, refreshWshTelemetry, refreshBackupLedger, refreshSslStatus, syncFullTelemetry]);
+
+  // Periodic WSH Security Hardening & Penetration Audit Timer
+  useEffect(() => {
+    const minutes = parseInt(securityAuditInterval, 10);
+    const intervalMs = (isNaN(minutes) || minutes < 1 ? 5 : minutes) * 60 * 1000;
+
+    const timer = setInterval(() => {
+      refreshWshTelemetry();
+    }, intervalMs);
+
+    return () => clearInterval(timer);
+  }, [securityAuditInterval, refreshWshTelemetry]);
 
   // Dev Server Actions
   const handleStartDevServer = async (appId: string, workspacePath: string, devCommand: string, port?: number) => {
@@ -1207,6 +1226,96 @@ export const App: React.FC = () => {
     });
   }, [appendTerminalLine, finalizeTerminalJob, failTerminalJob, refreshBackupLedger, saveTabToDb]);
 
+  const handleRunPenetrationAudit = useCallback(() => {
+    const jobId = `audit-penetration-${Date.now()}`;
+    const actionLabel = 'WSH Network Hardening Penetration Audit (SEC-01..08)';
+    const newTab: TerminalTab = {
+      id: jobId,
+      title: actionLabel,
+      lines: [
+        `[PanoramaSRE] Launching Automated WSH Network & Container Hardening Penetration Audit...`,
+        `[PanoramaSRE] Target Host: wsh.panoramadr.com (172.25.25.5)`,
+      ],
+      isRunning: true,
+      createdAt: new Date().toISOString(),
+    };
+    setTerminalTabs((prev) => [...prev, newTab]);
+    setActiveTerminalTabId(jobId);
+    setIsDrawerOpen(true);
+    saveTabToDb(newTab);
+
+    runStreamJob({
+      jobId,
+      label: actionLabel,
+      command: 'powershell.exe',
+      args: [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        'C:\\Users\\rodrigo\\Documents\\AG Projects\\PanoramaDrSuite\\tools\\server-setup\\Test-WshNetworkHardening.ps1',
+      ],
+      workingDir: 'C:\\Users\\rodrigo\\Documents\\AG Projects\\PanoramaDrSuite\\tools\\server-setup',
+      lockType: 'None',
+      onLine: (line) => {
+        appendTerminalLine(jobId, line);
+      },
+      onComplete: (exitCode) => {
+        finalizeTerminalJob(jobId, exitCode);
+        refreshWshTelemetry();
+        setLastSecurityAuditTime(new Date().toLocaleTimeString());
+      },
+      onError: (err) => {
+        failTerminalJob(jobId, `Audit execution error: ${err}`);
+      },
+    });
+  }, [appendTerminalLine, finalizeTerminalJob, failTerminalJob, refreshWshTelemetry, saveTabToDb]);
+
+  const handleReapplyHardening = useCallback(() => {
+    const jobId = `reapply-hardening-${Date.now()}`;
+    const actionLabel = 'Re-Apply Host Firewall & Network Hardening';
+    const newTab: TerminalTab = {
+      id: jobId,
+      title: actionLabel,
+      lines: [
+        `[PanoramaSRE] Re-Applying WSH Network Hardening & Kernel Firewall Rules...`,
+        `[PanoramaSRE] Target Host: wsh.panoramadr.com (172.25.25.5)`,
+      ],
+      isRunning: true,
+      createdAt: new Date().toISOString(),
+    };
+    setTerminalTabs((prev) => [...prev, newTab]);
+    setActiveTerminalTabId(jobId);
+    setIsDrawerOpen(true);
+    saveTabToDb(newTab);
+
+    runStreamJob({
+      jobId,
+      label: actionLabel,
+      command: 'powershell.exe',
+      args: [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        'C:\\Users\\rodrigo\\Documents\\AG Projects\\PanoramaDrSuite\\tools\\server-setup\\deploy-server-setup.ps1',
+      ],
+      workingDir: 'C:\\Users\\rodrigo\\Documents\\AG Projects\\PanoramaDrSuite\\tools\\server-setup',
+      lockType: 'WshRemoteMutation',
+      onLine: (line) => {
+        appendTerminalLine(jobId, line);
+      },
+      onComplete: (exitCode) => {
+        finalizeTerminalJob(jobId, exitCode);
+        refreshWshTelemetry();
+        setLastSecurityAuditTime(new Date().toLocaleTimeString());
+      },
+      onError: (err) => {
+        failTerminalJob(jobId, `Hardening re-apply failed: ${err}`);
+      },
+    });
+  }, [appendTerminalLine, finalizeTerminalJob, failTerminalJob, refreshWshTelemetry, saveTabToDb]);
+
   const handleCloseTab = (id: string) => {
     setTerminalTabs((prev) => prev.filter((t) => t.id !== id));
     invoke('delete_console_session', { id }).catch((e) =>
@@ -1279,6 +1388,10 @@ export const App: React.FC = () => {
     return count;
   })();
 
+  const topology = React.useMemo(() => synthesizeTopology(apps, wshSnapshot), [apps, wshSnapshot]);
+  const securityViolationCount = wshSnapshot ? topology.securityAudit.securityViolationCount : 0;
+  const failingInvariants = wshSnapshot ? topology.securityAudit.invariants.filter((i) => i.status === 'FAIL') : [];
+
   return (
     <div className="flex flex-col h-screen w-screen bg-slate-50 dark:bg-[#050b14] text-slate-900 dark:text-slate-100 overflow-hidden font-sans">
       {/* Upper Area: Sidebar Navigation + Main Application Content */}
@@ -1290,6 +1403,7 @@ export const App: React.FC = () => {
           backupFailureCount={backupFailureCount}
           behindReleasesCount={behindReleasesCount}
           dietpiPackagesCount={dietpiPackagesCount}
+          securityViolationCount={securityViolationCount}
         />
 
         <main className="flex-1 flex flex-col h-full overflow-hidden relative">
@@ -1299,10 +1413,14 @@ export const App: React.FC = () => {
             totalAppCount={apps.length}
             prodHealthyCount={prodHealthyCount}
             lastSyncTime={lastSyncTime}
+            lastSecurityAuditTime={lastSecurityAuditTime}
+            securityAuditInterval={securityAuditInterval}
             isSyncing={isManualSyncing}
             onRefresh={() => syncFullTelemetry(true)}
             backupFailureCount={backupFailureCount}
             onNavigateToBackups={() => setActiveTab('backups')}
+            securityViolationCount={securityViolationCount}
+            onNavigateToTopology={() => setActiveTab('topology')}
           />
 
           <div className="flex-1 min-h-0 overflow-y-auto">
@@ -1315,6 +1433,11 @@ export const App: React.FC = () => {
               isLoading={apps.length === 0}
               onNavigateToBackups={() => setActiveTab('backups')}
               onTriggerFullGfsBackup={handleTriggerFullGfsBackup}
+              securityViolationCount={securityViolationCount}
+              failingInvariants={failingInvariants}
+              onReapplyHardening={handleReapplyHardening}
+              onRunPenetrationAudit={handleRunPenetrationAudit}
+              onNavigateToTopology={() => setActiveTab('topology')}
             />
           )}
 
@@ -1338,6 +1461,8 @@ export const App: React.FC = () => {
               apps={apps}
               isLoading={isManualSyncing}
               onRefresh={refreshWshTelemetry}
+              onRunPenetrationAudit={handleRunPenetrationAudit}
+              onReapplyHardening={handleReapplyHardening}
               onRunAuditCommand={(actionLabel, cmd, args) => {
                 const jobId = `audit-${Date.now()}`;
                 const newTab: TerminalTab = {
@@ -1508,7 +1633,11 @@ export const App: React.FC = () => {
           )}
 
           {activeTab === 'settings' && (
-            <SettingsView onWorkspaceChanged={() => syncFullTelemetry(true)} />
+            <SettingsView
+              onWorkspaceChanged={() => syncFullTelemetry(true)}
+              securityAuditInterval={securityAuditInterval}
+              onSecurityAuditIntervalChanged={(val) => setSecurityAuditInterval(val)}
+            />
           )}
 
           {activeTab !== 'hud' &&

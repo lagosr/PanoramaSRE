@@ -8,6 +8,8 @@ import { useTheme } from '../../context/ThemeContext';
 
 interface SettingsViewProps {
   onWorkspaceChanged?: () => void;
+  securityAuditInterval?: string;
+  onSecurityAuditIntervalChanged?: (interval: string) => void;
 }
 
 interface SystemLogEntry {
@@ -21,12 +23,19 @@ interface SystemLogEntry {
 
 type SettingsTab = 'general' | 'ssh' | 'logs' | 'database';
 
-export const SettingsView: React.FC<SettingsViewProps> = ({ onWorkspaceChanged }) => {
+export const SettingsView: React.FC<SettingsViewProps> = ({
+  onWorkspaceChanged,
+  securityAuditInterval: propSecurityAuditInterval,
+  onSecurityAuditIntervalChanged,
+}) => {
   const { theme, resolvedTheme, setTheme } = useTheme();
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const [minimizeToTray, setMinimizeToTray] = useState(true);
   const [toastAlerts, setToastAlerts] = useState(true);
   const [pollInterval, setPollInterval] = useState('15');
+  const [securityAuditInterval, setSecurityAuditInterval] = useState<string>(() => {
+    return propSecurityAuditInterval || localStorage.getItem('panoramasre_security_audit_interval') || '5';
+  });
   const [isSaved, setIsSaved] = useState(false);
   const [workspaceRoot, setWorkspaceRoot] = useState<string>('');
   const [workspaceFeedback, setWorkspaceFeedback] = useState<string | null>(null);
@@ -144,6 +153,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onWorkspaceChanged }
   });
 
   const handleSave = () => {
+    localStorage.setItem('panoramasre_security_audit_interval', securityAuditInterval);
+    if (onSecurityAuditIntervalChanged) {
+      onSecurityAuditIntervalChanged(securityAuditInterval);
+    }
     setIsSaved(true);
     setTimeout(() => setIsSaved(false), 2000);
   };
@@ -382,6 +395,33 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onWorkspaceChanged }
                     { value: '60', label: '60 seconds' },
                   ]}
                 />
+              </div>
+
+              <div>
+                <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1.5">
+                  WSH Security Hardening & Penetration Audit Interval
+                </label>
+                <CustomSelect
+                  value={securityAuditInterval}
+                  onChange={(val) => {
+                    setSecurityAuditInterval(val);
+                    localStorage.setItem('panoramasre_security_audit_interval', val);
+                    if (onSecurityAuditIntervalChanged) {
+                      onSecurityAuditIntervalChanged(val);
+                    }
+                  }}
+                  options={[
+                    { value: '1', label: '1 minute (High Frequency / Verification)' },
+                    { value: '3', label: '3 minutes' },
+                    { value: '5', label: '5 minutes (Recommended Default)' },
+                    { value: '10', label: '10 minutes' },
+                    { value: '15', label: '15 minutes' },
+                    { value: '30', label: '30 minutes (Low Resource)' },
+                  ]}
+                />
+                <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1 font-mono">
+                  Periodic automated verification of Docker network isolation, firewall rules, and container defense-in-depth invariants.
+                </p>
               </div>
             </div>
           </div>

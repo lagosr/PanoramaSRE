@@ -29,6 +29,7 @@ interface SidebarRailProps {
   backupFailureCount?: number;
   behindReleasesCount?: number;
   dietpiPackagesCount?: number;
+  securityViolationCount?: number;
 }
 
 export const SidebarRail: React.FC<SidebarRailProps> = ({
@@ -38,12 +39,25 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
   backupFailureCount = 0,
   behindReleasesCount = 0,
   dietpiPackagesCount = 0,
+  securityViolationCount = 0,
 }) => {
   const navItems: { id: NavItem; label: string; icon: React.ComponentType<{ className?: string }>; badge?: number; badgeColor?: string }[] = [
-    { id: 'hud', label: 'Command HUD', icon: Activity, badge: unhealthyCount, badgeColor: 'bg-rose-500' },
+    {
+      id: 'hud',
+      label: 'Command HUD',
+      icon: Activity,
+      badge: unhealthyCount > 0 ? unhealthyCount : securityViolationCount > 0 ? securityViolationCount : undefined,
+      badgeColor: 'bg-rose-500',
+    },
     { id: 'local-dev', label: 'Local Dev Supervisor', icon: Terminal },
     { id: 'releases', label: 'Releases & Drift', icon: GitBranch, badge: behindReleasesCount, badgeColor: 'bg-amber-500' },
-    { id: 'topology', label: 'Topology & Stacks', icon: Network },
+    {
+      id: 'topology',
+      label: 'Topology & Stacks',
+      icon: Network,
+      badge: securityViolationCount > 0 ? securityViolationCount : undefined,
+      badgeColor: 'bg-rose-500 animate-pulse',
+    },
     { id: 'dietpi', label: 'DietPi Host', icon: Server, badge: dietpiPackagesCount, badgeColor: 'bg-amber-500' },
     { id: 'edge', label: 'PKI & Certificates', icon: ShieldCheck },
     { id: 'backups', label: 'Database Backups & DR', icon: HardDrive, badge: backupFailureCount, badgeColor: 'bg-rose-500' },

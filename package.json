@@ -1,7 +1,7 @@
 {
   "name": "panorama-sre",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,6 +9,10 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:unit": "vitest run --exclude src/lib/__tests__/network-integration.test.ts",
+    "test:integration": "vitest run src/lib/__tests__/network-integration.test.ts",
+    "test:pester": "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"Invoke-Pester -Script ./tests/pester -EnableExit\"",
+    "test:all": "npm test && npm run test:pester",
     "tauri": "tauri"
   },
   "dependencies": {

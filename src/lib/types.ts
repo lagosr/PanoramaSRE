@@ -254,6 +254,18 @@ export interface NetworkRouteDetail {
   flags?: string[];
 }
 
+export interface SecurityPostureInvariant {
+  id: 'SEC-01' | 'SEC-02' | 'SEC-03' | 'SEC-04' | 'SEC-05' | 'SEC-06' | 'SEC-07' | 'SEC-08';
+  title: string;
+  category: 'ROUTING' | 'PORT' | 'FIREWALL' | 'CONTAINMENT';
+  status: 'PASS' | 'FAIL' | 'WARN';
+  details: string;
+  remediation: string;
+  commandSnippet?: string;
+  evidence?: string;
+  evaluatedAt?: string;
+}
+
 export interface WshSnapshot {
   mode: string;
   hostname: string;
@@ -304,6 +316,9 @@ export interface WshSnapshot {
   network_interfaces?: NetworkInterfaceDetail[];
   network_routes?: NetworkRouteDetail[];
   listening_sockets_raw?: string;
+  security_invariants?: SecurityPostureInvariant[];
+  firewall_rules_raw?: string;
+  docker_daemon_raw?: string;
 }
 
 export type SslHealthStatus = 'HEALTHY' | 'EXPIRING_SOON' | 'CRITICAL' | 'EXPIRED' | 'MISSING' | 'ERROR';
