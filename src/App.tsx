@@ -750,6 +750,8 @@ export const App: React.FC = () => {
   const handleTriggerSslRenewal = (options: {
     unattended?: boolean;
     forceRenewal?: boolean;
+    skipDeploy?: boolean;
+    skipRenew?: boolean;
     deployTargets?: string[];
     targetDevice?: string;
   }) => {
@@ -757,9 +759,15 @@ export const App: React.FC = () => {
     const cmdSpec = buildSslCertCommand(suiteToolsPath, options);
     const jobId = `ssl-renew-${Date.now()}`;
     const title = options.targetDevice
-      ? `Renew ${options.targetDevice} (${options.forceRenewal ? 'Force' : 'Smart'})`
+      ? options.skipDeploy
+        ? `Renew Cert: ${options.targetDevice}`
+        : options.skipRenew
+        ? `Deploy Cert: ${options.targetDevice}`
+        : `Renew & Deploy: ${options.targetDevice}`
       : options.forceRenewal
-      ? 'Force Renew All SSL'
+      ? options.skipDeploy
+        ? 'Force Renew All (No Deploy)'
+        : 'Force Renew All & Deploy'
       : options.deployTargets && options.deployTargets.length > 0
       ? `Deploy SSL: ${options.deployTargets.join(', ')}`
       : 'Renew Due SSL (<30d)';
@@ -1626,6 +1634,7 @@ export const App: React.FC = () => {
             <EdgePkiView
               snapshot={wshSnapshot}
               sslFleet={sslFleet}
+              terminalTabs={terminalTabs}
               isLoadingSsl={isLoadingSsl}
               onRefreshSsl={refreshSslStatus}
               onTriggerRenewal={handleTriggerSslRenewal}

@@ -321,9 +321,9 @@ export interface WshSnapshot {
   docker_daemon_raw?: string;
 }
 
-export type SslHealthStatus = 'HEALTHY' | 'EXPIRING_SOON' | 'CRITICAL' | 'EXPIRED' | 'MISSING' | 'ERROR';
+export type SslHealthStatus = 'HEALTHY' | 'EXPIRING_SOON' | 'CRITICAL' | 'EXPIRED' | 'MISSING' | 'SELF_SIGNED' | 'ERROR';
 
-export type CertificateDriftStatus = 'IN_SYNC' | 'DRIFT_DETECTED' | 'LOCAL_ONLY' | 'LIVE_ONLY' | 'UNREACHABLE' | 'UNKNOWN';
+export type CertificateDriftStatus = 'IN_SYNC' | 'DRIFT_DETECTED' | 'LOCAL_ONLY' | 'LIVE_ONLY' | 'SELF_SIGNED' | 'UNREACHABLE' | 'UNKNOWN';
 
 export interface SslCertificateDetails {
   exists: boolean;

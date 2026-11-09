@@ -72,6 +72,8 @@ export function buildSslCertCommand(
   options: {
     unattended?: boolean;
     forceRenewal?: boolean;
+    skipDeploy?: boolean;
+    skipRenew?: boolean;
     deployTargets?: string[];
     targetDevice?: string;
   }
@@ -81,6 +83,8 @@ export function buildSslCertCommand(
 
   if (options.unattended) args.push('-Unattended');
   if (options.forceRenewal) args.push('-ForceRenewal');
+  if (options.skipDeploy) args.push('-SkipDeploy');
+  if (options.skipRenew) args.push('-SkipRenew');
   if (options.targetDevice) {
     args.push('-TargetDevice', options.targetDevice);
   }

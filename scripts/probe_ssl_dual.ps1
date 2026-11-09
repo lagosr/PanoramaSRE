@@ -67,7 +67,14 @@ if ($Config -and $Config.Devices) {
         if ($devObj.Deployment -and $devObj.Deployment.Type) {
             switch ($devObj.Deployment.Type.ToLowerInvariant()) {
                 "ssh_scp" {
-                    $tgt = if ($devObj.Deployment.TargetDir) { $devObj.Deployment.TargetDir } else { $devObj.ConfigPath }
+                    $tgt = if ($devObj.Deployment.RemoteCombinedPemFileName) {
+                        $targetBase = if ($devObj.Deployment.TargetDir) { $devObj.Deployment.TargetDir.TrimEnd('/', '\') } else { "/etc" }
+                        "$targetBase/$($devObj.Deployment.RemoteCombinedPemFileName)"
+                    } elseif ($devObj.Deployment.TargetDir) {
+                        $devObj.Deployment.TargetDir
+                    } else {
+                        $devObj.ConfigPath
+                    }
                     $deployTypeDesc = "SSH_SCP ($tgt + Reload)"
                 }
                 "smb_share" {
@@ -233,7 +240,18 @@ foreach ($dev in $DeviceDefinitions) {
         if ($ssl.RemoteCertificate) {
             $remote = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($ssl.RemoteCertificate)
             $remoteDaysLeft = [math]::Floor(($remote.NotAfter - $Now).TotalDays)
-            $remoteStatus = if ($remoteDaysLeft -le 0) { "EXPIRED" } elseif ($remoteDaysLeft -lt 15) { "CRITICAL" } elseif ($remoteDaysLeft -lt 30) { "EXPIRING_SOON" } else { "HEALTHY" }
+            $isSelfSigned = ($remote.Subject -eq $remote.Issuer) -or ($remote.Issuer -match "Ubiquiti|UBNT|Self-Signed|Default")
+            $remoteStatus = if ($isSelfSigned) {
+                "SELF_SIGNED"
+            } elseif ($remoteDaysLeft -le 0) {
+                "EXPIRED"
+            } elseif ($remoteDaysLeft -lt 15) {
+                "CRITICAL"
+            } elseif ($remoteDaysLeft -lt 30) {
+                "EXPIRING_SOON"
+            } else {
+                "HEALTHY"
+            }
 
             $liveCert = @{
                 reachable = $true
@@ -274,7 +292,10 @@ foreach ($dev in $DeviceDefinitions) {
 
     # --- Drift Classification ---
     $driftStatus = "UNKNOWN"
-    if ($localCert.exists -and $liveCert.reachable) {
+    if ($liveCert.reachable -and $liveCert.status -eq "SELF_SIGNED") {
+        $driftStatus = "SELF_SIGNED"
+        $DriftCount++
+    } elseif ($localCert.exists -and $liveCert.reachable) {
         if ($localCert.thumbprint -eq $liveCert.thumbprint) {
             $driftStatus = "IN_SYNC"
         } else {
@@ -285,12 +306,13 @@ foreach ($dev in $DeviceDefinitions) {
         $driftStatus = "LOCAL_ONLY"
     } elseif (-not $localCert.exists -and $liveCert.reachable) {
         $driftStatus = "LIVE_ONLY"
+        $DriftCount++
     } else {
         $driftStatus = "UNREACHABLE"
     }
 
-    # Effective lowest days remaining
-    $effectiveDays = if ($liveCert.reachable -and $liveCert.days_remaining -ge 0) {
+    # Effective lowest days remaining (exclude untrusted/self-signed from healthy days counting)
+    $effectiveDays = if ($liveCert.reachable -and $liveCert.status -ne "SELF_SIGNED" -and $liveCert.days_remaining -ge 0) {
         $liveCert.days_remaining
     } elseif ($localCert.exists -and $localCert.days_remaining -ge 0) {
         $localCert.days_remaining
@@ -302,7 +324,9 @@ foreach ($dev in $DeviceDefinitions) {
         $MinDays = $effectiveDays
     }
 
-    if ($effectiveDays -ge 30) {
+    if ($liveCert.status -eq "SELF_SIGNED") {
+        $CriticalCount++
+    } elseif ($effectiveDays -ge 30) {
         $HealthyCount++
     } elseif ($effectiveDays -ge 15) {
         $ExpiringSoonCount++

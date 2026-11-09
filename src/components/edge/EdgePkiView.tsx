@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { WshSnapshot, SslFleetSummary } from '../../lib/types';
 import { SslDualProbeTable } from './SslDualProbeTable';
 import { ConfirmDangerModal } from '../ui/ConfirmDangerModal';
+import { SslProgressInline } from './SslProgressInline';
+import { TerminalTab } from '../layout/SreTerminalDrawer';
 import {
   ShieldCheck,
   KeyRound,
@@ -18,12 +20,15 @@ import { invoke } from '@tauri-apps/api/core';
 interface EdgePkiViewProps {
   snapshot: WshSnapshot | null;
   sslFleet: SslFleetSummary | null;
+  terminalTabs?: TerminalTab[];
   isLoading?: boolean;
   isLoadingSsl?: boolean;
   onRefreshSsl?: () => void;
   onTriggerRenewal?: (options: {
     unattended?: boolean;
     forceRenewal?: boolean;
+    skipDeploy?: boolean;
+    skipRenew?: boolean;
     deployTargets?: string[];
     targetDevice?: string;
   }) => void;
@@ -31,13 +36,32 @@ interface EdgePkiViewProps {
 
 export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
   sslFleet,
+  terminalTabs = [],
   isLoadingSsl = false,
   onRefreshSsl,
   onTriggerRenewal,
 }) => {
   const [isForceModalOpen, setIsForceModalOpen] = useState(false);
+  const [isDismissed, setIsDismissed] = useState(false);
 
-  const totalDomains = sslFleet?.total_domains ?? 5;
+  // Detect active SSL renewal/deploy background job
+  const activeSslJob = terminalTabs.find(
+    (t) => t.id.startsWith('ssl-renew-') && t.isRunning
+  );
+
+  // If a job just completed, keep tracking the last job until dismissed
+  const latestSslJob = activeSslJob || terminalTabs
+    .filter((t) => t.id.startsWith('ssl-renew-'))
+    .slice(-1)[0];
+
+  // When a new job starts running, make sure it is not dismissed
+  useEffect(() => {
+    if (activeSslJob) {
+      setIsDismissed(false);
+    }
+  }, [activeSslJob?.id]);
+
+  const totalDomains = sslFleet?.total_domains ?? 7;
   const healthyCount = sslFleet?.healthy_count ?? 0;
   const expiringCount = sslFleet?.expiring_soon_count ?? 0;
   const criticalCount = sslFleet?.critical_count ?? 0;
@@ -59,15 +83,33 @@ export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
 
   const handleDeploySingleTarget = (deviceKey: string) => {
     if (onTriggerRenewal) {
-      onTriggerRenewal({ unattended: true, deployTargets: [deviceKey] });
+      onTriggerRenewal({
+        unattended: true,
+        skipRenew: true,
+        targetDevice: deviceKey,
+        deployTargets: [deviceKey],
+      });
     }
   };
 
-  const handleRenewSingleCert = (deviceKey: string, force: boolean = false) => {
+  const handleRenewSingleCert = (deviceKey: string, force: boolean = true) => {
     if (onTriggerRenewal) {
       onTriggerRenewal({
         unattended: true,
         forceRenewal: force,
+        skipDeploy: true,
+        targetDevice: deviceKey,
+      });
+    }
+  };
+
+  const handleRenewAndDeploySingle = (deviceKey: string, force: boolean = true) => {
+    if (onTriggerRenewal) {
+      onTriggerRenewal({
+        unattended: true,
+        forceRenewal: force,
+        skipDeploy: false,
+        skipRenew: false,
         targetDevice: deviceKey,
         deployTargets: [deviceKey],
       });
@@ -84,7 +126,7 @@ export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
             PKI & SSL/TLS Certificates
           </h2>
           <p className="text-sm text-slate-500 mt-0.5">
-            5-Domain X.509 dual-probe TLS validation, drift detection & automated Let's Encrypt lifecycle
+            Fleet X.509 dual-probe TLS validation, drift detection & automated Let's Encrypt lifecycle
           </p>
         </div>
 
@@ -230,6 +272,15 @@ export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
         </div>
       </div>
 
+      {/* Inline Live SSL Renewal & Deployment Progress Area */}
+      {latestSslJob && !isDismissed && (
+        <SslProgressInline
+          activeJob={latestSslJob}
+          onRefreshSsl={onRefreshSsl}
+          onDismiss={() => setIsDismissed(true)}
+        />
+      )}
+
       {/* 5-Domain SSL Certificate Matrix with Live Dual-Probe */}
       <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4">
         <div className="flex items-center justify-between">
@@ -247,8 +298,10 @@ export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
         <SslDualProbeTable
           items={sslFleet?.items || []}
           isLoading={isLoadingSsl}
+          activeJobTitle={activeSslJob?.title}
           onDeployTarget={handleDeploySingleTarget}
           onRenewCert={handleRenewSingleCert}
+          onRenewAndDeploy={handleRenewAndDeploySingle}
         />
       </div>
 

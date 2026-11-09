@@ -14,6 +14,8 @@ pub enum SslHealthStatus {
     Expired,
     #[serde(rename = "MISSING")]
     Missing,
+    #[serde(rename = "SELF_SIGNED")]
+    SelfSigned,
     #[serde(rename = "ERROR")]
     Error,
 }
@@ -58,6 +60,8 @@ pub enum CertificateDriftStatus {
     LocalOnly,
     #[serde(rename = "LIVE_ONLY")]
     LiveOnly,
+    #[serde(rename = "SELF_SIGNED")]
+    SelfSigned,
     #[serde(rename = "UNREACHABLE")]
     Unreachable,
     #[serde(rename = "UNKNOWN")]
