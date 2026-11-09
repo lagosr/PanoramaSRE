@@ -83,8 +83,9 @@ PanoramaSRE bridges local workstation engineering with remote production operati
 *   **Interactive SQLite Hydrator (`ApplyLocal`):** Scans workstation backup directories (`D:\Google\My Drive\HomeApplicationData\DatabaseBackups`), verifies schema compatibility, and extracts production SQLite databases directly into the local `data/` folder with safe file locking.
 
 ### 4. Edge PKI & SSL Dual-Probe Engine
-*   **5-Domain SSL Dual-Probe:** Queries certificate validity concurrently over internal LAN IPs and external WAN Cloudflare edge, comparing local staging `.crt` files with live port `:443` certificates to detect drift or upcoming expiration.
-*   **Headless Renewal:** Invokes `Get-SSLCerts.ps1 -Unattended` under the `WSH_REMOTE_MUTATION` lock for single-device or fleet-wide Posh-ACME DNS-01 certificate renewals.
+*   **Dynamic SSL Dual-Probe:** Queries certificate validity concurrently over internal LAN IPs and external WAN Cloudflare edge, comparing local staging `.crt` files with live port `:443` certificates to detect drift or upcoming expiration across all declaratively registered devices (`Unifi_Cloud_Key_G2`, `Unifi_Protect_UNVR`, `HomeAssistant`, `Genmon`, `WebServicesHost`).
+*   **Directory & Explorer Navigation:** Interactive clickable path banner for the base certificate repository (`D:\Google\My Drive\HomeApplicationData\WebServicesCertificates`) and per-device row links to launch Windows Explorer directly into each certificate staging subfolder.
+*   **Headless Renewal:** Invokes `Get-SSLCerts.ps1 -Unattended` under the `WSH_REMOTE_MUTATION` lock for single-device or fleet-wide Posh-ACME DNS-01 certificate renewals with zero Windows elevation requirements.
 *   **Cloudflare Zero Trust Tunnel:** Monitors `cloudflared` QUIC tunnel connections, connector version differences, and Google OIDC family access policies.
 
 ### 5. Backups & Disaster Recovery Matrix

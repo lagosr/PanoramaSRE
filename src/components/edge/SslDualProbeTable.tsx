@@ -10,7 +10,9 @@ import {
   RefreshCw,
   Clock,
   Server,
+  FolderOpen,
 } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 import { formatLocalDate } from '../../lib/formatters';
 
 interface SslDualProbeTableProps {
@@ -158,8 +160,10 @@ export const SslDualProbeTable: React.FC<SslDualProbeTableProps> = ({
                         <Server className="w-3.5 h-3.5 text-slate-400" />
                       </div>
                       <div>
-                        <div className="font-semibold text-slate-900 dark:text-slate-100 font-sans text-xs">
-                          {item.display_name}
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-semibold text-slate-900 dark:text-slate-100 font-sans text-xs">
+                            {item.display_name}
+                          </span>
                         </div>
                         <a
                           href={`https://${item.domain}`}
@@ -170,6 +174,18 @@ export const SslDualProbeTable: React.FC<SslDualProbeTableProps> = ({
                           {item.domain}
                           <ExternalLink className="w-2.5 h-2.5 opacity-60" />
                         </a>
+                        {item.local_target_folder && (
+                          <button
+                            onClick={() => invoke('open_in_file_manager', { path: item.local_target_folder })}
+                            className="flex items-center gap-1.5 text-[10px] font-mono text-slate-400 dark:text-slate-500 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors group cursor-pointer text-left truncate max-w-[200px] mt-0.5"
+                            title={`Open device certificate folder: ${item.local_target_folder}`}
+                          >
+                            <FolderOpen className="w-3 h-3 text-emerald-500/80 shrink-0 group-hover:scale-110 transition-transform" />
+                            <span className="truncate underline decoration-dotted decoration-slate-400 dark:decoration-slate-600 underline-offset-2 group-hover:decoration-emerald-500">
+                              {item.local_target_folder.split('\\').pop() || item.local_target_folder}
+                            </span>
+                          </button>
+                        )}
                         <div className="text-[10px] text-slate-500 mt-0.5 font-sans">
                           {item.deploy_target_type}
                         </div>

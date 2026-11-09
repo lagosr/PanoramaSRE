@@ -45,43 +45,97 @@ if (-not $BaseOutputFolder) {
         $rawBase = $Config.BaseOutputFolder -replace '\$env:USERPROFILE', $env:USERPROFILE
         $BaseOutputFolder = [System.Environment]::ExpandEnvironmentVariables($rawBase)
     } else {
-        $BaseOutputFolder = "$env:USERPROFILE\Documents\WebServicesCertificates"
+        $BaseOutputFolder = "D:\Google\My Drive\HomeApplicationData\WebServicesCertificates"
     }
 }
 
-# 3. Known appliance device list (derived from config or canonical defaults)
-$DeviceDefinitions = @(
-    @{
-        Key = "WebServicesHost"
-        DisplayName = "Web Services Host (DietPi)"
-        Domain = if ($Config.Devices.WebServicesHost.Domain) { $Config.Devices.WebServicesHost.Domain } else { "wsh.panoramadr.com" }
-        DeployTargetType = "SSH_SCP (/etc/lighttpd-certs + Reload)"
-    },
-    @{
-        Key = "Network_CloudKey"
-        DisplayName = "UniFi CloudKey"
-        Domain = if ($Config.Devices.Network_CloudKey.Domain) { $Config.Devices.Network_CloudKey.Domain } else { "ui.panoramadr.com" }
-        DeployTargetType = "LOCAL_VERIFY"
-    },
-    @{
-        Key = "Protect_UNVR"
-        DisplayName = "UniFi Protect UNVR"
-        Domain = if ($Config.Devices.Protect_UNVR.Domain) { $Config.Devices.Protect_UNVR.Domain } else { "protect.panoramadr.com" }
-        DeployTargetType = "LOCAL_VERIFY"
-    },
-    @{
-        Key = "HomeAssistant"
-        DisplayName = "Home Assistant"
-        Domain = if ($Config.Devices.HomeAssistant.Domain) { $Config.Devices.HomeAssistant.Domain } else { "ha.panoramadr.com" }
-        DeployTargetType = "SMB_SHARE (\\ha.panoramadr.com\ssl)"
-    },
-    @{
-        Key = "Genmon"
-        DisplayName = "Generator Monitor"
-        Domain = if ($Config.Devices.Genmon.Domain) { $Config.Devices.Genmon.Domain } else { "genmon.panoramadr.com" }
-        DeployTargetType = "SSH_SCP (/etc/genmon + Reload)"
+# 3. Known appliance device list (dynamically derived from config.json Devices catalog)
+$DeviceDefinitions = @()
+
+if ($Config -and $Config.Devices) {
+    foreach ($prop in $Config.Devices.PSObject.Properties) {
+        $devKey = $prop.Name
+        $devObj = $prop.Value
+        $enabled = if ($devObj.Enabled -ne $null) { [bool]$devObj.Enabled } else { $true }
+        if (-not $enabled) { continue }
+
+        $dispName = if ($devObj.DisplayName) { $devObj.DisplayName } else { $devKey }
+        $domain = $devObj.Domain
+        $subDir = if ($devObj.LocalSubdir) { $devObj.LocalSubdir } else { $devKey }
+        
+        $deployTypeDesc = "LOCAL_VERIFY"
+        if ($devObj.Deployment -and $devObj.Deployment.Type) {
+            switch ($devObj.Deployment.Type.ToLowerInvariant()) {
+                "ssh_scp" {
+                    $tgt = if ($devObj.Deployment.TargetDir) { $devObj.Deployment.TargetDir } else { $devObj.ConfigPath }
+                    $deployTypeDesc = "SSH_SCP ($tgt + Reload)"
+                }
+                "smb_share" {
+                    $shr = if ($devObj.Deployment.SharePath) { $devObj.Deployment.SharePath } else { $devObj.SambaShare }
+                    $deployTypeDesc = "SMB_SHARE ($shr)"
+                }
+                default {
+                    $deployTypeDesc = "LOCAL_VERIFY"
+                }
+            }
+        } elseif ($devObj.SambaShare) {
+            $deployTypeDesc = "SMB_SHARE ($($devObj.SambaShare))"
+        } elseif ($devObj.SshHost) {
+            $deployTypeDesc = "SSH_SCP ($($devObj.ConfigPath) + Reload)"
+        }
+
+        $localDir = Join-Path $BaseOutputFolder $subDir
+        $DeviceDefinitions += @{
+            Key              = $devKey
+            DisplayName      = $dispName
+            Domain           = $domain
+            LocalSubdir      = $subDir
+            LocalTargetFolder = $localDir
+            DeployTargetType = $deployTypeDesc
+        }
     }
-)
+}
+
+# Fallback default appliance definitions if config could not be parsed
+if ($DeviceDefinitions.Count -eq 0) {
+    $DeviceDefinitions = @(
+        @{
+            Key = "WebServicesHost"
+            DisplayName = "Web Services Host (DietPi)"
+            Domain = "wsh.panoramadr.com"
+            LocalSubdir = "WebServicesHost"
+            DeployTargetType = "SSH_SCP (/etc/lighttpd-certs + Reload)"
+        },
+        @{
+            Key = "Unifi_Cloud_Key_G2"
+            DisplayName = "UniFi CloudKey G2"
+            Domain = "ui.panoramadr.com"
+            LocalSubdir = "Unifi_Cloud_Key_G2"
+            DeployTargetType = "LOCAL_VERIFY"
+        },
+        @{
+            Key = "Unifi_Protect_UNVR"
+            DisplayName = "UniFi Protect UNVR"
+            Domain = "protect.panoramadr.com"
+            LocalSubdir = "Unifi_Protect_UNVR"
+            DeployTargetType = "LOCAL_VERIFY"
+        },
+        @{
+            Key = "HomeAssistant"
+            DisplayName = "Home Assistant"
+            Domain = "ha.panoramadr.com"
+            LocalSubdir = "HomeAssistant"
+            DeployTargetType = "SMB_SHARE (\\ha.panoramadr.com\ssl)"
+        },
+        @{
+            Key = "Genmon"
+            DisplayName = "Generator Monitor"
+            Domain = "genmon.panoramadr.com"
+            LocalSubdir = "Genmon"
+            DeployTargetType = "SSH_SCP (/etc/genmon + Reload)"
+        }
+    )
+}
 
 $Now = Get-Date
 $Items = [System.Collections.Generic.List[PSObject]]::new()
@@ -93,7 +147,8 @@ $DriftCount = 0
 
 foreach ($dev in $DeviceDefinitions) {
     # --- Probe 1: Local Certificate File ---
-    $localFile = Join-Path $BaseOutputFolder "$($dev.Key)\$($dev.Key)_certificate.crt"
+    $subDir = if ($dev.LocalSubdir) { $dev.LocalSubdir } else { $dev.Key }
+    $localFile = Join-Path $BaseOutputFolder "$subDir\$($dev.Key)_certificate.crt"
     $localCert = @{
         exists = $false
         domain = $dev.Domain
@@ -259,6 +314,7 @@ foreach ($dev in $DeviceDefinitions) {
         device_key = $dev.Key
         display_name = $dev.DisplayName
         domain = $dev.Domain
+        local_target_folder = if ($dev.LocalTargetFolder) { $dev.LocalTargetFolder } else { (Join-Path $BaseOutputFolder "$($dev.Key)") }
         deploy_target_type = $dev.DeployTargetType
         local_cert = $localCert
         live_cert = $liveCert
@@ -273,6 +329,7 @@ $Summary = [PSCustomObject]@{
     critical_count = $CriticalCount
     drift_count = $DriftCount
     min_days_remaining = if ($MinDays -eq 99999) { 0 } else { $MinDays }
+    base_output_folder = $BaseOutputFolder
     items = $Items
     probed_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 }

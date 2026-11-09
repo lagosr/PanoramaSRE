@@ -69,6 +69,7 @@ pub struct DomainSslDualProbe {
     pub device_key: String,
     pub display_name: String,
     pub domain: String,
+    pub local_target_folder: Option<String>,
     pub deploy_target_type: String,
     pub local_cert: SslCertificateDetails,
     pub live_cert: LiveTlsProbeDetails,
@@ -83,6 +84,7 @@ pub struct SslFleetSummary {
     pub critical_count: usize,
     pub drift_count: usize,
     pub min_days_remaining: i64,
+    pub base_output_folder: Option<String>,
     pub items: Vec<DomainSslDualProbe>,
     pub probed_at: String,
 }

@@ -19,7 +19,7 @@ try {
 
 const buildIdentifier = commitDate ? `Build ${commitDate}` : `Build ${new Date().toISOString().slice(0, 10).replace(/-/g, '')}`;
 
-let pkgVersion = '1.2.0';
+let pkgVersion = '1.2.1';
 try {
   const pkgContent = readFileSync(path.resolve(__dirname, '../package.json'), 'utf-8');
   const pkg = JSON.parse(pkgContent);

@@ -10,7 +10,10 @@ import {
   RotateCw,
   AlertTriangle,
   CheckCircle2,
+  FolderOpen,
+  ExternalLink,
 } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 
 interface EdgePkiViewProps {
   snapshot: WshSnapshot | null;
@@ -119,6 +122,41 @@ export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
               </button>
             </>
           )}
+        </div>
+      </div>
+
+      {/* Directory & Environment Banner (matches Database Backups standard) */}
+      <div className="flex flex-wrap items-center justify-between gap-3 text-xs bg-slate-50 dark:bg-slate-950/60 p-3 rounded-lg border border-slate-100 dark:border-slate-800/80 font-mono">
+        <button
+          onClick={async () => {
+            const folderPath = sslFleet?.base_output_folder;
+            if (folderPath) {
+              try {
+                await invoke('open_in_file_manager', { path: folderPath });
+              } catch (invokeErr) {
+                console.warn('Native open_in_file_manager failed:', invokeErr);
+              }
+            }
+          }}
+          disabled={!sslFleet?.base_output_folder}
+          className="flex items-center gap-2 text-slate-500 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors group cursor-pointer truncate max-w-2xl text-left disabled:cursor-default"
+          title="Click to open certificate base directory in File Explorer"
+        >
+          <FolderOpen className="w-4 h-4 text-emerald-500 dark:text-emerald-400 shrink-0 group-hover:scale-110 transition-transform" />
+          <span className="text-slate-700 dark:text-slate-300 font-semibold shrink-0">Certificate Repository:</span>
+          <span className="truncate underline decoration-dotted decoration-slate-400 dark:decoration-slate-600 underline-offset-4 group-hover:decoration-emerald-500 dark:group-hover:decoration-emerald-400">
+            {sslFleet?.base_output_folder || 'Resolving base folder...'}
+          </span>
+          <ExternalLink className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 shrink-0 group-hover:text-emerald-500 dark:group-hover:text-emerald-400" />
+        </button>
+
+        <div className="flex items-center gap-4 text-slate-500 dark:text-slate-400">
+          <span>
+            Provider: <span className="text-emerald-600 dark:text-emerald-400 font-bold">Cloudflare DNS</span>
+          </span>
+          <span>
+            Engine: <span className="text-slate-700 dark:text-slate-200 font-bold">Posh-ACME</span>
+          </span>
         </div>
       </div>
 

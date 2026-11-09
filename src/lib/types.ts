@@ -357,6 +357,7 @@ export interface DomainSslDualProbe {
   device_key: string;
   display_name: string;
   domain: string;
+  local_target_folder?: string | null;
   deploy_target_type: string;
   local_cert: SslCertificateDetails;
   live_cert: LiveTlsProbeDetails;
@@ -370,6 +371,7 @@ export interface SslFleetSummary {
   critical_count: number;
   drift_count: number;
   min_days_remaining: number;
+  base_output_folder?: string | null;
   items: DomainSslDualProbe[];
   probed_at: string;
 }
