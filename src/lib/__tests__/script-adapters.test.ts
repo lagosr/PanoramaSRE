@@ -14,7 +14,7 @@ describe('script-adapters CLI builders', () => {
       allowDirty: true,
       bumpVersion: 'patch',
     });
-    expect(cmd.command).toBe('powershell.exe');
+    expect(cmd.command).toBe('pwsh.exe');
     expect(cmd.args).toContain('-Test');
     expect(cmd.args).toContain('-AllowDirty');
     expect(cmd.args).toContain('-BumpVersion');
@@ -54,7 +54,7 @@ describe('script-adapters CLI builders', () => {
 
   it('correctly constructs deploy-cloudflare-tunnel arguments', () => {
     const checkCmd = buildCloudflareTunnelCommand('C:\\AG Projects\\PanoramaDrSuite\\tools', 'check_update');
-    expect(checkCmd.command).toBe('powershell.exe');
+    expect(checkCmd.command).toBe('pwsh.exe');
     expect(checkCmd.args).toContain('-CheckUpdate');
     expect(checkCmd.lockType).toBe('None');
 

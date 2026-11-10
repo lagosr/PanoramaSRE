@@ -117,7 +117,7 @@ impl DevSupervisor {
                 "Get-NetTCPConnection -LocalPort {} -State Listen -ErrorAction SilentlyContinue | ForEach-Object {{ Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }}",
                 port
             );
-            let _ = Command::new("powershell")
+            let _ = Command::new("pwsh.exe")
                 .args(["-NoProfile", "-NonInteractive", "-Command", &ps_cmd])
                 .creation_flags(CREATE_NO_WINDOW)
                 .output();

@@ -285,7 +285,7 @@ pub async fn launch_pageant_with_key(custom_key_path: Option<String>) -> Result<
 
         // Launch Pageant with the key path using PowerShell Start-Process
         // This opens Pageant and prompts the user once for the passphrase GUI in their user desktop session
-        let mut cmd = Command::new("powershell.exe");
+        let mut cmd = Command::new("pwsh.exe");
         cmd.args([
             "-NoProfile",
             "-Command",

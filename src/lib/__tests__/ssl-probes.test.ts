@@ -9,7 +9,7 @@ describe('SSL Dual-Probe & Renewal Adapters', () => {
 
   it('builds standard unattended renewal command under WSH_REMOTE_MUTATION lock', () => {
     const cmd = buildSslCertCommand(toolsPath, { unattended: true });
-    expect(cmd.command).toBe('powershell.exe');
+    expect(cmd.command).toBe('pwsh.exe');
     expect(cmd.lockType).toBe('WshRemoteMutation');
     expect(cmd.args).toContain('-Unattended');
     expect(cmd.args).not.toContain('-ForceRenewal');
@@ -18,7 +18,7 @@ describe('SSL Dual-Probe & Renewal Adapters', () => {
 
   it('builds force renewal command with -ForceRenewal flag', () => {
     const cmd = buildSslCertCommand(toolsPath, { unattended: true, forceRenewal: true });
-    expect(cmd.command).toBe('powershell.exe');
+    expect(cmd.command).toBe('pwsh.exe');
     expect(cmd.lockType).toBe('WshRemoteMutation');
     expect(cmd.args).toContain('-Unattended');
     expect(cmd.args).toContain('-ForceRenewal');

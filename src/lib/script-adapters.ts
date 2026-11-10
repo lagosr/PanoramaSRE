@@ -31,7 +31,7 @@ export function buildDeployCommand(
 
   return {
     scriptPath: `${appPath}\\deploy-docker.ps1`,
-    command: 'powershell.exe',
+    command: 'pwsh.exe',
     args,
     lockType: 'WshRemoteMutation',
     elevated: false,
@@ -59,7 +59,7 @@ export function buildDbManagerCommand(
 
   return {
     scriptPath: `${appPath}\\db-manager.ps1`,
-    command: 'powershell.exe',
+    command: 'pwsh.exe',
     args,
     lockType: action === 'backup' ? 'WshRemoteMutation' : 'LocalBackupIo',
     elevated: false,
@@ -94,7 +94,7 @@ export function buildSslCertCommand(
 
   return {
     scriptPath,
-    command: 'powershell.exe',
+    command: 'pwsh.exe',
     args,
     lockType: 'WshRemoteMutation',
     elevated: false,
@@ -117,7 +117,7 @@ export function buildCloudflareTunnelCommand(
 
   return {
     scriptPath,
-    command: 'powershell.exe',
+    command: 'pwsh.exe',
     args,
     lockType: action === 'update' || action === 'update_force' ? 'WshRemoteMutation' : 'None',
     elevated: false,

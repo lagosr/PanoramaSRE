@@ -74,15 +74,23 @@ pub async fn run_process_stream(
         None => None,
     };
 
+    let resolved_command = if request.command.eq_ignore_ascii_case("powershell.exe")
+        || request.command.eq_ignore_ascii_case("powershell")
+    {
+        "pwsh.exe".to_string()
+    } else {
+        request.command.clone()
+    };
+
     channel.send(ProcessOutputChunk {
         job_id: job_id.clone(),
         stream: "system".to_string(),
-        line: format!("[RUNNER] Starting: {} {}", request.command, request.args.join(" ")),
+        line: format!("[RUNNER] Starting: {} {}", resolved_command, request.args.join(" ")),
         timestamp: chrono::Utc::now().to_rfc3339(),
     }).ok();
 
     // Prepare async child process with CREATE_NO_WINDOW
-    let mut cmd = Command::new(&request.command);
+    let mut cmd = Command::new(&resolved_command);
     cmd.args(&request.args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

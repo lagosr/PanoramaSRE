@@ -640,7 +640,7 @@ export const App: React.FC = () => {
     runStreamJob({
       jobId,
       label: `Snapshot: ${app.manifest.displayName}`,
-      command: 'powershell.exe',
+      command: 'pwsh.exe',
       args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', './db-manager.ps1', 'Backup'],
       workingDir: app.workspacePath,
       lockType: 'LocalBackupIo',
@@ -673,7 +673,7 @@ export const App: React.FC = () => {
     runStreamJob({
       jobId,
       label: `ApplyLocal: ${app.manifest.displayName}`,
-      command: 'powershell.exe',
+      command: 'pwsh.exe',
       args: [
         '-NoProfile',
         '-ExecutionPolicy',
@@ -718,7 +718,7 @@ export const App: React.FC = () => {
     runStreamJob({
       jobId,
       label: `RestoreProd: ${app.manifest.displayName}`,
-      command: 'powershell.exe',
+      command: 'pwsh.exe',
       args: [
         '-NoProfile',
         '-ExecutionPolicy',
@@ -872,7 +872,7 @@ export const App: React.FC = () => {
     return runStreamJob({
       jobId,
       label: `Deploy: ${app.manifest.displayName}`,
-      command: 'powershell.exe',
+      command: 'pwsh.exe',
       args,
       workingDir: app.workspacePath,
       lockType: 'WshRemoteMutation',
@@ -1207,7 +1207,7 @@ export const App: React.FC = () => {
     runStreamJob({
       jobId,
       label: 'GFS Full Backup',
-      command: 'powershell.exe',
+      command: 'pwsh.exe',
       args: [
         '-NoProfile',
         '-ExecutionPolicy',
@@ -1250,7 +1250,7 @@ export const App: React.FC = () => {
     runStreamJob({
       jobId,
       label: actionLabel,
-      command: 'powershell.exe',
+      command: 'pwsh.exe',
       args: [
         '-NoProfile',
         '-ExecutionPolicy',
@@ -1294,7 +1294,7 @@ export const App: React.FC = () => {
     runStreamJob({
       jobId,
       label: actionLabel,
-      command: 'powershell.exe',
+      command: 'pwsh.exe',
       args: [
         '-NoProfile',
         '-ExecutionPolicy',
@@ -1620,7 +1620,7 @@ export const App: React.FC = () => {
                 runStreamJob({
                   jobId,
                   label: `Rollback: ${app.manifest.displayName}`,
-                  command: 'powershell.exe',
+                  command: 'pwsh.exe',
                   args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', './deploy-docker.ps1', '-RollbackToTag', tag],
                   workingDir: app.workspacePath,
                   lockType: 'WshRemoteMutation',

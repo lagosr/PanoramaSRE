@@ -87,7 +87,8 @@ export function ReleasePipelineView({
   const [copied, setCopied] = useState<boolean>(false);
   const [isStreamCollapsed, setIsStreamCollapsed] = useState<boolean>(false);
   const [showLogTerminal, setShowLogTerminal] = useState<boolean>(true);
-  const terminalEndRef = useRef<HTMLDivElement>(null);
+  const terminalScrollRef = useRef<HTMLDivElement>(null);
+  const isStickToBottomRef = useRef<boolean>(true);
 
   // Helper to detect if an app has an active running deployment/rollback job
   const getAppDeployJob = (slug: string) => {
@@ -302,10 +303,13 @@ export function ReleasePipelineView({
 
   const currentStageInfo = getDeploymentStage(displayedDeployJob);
 
-  // Auto-scroll terminal log when active and new lines arrive
+  // Auto-scroll terminal log internally when active, stick-to-bottom is enabled, and new lines arrive
   useEffect(() => {
-    if (!isStreamCollapsed && showLogTerminal && displayedDeployJob?.isRunning) {
-      terminalEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (!isStreamCollapsed && showLogTerminal && displayedDeployJob?.isRunning && isStickToBottomRef.current) {
+      const el = terminalScrollRef.current;
+      if (el) {
+        el.scrollTop = el.scrollHeight;
+      }
     }
   }, [displayedDeployJob?.lines?.length, displayedDeployJob?.isRunning, isStreamCollapsed, showLogTerminal]);
 
@@ -807,14 +811,14 @@ export function ReleasePipelineView({
 
                   {/* Collapsible Live Deployment Stream terminal window */}
                   {showLogTerminal && (
-                    <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-950 overflow-hidden shadow-inner">
-                      <div className="px-3 py-2 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between text-slate-400 text-[11px] font-mono">
+                    <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#050b14] overflow-hidden shadow-inner">
+                      <div className="px-3 py-2 bg-slate-100 dark:bg-slate-900/90 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between text-slate-700 dark:text-slate-400 text-[11px] font-mono">
                         <span className="flex items-center gap-1.5">
-                          <Terminal className="w-3.5 h-3.5 text-emerald-400" />
+                          <Terminal className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
                           <span>Live Deployment Stream</span>
                           {displayedDeployJob.isRunning && (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 text-[10px] border border-amber-500/30">
-                              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-800 dark:text-amber-300 text-[10px] border border-amber-500/30">
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 dark:bg-amber-400 animate-ping" />
                               LIVE
                             </span>
                           )}
@@ -826,7 +830,14 @@ export function ReleasePipelineView({
                         </div>
                       </div>
 
-                      <div className="max-h-80 min-h-[180px] overflow-y-auto bg-slate-950 p-4 font-mono text-xs space-y-0.5 select-text">
+                      <div
+                        ref={terminalScrollRef}
+                        onScroll={(e) => {
+                          const el = e.currentTarget;
+                          isStickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 40;
+                        }}
+                        className="max-h-80 min-h-[180px] overflow-y-auto bg-slate-50 dark:bg-[#050b14] p-4 font-mono text-xs space-y-0.5 select-text"
+                      >
                         {displayedDeployJob.lines.length > 0 ? (
                           displayedDeployJob.lines.map((line, idx) => (
                             <div key={idx}>{formatConsoleLine(line)}</div>
@@ -836,7 +847,6 @@ export function ReleasePipelineView({
                             Waiting for deployment output stream...
                           </div>
                         )}
-                        <div ref={terminalEndRef} />
                       </div>
                     </div>
                   )}
