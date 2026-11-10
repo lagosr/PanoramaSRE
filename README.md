@@ -83,9 +83,9 @@ PanoramaSRE bridges local workstation engineering with remote production operati
 *   **Interactive SQLite Hydrator (`ApplyLocal`):** Scans workstation backup directories (`D:\Google\My Drive\HomeApplicationData\DatabaseBackups`), verifies schema compatibility, and extracts production SQLite databases directly into the local `data/` folder with safe file locking.
 
 ### 4. Edge PKI & SSL Dual-Probe Engine
-*   **Dynamic SSL Dual-Probe:** Queries certificate validity concurrently over internal LAN IPs and external WAN Cloudflare edge, comparing local staging `.crt` files with live port `:443` certificates to detect drift or upcoming expiration across all declaratively registered devices (`Unifi_Cloud_Key_G2`, `Unifi_Protect_UNVR`, `HomeAssistant`, `Genmon`, `WebServicesHost`).
+*   **Dynamic 7-Domain SSL Dual-Probe:** Queries certificate validity concurrently over internal LAN IPs and external WAN Cloudflare edge, comparing local staging `.crt` files with live port `:443` certificates to detect drift or upcoming expiration across all 7 declaratively registered fleet devices (`Unifi_Cloud_Key_G2`, `Unifi_Protect_UNVR`, `HomeAssistant`, `Genmon`, `WebServicesHost`, `NanoStation_House`, `NanoStation_Shed`).
 *   **Directory & Explorer Navigation:** Interactive clickable path banner for the base certificate repository (`D:\Google\My Drive\HomeApplicationData\WebServicesCertificates`) and per-device row links to launch Windows Explorer directly into each certificate staging subfolder.
-*   **Headless Renewal:** Invokes `Get-SSLCerts.ps1 -Unattended` under the `WSH_REMOTE_MUTATION` lock for single-device or fleet-wide Posh-ACME DNS-01 certificate renewals with zero Windows elevation requirements.
+*   **Headless Renewal & `UnifiCoreSync` Automation:** Invokes `Get-SSLCerts.ps1 -Unattended` under the `WSH_REMOTE_MUTATION` lock for single-device or fleet-wide Posh-ACME DNS-01 certificate renewals and deployments (including 6-layer forced-command SSH deployment and active UUID / PostgreSQL synchronization on UniFi OS consoles via `UnifiCoreSync`) with zero Windows elevation requirements.
 *   **Cloudflare Zero Trust Tunnel:** Monitors `cloudflared` QUIC tunnel connections, connector version differences, and Google OIDC family access policies.
 
 ### 5. Backups & Disaster Recovery Matrix
@@ -127,10 +127,15 @@ Tier 5: Deployment Credentials       ──> .env.deploy (DEPLOY_USER, DEPLOY_HO
 PanoramaSRE and all underlying PowerShell scripts authenticate using **native Windows OpenSSH**:
 
 *   **System Binaries:** `C:\Windows\System32\OpenSSH\ssh.exe` and `scp.exe`.
-*   **Key Location:** Standard OpenSSH-formatted private key (e.g. `C:\Users\rodrigo\.ssh\rsa-key-deployment`), NOT legacy `.ppk` files.
+*   **Workstation Key Inventory (`C:\Users\rodrigo\.ssh\`):**
+    *   `rsa-key-deployment`: OpenSSH RSA private key for `WebServicesHost`, `Genmon`, `NanoStation_House`, and `NanoStation_Shed` (plus `rsa-key-deployment.ppk` for PuTTY sessions).
+    *   `unifi-cloudkey-ssl` & `unifi-protect-ssl`: Dedicated per-appliance Ed25519 keys exclusively for `ui.panoramadr.com` and `protect.panoramadr.com`, bound to `/data/panorama-security/ssl-gatekeeper.sh`.
+*   **Encrypted Google Drive DR Vault:** All workstation SSH keys and PuTTY session profiles in `C:\Users\rodrigo\.ssh\` are backed up in an OpenSSL 3 `AES-256-CBC` + `PBKDF2-HMAC-SHA512` (600,000 iterations) encrypted archive at `D:\Google\My Drive\RSA\panorama-ssh-vault.tar.gz.enc` (`Backup-SshVault.ps1` / `Restore-SshVault.ps1`; see `PanoramaDrSuite/tools/ssl-cert-manager/README.md`).
 *   **Mandatory NTFS ACL Permissions:** Windows OpenSSH rejects private keys accessible by other users. File permissions must be strictly scoped via Windows PowerShell:
     ```powershell
     icacls "$env:USERPROFILE\.ssh\rsa-key-deployment" /inheritance:r /grant:r "$($env:USERNAME):(R,W)"
+    icacls "$env:USERPROFILE\.ssh\unifi-cloudkey-ssl" /inheritance:r /grant:r "$($env:USERNAME):(R,W)"
+    icacls "$env:USERPROFILE\.ssh\unifi-protect-ssl" /inheritance:r /grant:r "$($env:USERNAME):(R,W)"
     ```
 *   **Non-Interactive Execution:** Commands execute in batch mode:
     ```powershell

@@ -633,7 +633,6 @@ export const App: React.FC = () => {
     };
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
-    setIsDrawerOpen(true);
     saveTabToDb(newTab);
 
     runStreamJob({
@@ -667,7 +666,6 @@ export const App: React.FC = () => {
     };
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
-    setIsDrawerOpen(true);
     saveTabToDb(newTab);
 
     runStreamJob({
@@ -713,7 +711,6 @@ export const App: React.FC = () => {
     };
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
-    setIsDrawerOpen(true);
     saveTabToDb(newTab);
 
     runStreamJob({
@@ -781,7 +778,6 @@ export const App: React.FC = () => {
     };
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
-    setIsDrawerOpen(true);
     saveTabToDb(newTab);
 
     runStreamJob({
@@ -824,7 +820,6 @@ export const App: React.FC = () => {
     };
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
-    setIsDrawerOpen(true);
     saveTabToDb(newTab);
 
     runStreamJob({
@@ -860,7 +855,6 @@ export const App: React.FC = () => {
     };
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
-    setIsDrawerOpen(true);
     saveTabToDb(newTab);
 
     const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', './deploy-docker.ps1'];
@@ -1070,7 +1064,6 @@ export const App: React.FC = () => {
     };
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
-    setIsDrawerOpen(true);
     saveTabToDb(newTab);
     showActionFeedback('Initiating DietPi WSH reboot...', 'pending');
 
@@ -1205,7 +1198,6 @@ export const App: React.FC = () => {
     };
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
-    setIsDrawerOpen(true);
     saveTabToDb(newTab);
 
     runStreamJob({
@@ -1249,7 +1241,6 @@ export const App: React.FC = () => {
     };
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
-    setIsDrawerOpen(true);
     saveTabToDb(newTab);
 
     runStreamJob({
@@ -1294,7 +1285,6 @@ export const App: React.FC = () => {
     };
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
-    setIsDrawerOpen(true);
     saveTabToDb(newTab);
 
     runStreamJob({
@@ -1343,7 +1333,7 @@ export const App: React.FC = () => {
     setTerminalTabs((prev) =>
       prev.map((t) => {
         if (t.id === id) {
-          const updated = { ...t, lines: [] };
+          const updated = { ...t, lines: [], exitCode: undefined, isRunning: false };
           saveTabToDb(updated);
           return updated;
         }
@@ -1482,7 +1472,6 @@ export const App: React.FC = () => {
                 };
                 setTerminalTabs((prev) => [...prev, newTab]);
                 setActiveTerminalTabId(jobId);
-                setIsDrawerOpen(true);
                 saveTabToDb(newTab);
 
                 runStreamJob({
@@ -1525,7 +1514,6 @@ export const App: React.FC = () => {
                 };
                 setTerminalTabs((prev) => [...prev, newTab]);
                 setActiveTerminalTabId(jobId);
-                setIsDrawerOpen(true);
                 saveTabToDb(newTab);
 
                 runStreamJob({
@@ -1592,7 +1580,6 @@ export const App: React.FC = () => {
                 };
                 setTerminalTabs((prev) => [...prev, newTab]);
                 setActiveTerminalTabId(jobId);
-                setIsDrawerOpen(true);
                 saveTabToDb(newTab);
 
                 runStreamJob({
@@ -1638,6 +1625,8 @@ export const App: React.FC = () => {
               isLoadingSsl={isLoadingSsl}
               onRefreshSsl={refreshSslStatus}
               onTriggerRenewal={handleTriggerSslRenewal}
+              onCloseTab={handleCloseTab}
+              onClearTab={handleClearTab}
             />
           )}
 

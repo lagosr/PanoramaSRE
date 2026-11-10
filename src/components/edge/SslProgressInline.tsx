@@ -18,6 +18,7 @@ import {
   Layers,
   Clock,
   ShieldCheck,
+  Trash2,
 } from 'lucide-react';
 import { formatConsoleLine } from '../layout/ConsoleColorizer';
 
@@ -25,6 +26,7 @@ interface SslProgressInlineProps {
   activeJob?: TerminalTab;
   onRefreshSsl?: () => void;
   onDismiss?: () => void;
+  onClear?: () => void;
 }
 
 const SSL_STAGES = [
@@ -38,6 +40,7 @@ export const SslProgressInline: React.FC<SslProgressInlineProps> = ({
   activeJob,
   onRefreshSsl,
   onDismiss,
+  onClear,
 }) => {
   const terminalEndRef = useRef<HTMLDivElement>(null);
   const [copied, setCopied] = useState(false);
@@ -51,16 +54,14 @@ export const SslProgressInline: React.FC<SslProgressInlineProps> = ({
     }
   }, [activeJob?.lines?.length, activeJob?.isRunning, isCollapsed, showLogTerminal]);
 
-  if (!activeJob) return null;
-
-  const batchProgress = getSslBatchProgress(activeJob);
+  const batchProgress = activeJob ? getSslBatchProgress(activeJob) : null;
   const stageInfo = batchProgress?.stageInfo;
   const isFinished = stageInfo?.isFinished ?? false;
   const isFailed = stageInfo?.isFailed ?? false;
-  const currentStageNum = stageInfo?.stage ?? 1;
+  const currentStageNum = stageInfo?.stage ?? 0;
 
   const handleCopyLogs = async () => {
-    if (!activeJob.lines || activeJob.lines.length === 0) return;
+    if (!activeJob?.lines || activeJob.lines.length === 0) return;
     try {
       await navigator.clipboard.writeText(activeJob.lines.join('\n'));
       setCopied(true);
@@ -117,14 +118,18 @@ export const SslProgressInline: React.FC<SslProgressInlineProps> = ({
         <div className="flex items-center gap-3.5">
           <div
             className={`w-10 h-10 rounded-xl border flex items-center justify-center shrink-0 ${
-              isFailed
+              !activeJob
+                ? 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400'
+                : isFailed
                 ? 'bg-rose-500/10 border-rose-500/30 text-rose-500 shadow-[0_0_12px_rgba(244,63,94,0.15)]'
                 : isFinished
                 ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.15)]'
                 : 'bg-amber-500/10 border-amber-500/30 text-amber-500 shadow-[0_0_12px_rgba(245,158,11,0.15)]'
             }`}
           >
-            {isFailed ? (
+            {!activeJob ? (
+              <Terminal className="w-5 h-5 text-slate-500 dark:text-slate-400" />
+            ) : isFailed ? (
               <AlertTriangle className="w-5 h-5 text-rose-500" />
             ) : isFinished ? (
               <ShieldCheck className="w-5 h-5 text-emerald-500" />
@@ -135,18 +140,20 @@ export const SslProgressInline: React.FC<SslProgressInlineProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <h4 className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                <span>{activeJob.title}</span>
+                <span>{activeJob ? activeJob.title : 'Certificate Lifecycle & Deployment Session Tracking'}</span>
               </h4>
               <span
                 className={`px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold border ${
-                  isFailed
+                  !activeJob
+                    ? 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700'
+                    : isFailed
                     ? 'bg-rose-500/20 text-rose-400 border-rose-500/40'
                     : isFinished
                     ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
                     : 'bg-amber-500/20 text-amber-300 border-amber-500/40 animate-pulse'
                 }`}
               >
-                {isFailed ? 'FAILED' : isFinished ? 'COMPLETED' : `STAGE ${currentStageNum} OF 4`}
+                {!activeJob ? 'IDLE / READY' : isFailed ? 'FAILED' : isFinished ? 'COMPLETED' : `STAGE ${currentStageNum} OF 4`}
               </span>
               {batchProgress?.isBatch && (
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30">
@@ -156,7 +163,10 @@ export const SslProgressInline: React.FC<SslProgressInlineProps> = ({
             </div>
             <div className="flex flex-wrap items-center gap-2 mt-1">
               <span className="text-xs text-slate-500 dark:text-slate-400">
-                Action: <span className="font-semibold text-slate-800 dark:text-slate-200">{stageInfo?.subStep || 'Processing'}</span>
+                Action:{' '}
+                <span className="font-semibold text-slate-800 dark:text-slate-200">
+                  {activeJob ? (stageInfo?.subStep || 'Processing') : 'Awaiting command • Select an action above to start a session'}
+                </span>
               </span>
               {batchProgress?.activeDeviceName && (
                 <span className="px-2 py-0.5 rounded text-[11px] font-mono font-semibold bg-slate-200/80 dark:bg-slate-800 text-slate-800 dark:text-slate-200 border border-slate-300 dark:border-slate-700">
@@ -173,7 +183,8 @@ export const SslProgressInline: React.FC<SslProgressInlineProps> = ({
           <button
             type="button"
             onClick={handleCopyLogs}
-            className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700/80 transition-colors flex items-center gap-1.5 shadow-xs"
+            disabled={!activeJob?.lines || activeJob.lines.length === 0}
+            className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700/80 transition-colors flex items-center gap-1.5 shadow-xs disabled:opacity-40 disabled:cursor-not-allowed"
             title="Copy all captured console output to clipboard"
           >
             {copied ? (
@@ -214,8 +225,20 @@ export const SslProgressInline: React.FC<SslProgressInlineProps> = ({
             {isCollapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
           </button>
 
+          {/* Clear button */}
+          {activeJob && onClear && (
+            <button
+              type="button"
+              onClick={onClear}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+              title="Clear & Remove Stream"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          )}
+
           {/* Dismiss button */}
-          {onDismiss && (
+          {activeJob && onDismiss && (
             <button
               type="button"
               onClick={onDismiss}
@@ -362,27 +385,41 @@ export const SslProgressInline: React.FC<SslProgressInlineProps> = ({
                 </span>
                 <div className="flex items-center gap-3">
                   <span className="text-[10px] text-slate-500">
-                    {activeJob.lines?.length || 0} lines captured
+                    {activeJob?.lines?.length || 0} lines captured
                   </span>
                   <button
                     type="button"
                     onClick={handleCopyLogs}
-                    className="hover:text-emerald-400 transition-colors flex items-center gap-1"
+                    disabled={!activeJob?.lines || activeJob.lines.length === 0}
+                    className="hover:text-emerald-400 transition-colors flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
                     title="Copy log text"
                   >
                     <Copy className="w-3 h-3" />
                     <span>Copy</span>
                   </button>
+                  {activeJob && onClear && (
+                    <button
+                      type="button"
+                      onClick={onClear}
+                      className="hover:text-rose-400 transition-colors flex items-center gap-1"
+                      title="Clear and remove this stream"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      <span>Clear</span>
+                    </button>
+                  )}
                 </div>
               </div>
 
               <div className="p-4 font-mono text-xs max-h-72 min-h-[160px] overflow-y-auto select-text space-y-0.5">
-                {activeJob.lines && activeJob.lines.length > 0 ? (
+                {activeJob?.lines && activeJob.lines.length > 0 ? (
                   activeJob.lines.map((line, idx) => (
                     <div key={idx}>{formatConsoleLine(line)}</div>
                   ))
                 ) : (
-                  <div className="text-slate-600 italic">Waiting for command runner output...</div>
+                  <div className="text-slate-500 italic">
+                    No active certificate renewal or deployment session in progress. Output will stream here automatically upon execution.
+                  </div>
                 )}
                 <div ref={terminalEndRef} />
               </div>
@@ -392,7 +429,12 @@ export const SslProgressInline: React.FC<SslProgressInlineProps> = ({
           {/* Footer Bar */}
           <div className="flex flex-wrap items-center justify-between gap-3 pt-1 border-t border-slate-100 dark:border-slate-800/80">
             <div className="text-xs font-mono text-slate-500">
-              {activeJob.isRunning ? (
+              {!activeJob ? (
+                <span className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
+                  <Clock className="w-3.5 h-3.5" />
+                  Ready • Awaiting certificate or deployment command
+                </span>
+              ) : activeJob.isRunning ? (
                 <span className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
                   <Loader2 className="w-3 h-3 animate-spin" />
                   Execution in progress under resource lock
@@ -411,7 +453,7 @@ export const SslProgressInline: React.FC<SslProgressInlineProps> = ({
             </div>
 
             <div className="flex items-center gap-2">
-              {isFinished && onRefreshSsl && (
+              {onRefreshSsl && (
                 <button
                   type="button"
                   onClick={onRefreshSsl}
@@ -421,7 +463,18 @@ export const SslProgressInline: React.FC<SslProgressInlineProps> = ({
                   Re-probe Fleet Now
                 </button>
               )}
-              {onDismiss && (
+              {activeJob && onClear && (
+                <button
+                  type="button"
+                  onClick={onClear}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-400 border border-rose-500/30 transition-colors flex items-center gap-1.5"
+                  title="Clear stream logs and reset to idle session"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Clear Stream
+                </button>
+              )}
+              {activeJob && onDismiss && (
                 <button
                   type="button"
                   onClick={onDismiss}

@@ -67,15 +67,19 @@ if ($Config -and $Config.Devices) {
         if ($devObj.Deployment -and $devObj.Deployment.Type) {
             switch ($devObj.Deployment.Type.ToLowerInvariant()) {
                 "ssh_scp" {
-                    $tgt = if ($devObj.Deployment.RemoteCombinedPemFileName) {
-                        $targetBase = if ($devObj.Deployment.TargetDir) { $devObj.Deployment.TargetDir.TrimEnd('/', '\') } else { "/etc" }
-                        "$targetBase/$($devObj.Deployment.RemoteCombinedPemFileName)"
-                    } elseif ($devObj.Deployment.TargetDir) {
-                        $devObj.Deployment.TargetDir
+                    if ($null -ne $devObj.Deployment.PSObject.Properties['UnifiCoreSync'] -and [bool]$devObj.Deployment.UnifiCoreSync) {
+                        $deployTypeDesc = "SSH_SCP (UniFi OS Core + Reload)"
                     } else {
-                        $devObj.ConfigPath
+                        $tgt = if ($devObj.Deployment.RemoteCombinedPemFileName) {
+                            $targetBase = if ($devObj.Deployment.TargetDir) { $devObj.Deployment.TargetDir.TrimEnd('/', '\') } else { "/etc" }
+                            "$targetBase/$($devObj.Deployment.RemoteCombinedPemFileName)"
+                        } elseif ($devObj.Deployment.TargetDir) {
+                            $devObj.Deployment.TargetDir
+                        } else {
+                            $devObj.ConfigPath
+                        }
+                        $deployTypeDesc = "SSH_SCP ($tgt + Reload)"
                     }
-                    $deployTypeDesc = "SSH_SCP ($tgt + Reload)"
                 }
                 "smb_share" {
                     $shr = if ($devObj.Deployment.SharePath) { $devObj.Deployment.SharePath } else { $devObj.SambaShare }
@@ -118,14 +122,14 @@ if ($DeviceDefinitions.Count -eq 0) {
             DisplayName = "UniFi CloudKey G2"
             Domain = "ui.panoramadr.com"
             LocalSubdir = "Unifi_Cloud_Key_G2"
-            DeployTargetType = "LOCAL_VERIFY"
+            DeployTargetType = "SSH_SCP (UniFi OS Core + Reload)"
         },
         @{
             Key = "Unifi_Protect_UNVR"
             DisplayName = "UniFi Protect UNVR"
             Domain = "protect.panoramadr.com"
             LocalSubdir = "Unifi_Protect_UNVR"
-            DeployTargetType = "LOCAL_VERIFY"
+            DeployTargetType = "SSH_SCP (UniFi OS Core + Reload)"
         },
         @{
             Key = "HomeAssistant"

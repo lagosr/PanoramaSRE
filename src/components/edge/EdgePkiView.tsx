@@ -32,6 +32,8 @@ interface EdgePkiViewProps {
     deployTargets?: string[];
     targetDevice?: string;
   }) => void;
+  onCloseTab?: (id: string) => void;
+  onClearTab?: (id: string) => void;
 }
 
 export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
@@ -40,26 +42,54 @@ export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
   isLoadingSsl = false,
   onRefreshSsl,
   onTriggerRenewal,
+  onCloseTab,
+  onClearTab,
 }) => {
   const [isForceModalOpen, setIsForceModalOpen] = useState(false);
-  const [isDismissed, setIsDismissed] = useState(false);
+  const [trackedJobId, setTrackedJobId] = useState<string | null>(null);
 
   // Detect active SSL renewal/deploy background job
   const activeSslJob = terminalTabs.find(
     (t) => t.id.startsWith('ssl-renew-') && t.isRunning
   );
 
-  // If a job just completed, keep tracking the last job until dismissed
-  const latestSslJob = activeSslJob || terminalTabs
-    .filter((t) => t.id.startsWith('ssl-renew-'))
-    .slice(-1)[0];
-
-  // When a new job starts running, make sure it is not dismissed
+  // When a new job starts running, track it so it remains visible until dismissed
   useEffect(() => {
     if (activeSslJob) {
-      setIsDismissed(false);
+      setTrackedJobId(activeSslJob.id);
     }
   }, [activeSslJob?.id]);
+
+  // Sort SSL jobs newest first by finished/created timestamp or ID
+  const sslJobs = terminalTabs
+    .filter((t) => t.id.startsWith('ssl-renew-'))
+    .sort((a, b) => {
+      const timeA = a.finishedAt || a.createdAt || a.id;
+      const timeB = b.finishedAt || b.createdAt || b.id;
+      return timeB.localeCompare(timeA);
+    });
+
+  // Only display an active running job, or a job explicitly initiated during this session
+  const latestSslJob = activeSslJob || (trackedJobId ? sslJobs.find((t) => t.id === trackedJobId) : null);
+
+  const handleDismissJob = (jobId?: string) => {
+    setTrackedJobId(null);
+    if (jobId && onCloseTab) {
+      onCloseTab(jobId);
+    }
+  };
+
+  const handleClearJob = (jobId?: string) => {
+    setTrackedJobId(null);
+    if (jobId) {
+      if (onClearTab) {
+        onClearTab(jobId);
+      }
+      if (onCloseTab) {
+        onCloseTab(jobId);
+      }
+    }
+  };
 
   const totalDomains = sslFleet?.total_domains ?? 7;
   const healthyCount = sslFleet?.healthy_count ?? 0;
@@ -136,7 +166,7 @@ export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
               onClick={onRefreshSsl}
               disabled={isLoadingSsl}
               className="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 transition-colors flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 disabled:opacity-50"
-              title="Execute immediate live dual-probe check across all 5 lab domains"
+              title={`Execute immediate live dual-probe check across all ${totalDomains} lab domains`}
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isLoadingSsl ? 'animate-spin text-emerald-500 dark:text-emerald-400' : ''}`} />
               Re-probe Fleet
@@ -272,16 +302,7 @@ export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
         </div>
       </div>
 
-      {/* Inline Live SSL Renewal & Deployment Progress Area */}
-      {latestSslJob && !isDismissed && (
-        <SslProgressInline
-          activeJob={latestSslJob}
-          onRefreshSsl={onRefreshSsl}
-          onDismiss={() => setIsDismissed(true)}
-        />
-      )}
-
-      {/* 5-Domain SSL Certificate Matrix with Live Dual-Probe */}
+      {/* 7-Domain SSL Certificate Matrix with Live Dual-Probe (Devices Table) */}
       <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4">
         <div className="flex items-center justify-between">
           <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm flex items-center gap-2">
@@ -305,11 +326,19 @@ export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
         />
       </div>
 
+      {/* Inline Live SSL Renewal & Deployment Progress Area (Deployment Output Section) */}
+      <SslProgressInline
+        activeJob={latestSslJob || undefined}
+        onRefreshSsl={onRefreshSsl}
+        onDismiss={latestSslJob ? () => handleDismissJob(latestSslJob.id) : undefined}
+        onClear={latestSslJob ? () => handleClearJob(latestSslJob.id) : undefined}
+      />
+
       {/* Confirmation Modal for Force Renew All */}
       <ConfirmDangerModal
         isOpen={isForceModalOpen}
         title="Force Renew All SSL Certificates"
-        description="This operation executes 'Get-SSLCerts.ps1 -Unattended -ForceRenewal'. It will request new certificates from Let's Encrypt via Cloudflare DNS for all 5 domains, copy certificates over SSH/SMB, and restart services (Lighttpd, Genmon) regardless of remaining days. Continue?"
+        description={`This operation executes 'Get-SSLCerts.ps1 -Unattended -ForceRenewal'. It will request new certificates from Let's Encrypt via Cloudflare DNS for all ${totalDomains} domains, copy certificates over SSH/SMB, and restart services (UniFi OS Core, Lighttpd, Genmon) regardless of remaining days. Continue?`}
         confirmWord="FORCE RENEW"
         confirmLabel="Force Renew All"
         onConfirm={handleForceRenewConfirm}

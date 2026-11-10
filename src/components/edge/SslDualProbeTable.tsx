@@ -157,7 +157,7 @@ export const SslDualProbeTable: React.FC<SslDualProbeTableProps> = ({
             <tr>
               <td colSpan={5} className="py-8 text-center text-slate-400 font-sans">
                 <RefreshCw className="w-5 h-5 mx-auto mb-2 animate-spin text-emerald-400" />
-                Executing dual-probe TLS handshakes across 5 domains...
+                Executing dual-probe TLS handshakes across {items.length || 7} fleet domains...
               </td>
             </tr>
           ) : items.length === 0 ? (
