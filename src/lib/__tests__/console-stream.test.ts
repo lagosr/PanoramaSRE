@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { getTabFinishedDetails, TerminalTab } from '../../components/layout/SreEventsConsolePanel';
+import { formatConsoleLine } from '../../components/layout/ConsoleColorizer';
+import React from 'react';
 
 describe('Console Stream Finished Details & Ordering', () => {
   it('returns Running now and pins priority timestamp for active streams', () => {
@@ -85,5 +87,24 @@ describe('Console Stream Finished Details & Ordering', () => {
     expect(sorted[0].id).toBe('running');
     expect(sorted[1].id).toBe('newer');
     expect(sorted[2].id).toBe('older');
+  });
+
+  it('does not false-positive color BuildKit RUN step headers containing console.error, FAIL, or dirty', () => {
+    const elfStepHeader = `#25 [runner 9/10] RUN node -e 'if (!isElf) { console.error("[ELF-GATE] FAIL: invalid"); }'`;
+    const manifestStepHeader = `#26 [runner 10/10] RUN node -e 'fs.writeFileSync("/app/release-manifest.json", JSON.stringify({git:{dirty:process.env.GIT_DIRTY==="true"}}))'`;
+
+    const el25 = formatConsoleLine(elfStepHeader) as React.ReactElement<{ className?: string; children?: React.ReactNode }>;
+    const el26 = formatConsoleLine(manifestStepHeader) as React.ReactElement<{ className?: string; children?: React.ReactNode }>;
+
+    expect(el25.props.className || '').not.toContain('text-rose-600');
+    expect(el25.props.className || '').not.toContain('text-amber-700');
+    expect(el26.props.className || '').not.toContain('text-rose-600');
+    expect(el26.props.className || '').not.toContain('text-amber-700');
+
+    const actualBuildKitErr = formatConsoleLine('#16 ERROR: process "/bin/sh -c npm ci" did not complete successfully: exit code: 1') as React.ReactElement<{ className?: string }>;
+    const actualElfFail = formatConsoleLine('1.717 [ELF-GATE] FAIL: /app/node_modules/@img/sharp-linux-x64/lib/sharp.node has invalid architecture') as React.ReactElement<{ className?: string }>;
+
+    expect(actualBuildKitErr.props.className).toContain('text-rose-600');
+    expect(actualElfFail.props.className).toContain('text-rose-600');
   });
 });

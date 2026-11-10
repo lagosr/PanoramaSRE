@@ -637,10 +637,10 @@ export function ReleasePipelineView({
                       <span
                         className={`px-2.5 py-0.5 rounded-full text-[11px] font-mono font-bold border flex items-center gap-1.5 ${
                           currentStageInfo?.isFailed
-                            ? 'bg-rose-500/20 text-rose-400 border-rose-500/40'
+                            ? 'bg-rose-500/20 text-rose-700 dark:text-rose-300 border-rose-500/40'
                             : currentStageInfo?.isFinished
-                            ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
-                            : 'bg-amber-500/20 text-amber-300 border-amber-500/40 animate-pulse'
+                            ? 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border-emerald-500/40'
+                            : 'bg-amber-500/20 text-amber-800 dark:text-amber-300 border-amber-500/40 animate-pulse'
                         }`}
                       >
                         {displayedDeployJob.isRunning && (
@@ -661,7 +661,15 @@ export function ReleasePipelineView({
                         </span>
                       </p>
                       {currentStageInfo?.subStep && (
-                        <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-900 dark:bg-slate-950/80 text-amber-300 border border-amber-500/30">
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-mono font-semibold border ${
+                            currentStageInfo.isFinished
+                              ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
+                              : currentStageInfo.isFailed
+                              ? 'bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/30'
+                              : 'bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-500/30'
+                          }`}
+                        >
                           {currentStageInfo.subStep}
                         </span>
                       )}
@@ -867,8 +875,8 @@ export function ReleasePipelineView({
                     <span className="text-xs uppercase tracking-wider font-semibold text-slate-400">Active Production Release</span>
                     <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold font-mono ${
                       isHealthy 
-                        ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' 
-                        : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
+                        ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30' 
+                        : 'bg-rose-500/15 text-rose-700 dark:text-rose-400 border border-rose-500/30'
                     }`}>
                       <Activity className="w-3 h-3" />
                       {selectedApp.health?.status?.toUpperCase() || 'UNREACHABLE'}
@@ -885,7 +893,7 @@ export function ReleasePipelineView({
                 href={`https://wsh.panoramadr.com${selectedApp.manifest.basePath}`}
                 target="_blank"
                 rel="noreferrer"
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-300 border border-slate-700/60 transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700/60 transition-colors"
               >
                 <Globe className="w-3.5 h-3.5 text-emerald-400" />
                 <span>Open in Production</span>
@@ -1213,7 +1221,7 @@ export function ReleasePipelineView({
                     <Eye className="w-3.5 h-3.5 text-emerald-500 dark:text-emerald-400" />
                     <span>Inspect Diff</span>
                   </button>
-                  <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-mono">
+                  <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30 font-mono">
                     {comp?.state || 'IN_SYNC'}
                   </span>
                 </div>
@@ -1259,7 +1267,7 @@ export function ReleasePipelineView({
               {/* Deploy Trigger Form */}
               <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider">
+                  <h4 className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider">
                     Stage 6: Orchestrate Production Deployment
                   </h4>
                   <div className="flex items-center gap-2">
@@ -1416,8 +1424,8 @@ export function ReleasePipelineView({
                   )}
                 </div>
 
-                <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-xs text-rose-300 space-y-1">
-                  <div className="flex items-center gap-1.5 font-semibold text-rose-400">
+                <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-xs text-rose-700 dark:text-rose-300 space-y-1">
+                  <div className="flex items-center gap-1.5 font-semibold text-rose-800 dark:text-rose-400">
                     <AlertTriangle className="w-4 h-4 shrink-0" />
                     Schema Safety Gate
                   </div>
