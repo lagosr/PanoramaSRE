@@ -37,6 +37,32 @@ export interface AppManifest {
   };
 }
 
+export type BuildTelemetryStatus = 'OPTIMAL' | 'WARN_REGRESSION' | 'WARN_BUDGET' | 'WARN_CEILING';
+
+export interface BuildTelemetry {
+  profile: string;
+  cache_posture: 'warm' | 'cold';
+  status: BuildTelemetryStatus;
+  total_duration_sec: number;
+  host_typecheck_sec: number;
+  types_prevalidated: boolean;
+  context_transfer_kb: number;
+  deps_stage_sec: number;
+  deps_cache_hit: boolean;
+  next_build_sec: number;
+  turbopack_compile_sec: number;
+  next_typecheck_sec: number;
+  page_data_sec: number;
+  arm64_natives_sec: number;
+  arm64_natives_cache_hit: boolean;
+  elf_verified_count: number;
+  export_tar_sec: number;
+  baseline_duration_sec?: number | null;
+  delta_sec?: number | null;
+  regression_pct?: number | null;
+  warnings: string[];
+}
+
 export interface ReleaseInfo {
   release_id: string;
   semver: string;
@@ -48,6 +74,7 @@ export interface ReleaseInfo {
   dirty: boolean;
   deployed_at: string;
   deps_lock_sha256?: string;
+  build_telemetry?: BuildTelemetry | null;
 }
 
 export interface AppHealth {
@@ -98,6 +125,7 @@ export interface AppCompositionReport {
   blast_radius_badges: string[];
   new_env_keys: string[];
   recent_candidates?: GitReleaseCandidate[];
+  local_build_telemetry?: BuildTelemetry | null;
 }
 
 export type DevServerStatus = 'STOPPED' | 'RUNNING_MANAGED' | 'RUNNING_EXTERNAL';

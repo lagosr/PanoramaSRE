@@ -45,6 +45,18 @@ pub struct AppCompositionReport {
     pub blast_radius_badges: Vec<String>, // "DB_MIGRATION", "AUTH_SECURITY", "ENV_CONTRACT", "DEPENDENCY_DELTA", "DOCKER_INFRA", "APP_LOGIC_UI"
     pub new_env_keys: Vec<String>,
     pub recent_candidates: Vec<GitReleaseCandidate>,
+    pub local_build_telemetry: Option<serde_json::Value>,
+}
+
+fn read_local_build_telemetry(repo_dir: &Path) -> Option<serde_json::Value> {
+    let manifest_path = repo_dir.join("release-manifest.json");
+    if !manifest_path.exists() {
+        return None;
+    }
+    let raw = std::fs::read_to_string(&manifest_path).ok()?;
+    let trimmed = raw.trim_start_matches('\u{feff}');
+    let parsed: serde_json::Value = serde_json::from_str(trimmed).ok()?;
+    parsed.get("build_telemetry").cloned().filter(|v| !v.is_null())
 }
 
 fn run_git(repo_dir: &Path, args: &[&str]) -> Result<String, String> {
@@ -171,6 +183,8 @@ pub async fn compute_app_composition(
         }
     }
 
+    let local_build_telemetry = read_local_build_telemetry(repo);
+
     let Some(ref p_sha) = prod_sha else {
         let all_touched: Vec<String> = dirty_files.iter().map(|f| f.path.clone()).collect();
         let blast_radius_badges = classify_blast_radius(&all_touched, false);
@@ -197,6 +211,7 @@ pub async fn compute_app_composition(
             blast_radius_badges,
             new_env_keys: vec![],
             recent_candidates,
+            local_build_telemetry,
         });
     };
 
@@ -221,6 +236,7 @@ pub async fn compute_app_composition(
             blast_radius_badges,
             new_env_keys: vec![],
             recent_candidates,
+            local_build_telemetry,
         });
     }
 
@@ -244,6 +260,7 @@ pub async fn compute_app_composition(
             blast_radius_badges: vec![],
             new_env_keys: vec![],
             recent_candidates,
+            local_build_telemetry,
         });
     }
 
@@ -335,6 +352,7 @@ pub async fn compute_app_composition(
         blast_radius_badges,
         new_env_keys,
         recent_candidates,
+        local_build_telemetry,
     })
 }
 

@@ -3,6 +3,11 @@ import { createPortal } from 'react-dom';
 import { DiscoveredApp } from '../../lib/types';
 import { ProvenanceBadge } from '../ui/ProvenanceBadge';
 import { BlastRadiusBadge } from '../ui/BlastRadiusBadge';
+import {
+  resolveActiveBuildTelemetry,
+  evaluateBuildHealthBadge,
+  getAppTelemetryTargets,
+} from '../../lib/buildTelemetry';
 
 interface ReleaseCompositionDrawerProps {
   app: DiscoveredApp | null;
@@ -25,6 +30,10 @@ export function ReleaseCompositionDrawer({ app, isOpen, onClose }: ReleaseCompos
   if (!isOpen || !app) return null;
 
   const comp = app.composition;
+  const appIdent = app.manifest.containerName || app.manifest.slug || app.manifest.appId;
+  const resolvedTel = resolveActiveBuildTelemetry(app.health?.release, comp);
+  const telBadge = evaluateBuildHealthBadge(resolvedTel.telemetry, appIdent);
+  const telTargets = getAppTelemetryTargets(appIdent, telBadge.cachePosture);
 
   const content = (
     <div
@@ -92,6 +101,54 @@ export function ReleaseCompositionDrawer({ app, isOpen, onClose }: ReleaseCompos
                 Dirty: {comp?.local_dirty ? 'Yes (uncommitted files)' : 'Clean'}
               </p>
             </div>
+          </div>
+
+          {/* Build Telemetry & Efficiency Snapshot */}
+          <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                Build Telemetry ({resolvedTel.source === 'LIVE_PROD' ? 'Live Prod' : resolvedTel.source === 'LOCAL_MANIFEST' ? 'Local Manifest' : 'Armed Targets'})
+              </span>
+              <span
+                className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${
+                  telBadge.tone === 'emerald'
+                    ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
+                    : telBadge.tone === 'amber'
+                    ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30'
+                    : telBadge.tone === 'rose'
+                    ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/30'
+                    : 'bg-slate-200/70 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700'
+                }`}
+              >
+                {telBadge.label}
+              </span>
+            </div>
+            {resolvedTel.telemetry ? (
+              <div className="grid grid-cols-3 gap-2 text-[11px] font-mono text-slate-600 dark:text-slate-300 pt-1">
+                <div>
+                  <span className="text-slate-400 block text-[10px]">Total / Target</span>
+                  <span className="font-semibold text-slate-900 dark:text-slate-100">
+                    {resolvedTel.telemetry.total_duration_sec}s / ≤{telTargets.activeTargetSec}s
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[10px]">Deps Cache / ELF</span>
+                  <span className="font-semibold text-slate-900 dark:text-slate-100">
+                    {resolvedTel.telemetry.deps_cache_hit ? 'HIT' : 'MISS'} • {resolvedTel.telemetry.elf_verified_count} .node
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[10px]">Context Transfer</span>
+                  <span className="font-semibold text-slate-900 dark:text-slate-100">
+                    {resolvedTel.telemetry.context_transfer_kb} KB
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <p className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                Warm Target: ≤{telTargets.targetWarmSec}s • Cold Target: ≤{telTargets.targetColdSec}s • Regression Warn: +{telTargets.regressionThresholdPct}%
+              </p>
+            )}
           </div>
 
           {/* Blast Radius Flags */}

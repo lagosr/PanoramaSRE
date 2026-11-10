@@ -2666,7 +2666,7 @@ dependencies = [
 
 [[package]]
 name = "panorama-sre"
-version = "1.2.3"
+version = "1.2.4"
 dependencies = [
  "chrono",
  "notify",

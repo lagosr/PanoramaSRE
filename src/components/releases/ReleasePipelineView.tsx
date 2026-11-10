@@ -35,6 +35,11 @@ import { TerminalTab } from '../layout/SreTerminalDrawer';
 import { ReleaseCompositionDrawer } from '../hud/ReleaseCompositionDrawer';
 import { BlastRadiusBadge } from '../ui/BlastRadiusBadge';
 import { formatConsoleLine } from '../layout/ConsoleColorizer';
+import {
+  resolveActiveBuildTelemetry,
+  evaluateBuildHealthBadge,
+  getAppTelemetryTargets,
+} from '../../lib/buildTelemetry';
 
 interface ReleasePipelineViewProps {
   apps: DiscoveredApp[];
@@ -163,6 +168,16 @@ export function ReleasePipelineView({
   const comp = selectedApp?.composition;
   const prodRelease = selectedApp?.health?.release;
   const isHealthy = selectedApp?.health?.status === 'healthy';
+  const selectedAppIdent = selectedApp
+    ? selectedApp.manifest.containerName || selectedApp.manifest.slug || selectedApp.manifest.appId
+    : '';
+  const selectedResolvedTelemetry = resolveActiveBuildTelemetry(prodRelease, comp);
+  const selectedTelemetry = selectedResolvedTelemetry.telemetry;
+  const selectedHealthBadge = evaluateBuildHealthBadge(selectedTelemetry, selectedAppIdent);
+  const selectedTelemetryTargets = getAppTelemetryTargets(
+    selectedAppIdent,
+    selectedHealthBadge.cachePosture
+  );
 
   // Deterministically and monotonically parse deployment progress & exact build steps
   const getDeploymentStage = (tab?: TerminalTab) => {
@@ -455,6 +470,9 @@ export function ReleasePipelineView({
             const isSelected = selectedApp?.manifest.slug === app.manifest.slug;
             const isHealthy = app.health?.status === 'healthy';
             const isCritical = !isHealthy || app.provenanceState === 'PROD_UNREACHABLE' || app.provenanceState === 'DIRTY_PROD';
+            const appIdent = app.manifest.containerName || app.manifest.slug || app.manifest.appId;
+            const appResolvedTel = resolveActiveBuildTelemetry(app.health?.release, appComp);
+            const appBuildBadge = evaluateBuildHealthBadge(appResolvedTel.telemetry, appIdent);
 
             return (
               <div
@@ -514,6 +532,20 @@ export function ReleasePipelineView({
                     <span>Pending:</span>
                     <span className={`font-bold ${undeployedCount > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-500'}`}>
                       {undeployedCount} {isLocalDirty ? '(+ uncommitted)' : ''}
+                    </span>
+                    <span
+                      className={`px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold border whitespace-nowrap ${
+                        appBuildBadge.tone === 'emerald'
+                          ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
+                          : appBuildBadge.tone === 'amber'
+                          ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/40'
+                          : appBuildBadge.tone === 'rose'
+                          ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/40'
+                          : 'bg-slate-100 dark:bg-slate-800/80 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700/80'
+                      }`}
+                      title={`Build Telemetry: ${appBuildBadge.label}`}
+                    >
+                      {appBuildBadge.shortLabel}
                     </span>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
@@ -911,8 +943,246 @@ export function ReleasePipelineView({
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Release Composition Summary */}
-            <div className="lg:col-span-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-sm space-y-5">
+            <div className="lg:col-span-2 space-y-6">
+              {/* Build Efficiency & Telemetry Card */}
+              <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-sm space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800/80 pb-3.5">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm flex items-center gap-2">
+                        <Container className="w-4 h-4 text-emerald-500 dark:text-emerald-400" />
+                        <span>Build Efficiency & Telemetry</span>
+                      </h3>
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold border ${
+                          selectedHealthBadge.tone === 'emerald'
+                            ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
+                            : selectedHealthBadge.tone === 'amber'
+                            ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/40'
+                            : selectedHealthBadge.tone === 'rose'
+                            ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/40'
+                            : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700'
+                        }`}
+                      >
+                        {selectedHealthBadge.label}
+                      </span>
+                      <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-100 dark:bg-slate-800/90 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                        {selectedResolvedTelemetry.source === 'LIVE_PROD'
+                          ? 'LIVE PROD'
+                          : selectedResolvedTelemetry.source === 'LOCAL_MANIFEST'
+                          ? 'LOCAL MANIFEST'
+                          : 'TARGETS ARMED'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-500 font-mono mt-1">
+                      Profile: {selectedTelemetry?.profile || 'nextjs-standalone'} • Warm Target: ≤{selectedTelemetryTargets.targetWarmSec}s • Cold Target: ≤{selectedTelemetryTargets.targetColdSec}s • Ceiling: {selectedTelemetryTargets.maxCeilingSec}s
+                    </p>
+                  </div>
+                </div>
+
+                {selectedTelemetry ? (
+                  <>
+                    {/* 4 KPI Tiles */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono">
+                      <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
+                        <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">
+                          Total Build vs Target
+                        </span>
+                        <div className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                          {selectedTelemetry.total_duration_sec}s{' '}
+                          <span className="text-xs font-normal text-slate-400">
+                            / ≤{selectedTelemetryTargets.activeTargetSec}s
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-slate-500 block mt-1 uppercase">
+                          Posture: {selectedTelemetry.cache_posture}
+                        </span>
+                      </div>
+
+                      <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
+                        <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">
+                          Baseline Delta (+{selectedTelemetryTargets.regressionThresholdPct}% Gate)
+                        </span>
+                        <div
+                          className={`text-sm font-bold ${
+                            typeof selectedTelemetry.regression_pct === 'number' &&
+                            selectedTelemetry.regression_pct > selectedTelemetryTargets.regressionThresholdPct
+                              ? 'text-amber-600 dark:text-amber-400'
+                              : 'text-slate-900 dark:text-slate-100'
+                          }`}
+                        >
+                          {typeof selectedTelemetry.regression_pct === 'number'
+                            ? `${selectedTelemetry.regression_pct > 0 ? '+' : ''}${selectedTelemetry.regression_pct}%`
+                            : 'Baseline Set'}
+                        </div>
+                        <span className="text-[10px] text-slate-500 block mt-1 truncate">
+                          {typeof selectedTelemetry.baseline_duration_sec === 'number'
+                            ? `Prev: ${selectedTelemetry.baseline_duration_sec}s (${selectedTelemetry.delta_sec && selectedTelemetry.delta_sec > 0 ? '+' : ''}${selectedTelemetry.delta_sec ?? 0}s)`
+                            : 'Initial posture reference'}
+                        </span>
+                      </div>
+
+                      <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
+                        <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">
+                          Deps Cache & ELF Gate
+                        </span>
+                        <div className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                          <span
+                            className={
+                              selectedTelemetry.deps_cache_hit
+                                ? 'text-emerald-600 dark:text-emerald-400'
+                                : 'text-amber-600 dark:text-amber-400'
+                            }
+                          >
+                            {selectedTelemetry.deps_cache_hit ? 'CACHED' : `${selectedTelemetry.deps_stage_sec}s`}
+                          </span>
+                          <span className="text-slate-400"> • </span>
+                          <span>{selectedTelemetry.elf_verified_count} ELF</span>
+                        </div>
+                        <span className="text-[10px] text-slate-500 block mt-1 truncate">
+                          aarch64 (0xb7) verified
+                        </span>
+                      </div>
+
+                      <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
+                        <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">
+                          Context & Pre-Validated Types
+                        </span>
+                        <div className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                          {selectedTelemetry.context_transfer_kb} KB
+                        </div>
+                        <span className="text-[10px] text-slate-500 block mt-1 truncate">
+                          Types: {selectedTelemetry.types_prevalidated ? `Host (${selectedTelemetry.host_typecheck_sec}s)` : 'In-Container'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Multi-Segment Proportional Stage Progress Bar */}
+                    {(() => {
+                      const hostTsc = Math.max(0, selectedTelemetry.host_typecheck_sec || 0);
+                      const depsSec = Math.max(0, selectedTelemetry.deps_stage_sec || 0);
+                      const nextSec = Math.max(0, selectedTelemetry.next_build_sec || 0);
+                      const tailSec = Math.max(
+                        0,
+                        (selectedTelemetry.arm64_natives_sec || 0) + (selectedTelemetry.export_tar_sec || 0)
+                      );
+                      const sumSec = Math.max(0.1, hostTsc + depsSec + nextSec + tailSec);
+                      const pctHost = Math.round((hostTsc / sumSec) * 100);
+                      const pctDeps = Math.round((depsSec / sumSec) * 100);
+                      const pctNext = Math.round((nextSec / sumSec) * 100);
+                      const pctTail = Math.max(0, 100 - pctHost - pctDeps - pctNext);
+
+                      return (
+                        <div className="space-y-2">
+                          <div className="h-2.5 w-full rounded-full bg-slate-100 dark:bg-slate-950 overflow-hidden flex border border-slate-200 dark:border-slate-800">
+                            {pctHost > 0 && (
+                              <div
+                                style={{ width: `${pctHost}%` }}
+                                className="bg-cyan-500 dark:bg-cyan-400 h-full"
+                                title={`Host Typecheck (tsc): ${hostTsc}s`}
+                              />
+                            )}
+                            {pctDeps > 0 && (
+                              <div
+                                style={{ width: `${pctDeps}%` }}
+                                className="bg-amber-500 dark:bg-amber-400 h-full"
+                                title={`Dependencies (npm ci): ${depsSec}s`}
+                              />
+                            )}
+                            {pctNext > 0 && (
+                              <div
+                                style={{ width: `${pctNext}%` }}
+                                className="bg-emerald-500 dark:bg-emerald-400 h-full"
+                                title={`Next.js Build (amd64): ${nextSec}s`}
+                              />
+                            )}
+                            {pctTail > 0 && (
+                              <div
+                                style={{ width: `${pctTail}%` }}
+                                className="bg-indigo-500 dark:bg-indigo-400 h-full"
+                                title={`ARM64 Natives & Export: ${Math.round(tailSec * 10) / 10}s`}
+                              />
+                            )}
+                          </div>
+                          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                            <span className="flex items-center gap-1.5">
+                              <span className="w-2 h-2 rounded-full bg-cyan-500 dark:bg-cyan-400" />
+                              Host tsc: {hostTsc}s
+                            </span>
+                            <span className="flex items-center gap-1.5">
+                              <span className="w-2 h-2 rounded-full bg-amber-500 dark:bg-amber-400" />
+                              Deps (npm ci): {selectedTelemetry.deps_cache_hit ? '0s (CACHED)' : `${depsSec}s`}
+                            </span>
+                            <span className="flex items-center gap-1.5">
+                              <span className="w-2 h-2 rounded-full bg-emerald-500 dark:bg-emerald-400" />
+                              Next.js Build: {nextSec}s (compile {selectedTelemetry.turbopack_compile_sec}s)
+                            </span>
+                            <span className="flex items-center gap-1.5">
+                              <span className="w-2 h-2 rounded-full bg-indigo-500 dark:bg-indigo-400" />
+                              ARM64 Natives & Export: {Math.round(tailSec * 10) / 10}s
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* High-Contrast Build Regression & Budget Warnings Banner */}
+                    {selectedHealthBadge.warnings.length > 0 && (
+                      <div
+                        className={`p-3.5 rounded-lg border text-xs font-mono space-y-1.5 ${
+                          selectedHealthBadge.tone === 'rose'
+                            ? 'bg-rose-500/10 border-rose-500/30 text-rose-700 dark:text-rose-300'
+                            : 'bg-amber-500/10 border-amber-500/30 text-amber-800 dark:text-amber-300'
+                        }`}
+                      >
+                        <div className="flex items-center gap-1.5 font-bold">
+                          <AlertTriangle className="w-4 h-4 shrink-0" />
+                          <span>Build Regression & Budget Warnings ({selectedHealthBadge.warnings.length})</span>
+                        </div>
+                        <ul className="list-disc list-inside space-y-0.5 text-[11px]">
+                          {selectedHealthBadge.warnings.map((w, i) => (
+                            <li key={i}>{w}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono">
+                    <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
+                      <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">Warm Build Target</span>
+                      <span className="text-sm font-bold text-emerald-600 dark:text-emerald-400">
+                        ≤{selectedTelemetryTargets.targetWarmSec}s
+                      </span>
+                      <span className="text-[10px] text-slate-500 block mt-1">Cached npm + .next/cache</span>
+                    </div>
+                    <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
+                      <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">Cold Build Target</span>
+                      <span className="text-sm font-bold text-cyan-600 dark:text-cyan-400">
+                        ≤{selectedTelemetryTargets.targetColdSec}s
+                      </span>
+                      <span className="text-[10px] text-slate-500 block mt-1">Lockfile updated</span>
+                    </div>
+                    <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
+                      <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">Regression Gate</span>
+                      <span className="text-sm font-bold text-amber-600 dark:text-amber-400">
+                        +{selectedTelemetryTargets.regressionThresholdPct}%
+                      </span>
+                      <span className="text-[10px] text-slate-500 block mt-1">Ceiling: {selectedTelemetryTargets.maxCeilingSec}s</span>
+                    </div>
+                    <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
+                      <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">Context Budget</span>
+                      <span className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                        ≤{selectedTelemetryTargets.maxContextKB} KB
+                      </span>
+                      <span className="text-[10px] text-slate-500 block mt-1">ELF 0xb7 gate active</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Release Composition Summary */}
+              <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-sm space-y-5">
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm">
@@ -1057,6 +1327,7 @@ export function ReleasePipelineView({
                     </>
                   )}
                 </button>
+              </div>
               </div>
             </div>
 
