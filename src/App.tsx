@@ -59,6 +59,8 @@ export const App: React.FC = () => {
   const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(false);
   const [isDeployingAll, setIsDeployingAll] = useState<boolean>(false);
   const [isHostRebooting, setIsHostRebooting] = useState<boolean>(false);
+  const [selectedReleaseAppSlug, setSelectedReleaseAppSlug] = useState<string>('');
+  const [trackedDeployJobIds, setTrackedDeployJobIds] = useState<Record<string, string>>({});
   const haltDeploymentsRef = useRef<boolean>(false);
   const currentRunningDeployJobIdRef = useRef<string | null>(null);
 
@@ -846,6 +848,8 @@ export const App: React.FC = () => {
   const executeAppDeploy = (app: DiscoveredApp, bump: string, allowDirty: boolean): Promise<number> => {
     const jobId = `deploy-${app.manifest.slug}-${Date.now()}`;
     currentRunningDeployJobIdRef.current = jobId;
+    setSelectedReleaseAppSlug(app.manifest.slug);
+    setTrackedDeployJobIds((prev) => ({ ...prev, [app.manifest.slug]: jobId }));
     const newTab: TerminalTab = {
       id: jobId,
       title: `Deploy: ${app.manifest.displayName}`,
@@ -1316,6 +1320,15 @@ export const App: React.FC = () => {
 
   const handleCloseTab = (id: string) => {
     setTerminalTabs((prev) => prev.filter((t) => t.id !== id));
+    setTrackedDeployJobIds((prev) => {
+      const next = { ...prev };
+      for (const [slug, trackedId] of Object.entries(next)) {
+        if (trackedId === id) {
+          delete next[slug];
+        }
+      }
+      return next;
+    });
     invoke('delete_console_session', { id }).catch((e) =>
       console.warn('Failed to delete console session from DB:', e)
     );
@@ -1345,6 +1358,7 @@ export const App: React.FC = () => {
   const handlePurgeAllTabs = () => {
     setTerminalTabs([]);
     setActiveTerminalTabId('');
+    setTrackedDeployJobIds({});
     setIsDrawerOpen(false);
     invoke('delete_all_console_sessions').catch((e) =>
       console.warn('Failed to purge all console sessions from DB:', e)
@@ -1565,12 +1579,33 @@ export const App: React.FC = () => {
             <ReleasePipelineView
               apps={apps}
               terminalTabs={terminalTabs}
+              selectedAppSlug={selectedReleaseAppSlug}
+              onSelectAppSlug={setSelectedReleaseAppSlug}
+              trackedDeployJobIds={trackedDeployJobIds}
+              onTrackDeployJob={(slug, jobId) =>
+                setTrackedDeployJobIds((prev) => ({ ...prev, [slug]: jobId }))
+              }
+              onDismissDeployJob={(slug) =>
+                setTrackedDeployJobIds((prev) => {
+                  const next = { ...prev };
+                  delete next[slug];
+                  return next;
+                })
+              }
+              onOpenInConsoleDrawer={(jobId) => {
+                setActiveTerminalTabId(jobId);
+                setIsDrawerOpen(true);
+              }}
+              onCloseTab={handleCloseTab}
+              onClearTab={handleClearTab}
               onTriggerDeploy={executeAppDeploy}
               onTriggerDeployAll={handleDeployAllApps}
               isDeployingAll={isDeployingAll}
               onHaltDeployments={handleHaltDeployments}
               onTriggerRollback={(app, tag) => {
                 const jobId = `rollback-${app.manifest.slug}-${Date.now()}`;
+                setSelectedReleaseAppSlug(app.manifest.slug);
+                setTrackedDeployJobIds((prev) => ({ ...prev, [app.manifest.slug]: jobId }));
                 const newTab: TerminalTab = {
                   id: jobId,
                   title: `Rollback: ${app.manifest.displayName}`,

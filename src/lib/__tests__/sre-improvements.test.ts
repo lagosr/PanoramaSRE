@@ -179,4 +179,106 @@ libc-bin/stable 2.36-9+deb12u9 arm64 [upgradable from: 2.36-9+deb12u8]
       expect(stage6.subStep).toBe('All 6 Release Stages Completed');
     });
   });
+
+  describe('Release Pipeline Stream Persistence & Job Resolution Across Navigation', () => {
+    interface MockTerminalTab {
+      id: string;
+      title: string;
+      lines: string[];
+      isRunning: boolean;
+      exitCode?: number;
+      createdAt?: string;
+      finishedAt?: string;
+    }
+
+    function getAppDeployJob(terminalTabs: MockTerminalTab[], slug: string) {
+      return terminalTabs.find(
+        (t) => (t.id.startsWith(`deploy-${slug}-`) || t.id.startsWith(`rollback-${slug}-`)) && t.isRunning
+      );
+    }
+
+    function getAllAppDeployJobs(terminalTabs: MockTerminalTab[], slug: string) {
+      return terminalTabs
+        .filter((t) => t.id.startsWith(`deploy-${slug}-`) || t.id.startsWith(`rollback-${slug}-`))
+        .sort((a, b) => {
+          if (a.isRunning !== b.isRunning) {
+            return a.isRunning ? -1 : 1;
+          }
+          const timeA = a.finishedAt || a.createdAt || a.id;
+          const timeB = b.finishedAt || b.createdAt || b.id;
+          return timeB.localeCompare(timeA);
+        });
+    }
+
+    function resolveDisplayedDeployJob(
+      terminalTabs: MockTerminalTab[],
+      slug: string,
+      trackedDeployJobIds: Record<string, string>
+    ) {
+      const activeJob = getAppDeployJob(terminalTabs, slug);
+      const trackedId = trackedDeployJobIds[slug];
+      return activeJob || (trackedId ? terminalTabs.find((t) => t.id === trackedId) : undefined);
+    }
+
+    const tabs: MockTerminalTab[] = [
+      {
+        id: 'deploy-spendy-ledger-1700000100',
+        title: 'Deploy: SpendyLedger',
+        lines: ['[1/4] TypeScript validation...', 'Done'],
+        isRunning: false,
+        exitCode: 0,
+        createdAt: '2026-11-10T01:00:00Z',
+        finishedAt: '2026-11-10T01:02:00Z',
+      },
+      {
+        id: 'rollback-spendy-ledger-1700000200',
+        title: 'Rollback: SpendyLedger',
+        lines: ['Swapping container tag...'],
+        isRunning: true,
+        createdAt: '2026-11-10T02:00:00Z',
+      },
+      {
+        id: 'deploy-tasty-basket-1700000150',
+        title: 'Deploy: TastyBasket',
+        lines: ['Build failed'],
+        isRunning: false,
+        exitCode: 1,
+        createdAt: '2026-11-10T01:30:00Z',
+        finishedAt: '2026-11-10T01:31:00Z',
+      },
+    ];
+
+    it('matches both deploy-${slug}-* and rollback-${slug}-* and prioritizes running jobs', () => {
+      const running = getAppDeployJob(tabs, 'spendy-ledger');
+      expect(running?.id).toBe('rollback-spendy-ledger-1700000200');
+
+      const allSpendy = getAllAppDeployJobs(tabs, 'spendy-ledger');
+      expect(allSpendy.map((t) => t.id)).toEqual([
+        'rollback-spendy-ledger-1700000200',
+        'deploy-spendy-ledger-1700000100',
+      ]);
+    });
+
+    it('preserves tracked completed/failed jobs across tab switches', () => {
+      const tracked = { 'tasty-basket': 'deploy-tasty-basket-1700000150' };
+      const displayed = resolveDisplayedDeployJob(tabs, 'tasty-basket', tracked);
+      expect(displayed).toBeDefined();
+      expect(displayed?.id).toBe('deploy-tasty-basket-1700000150');
+      expect(displayed?.exitCode).toBe(1);
+    });
+
+    it('recovers latest available stream when re-opened after dismissal', () => {
+      const trackedAfterDismiss: Record<string, string> = {};
+      expect(resolveDisplayedDeployJob(tabs, 'tasty-basket', trackedAfterDismiss)).toBeUndefined();
+
+      const latestAvailable = getAllAppDeployJobs(tabs, 'tasty-basket')[0];
+      expect(latestAvailable).toBeDefined();
+      expect(latestAvailable.id).toBe('deploy-tasty-basket-1700000150');
+
+      // User clicks "Show Deployment Stream" which re-tracks latestAvailable.id
+      trackedAfterDismiss['tasty-basket'] = latestAvailable.id;
+      const reopened = resolveDisplayedDeployJob(tabs, 'tasty-basket', trackedAfterDismiss);
+      expect(reopened?.id).toBe('deploy-tasty-basket-1700000150');
+    });
+  });
 });

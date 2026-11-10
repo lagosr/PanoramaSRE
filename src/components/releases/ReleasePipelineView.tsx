@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { DiscoveredApp } from '../../lib/types';
 import { 
   GitBranch, 
@@ -20,7 +20,13 @@ import {
   Check,
   Square,
   Eye,
-  XCircle
+  XCircle,
+  Terminal,
+  Copy,
+  ChevronDown,
+  ChevronUp,
+  Trash2,
+  X
 } from 'lucide-react';
 import { BatchDeployModal, BatchDeployOptions } from './BatchDeployModal';
 import { CustomSelect } from '../ui/CustomSelect';
@@ -28,10 +34,19 @@ import { formatLocalDateTime, formatRelativeTime } from '../../lib/formatters';
 import { TerminalTab } from '../layout/SreTerminalDrawer';
 import { ReleaseCompositionDrawer } from '../hud/ReleaseCompositionDrawer';
 import { BlastRadiusBadge } from '../ui/BlastRadiusBadge';
+import { formatConsoleLine } from '../layout/ConsoleColorizer';
 
 interface ReleasePipelineViewProps {
   apps: DiscoveredApp[];
   terminalTabs?: TerminalTab[];
+  selectedAppSlug?: string;
+  onSelectAppSlug?: (slug: string) => void;
+  trackedDeployJobIds?: Record<string, string>;
+  onTrackDeployJob?: (slug: string, jobId: string) => void;
+  onDismissDeployJob?: (slug: string) => void;
+  onOpenInConsoleDrawer?: (jobId: string) => void;
+  onCloseTab?: (id: string) => void;
+  onClearTab?: (id: string) => void;
   onTriggerDeploy: (app: DiscoveredApp, bump: string, allowDirty: boolean) => void;
   onTriggerDeployAll: (apps: DiscoveredApp[], bump: string, allowDirty: boolean) => void;
   onTriggerRollback: (app: DiscoveredApp, tag: string) => void;
@@ -42,30 +57,112 @@ interface ReleasePipelineViewProps {
 export function ReleasePipelineView({
   apps,
   terminalTabs = [],
+  selectedAppSlug: controlledAppSlug,
+  onSelectAppSlug,
+  trackedDeployJobIds,
+  onTrackDeployJob,
+  onDismissDeployJob,
+  onOpenInConsoleDrawer,
+  onCloseTab,
+  onClearTab,
   onTriggerDeploy,
   onTriggerDeployAll,
   onTriggerRollback,
   isDeployingAll = false,
   onHaltDeployments,
 }: ReleasePipelineViewProps) {
-  const [selectedAppSlug, setSelectedAppSlug] = useState<string>(apps[0]?.manifest.slug || '');
+  const [localSelectedAppSlug, setLocalSelectedAppSlug] = useState<string>(apps[0]?.manifest.slug || '');
+  const [localTrackedJobIds, setLocalTrackedJobIds] = useState<Record<string, string>>({});
   const [bumpVersion, setBumpVersion] = useState<string>('none');
   const [allowDirty, setAllowDirty] = useState<boolean>(false);
   const [rollbackTag, setRollbackTag] = useState<string>('');
   const [showDeployAllModal, setShowDeployAllModal] = useState<boolean>(false);
   const [inspectApp, setInspectApp] = useState<DiscoveredApp | null>(null);
 
-  const selectedApp = apps.find((a) => a.manifest.slug === selectedAppSlug) || apps[0];
+  const [copied, setCopied] = useState<boolean>(false);
+  const [isStreamCollapsed, setIsStreamCollapsed] = useState<boolean>(false);
+  const [showLogTerminal, setShowLogTerminal] = useState<boolean>(true);
+  const terminalEndRef = useRef<HTMLDivElement>(null);
+
+  // Helper to detect if an app has an active running deployment/rollback job
+  const getAppDeployJob = (slug: string) => {
+    return terminalTabs.find(
+      (t) => (t.id.startsWith(`deploy-${slug}-`) || t.id.startsWith(`rollback-${slug}-`)) && t.isRunning
+    );
+  };
+
+  // Helper to list all deployment/rollback jobs for an app sorted newest first (running first)
+  const getAllAppDeployJobs = (slug: string) => {
+    return terminalTabs
+      .filter((t) => t.id.startsWith(`deploy-${slug}-`) || t.id.startsWith(`rollback-${slug}-`))
+      .sort((a, b) => {
+        if (a.isRunning !== b.isRunning) {
+          return a.isRunning ? -1 : 1;
+        }
+        const timeA = a.finishedAt || a.createdAt || a.id;
+        const timeB = b.finishedAt || b.createdAt || b.id;
+        return timeB.localeCompare(timeA);
+      });
+  };
+
+  // Resolve active running app slug if any
+  const runningApp = apps.find((a) => !!getAppDeployJob(a.manifest.slug));
+
+  const effectiveSelectedSlug =
+    (controlledAppSlug && apps.some((a) => a.manifest.slug === controlledAppSlug)
+      ? controlledAppSlug
+      : undefined) ||
+    (!controlledAppSlug && runningApp ? runningApp.manifest.slug : undefined) ||
+    (localSelectedAppSlug && apps.some((a) => a.manifest.slug === localSelectedAppSlug)
+      ? localSelectedAppSlug
+      : undefined) ||
+    apps[0]?.manifest.slug ||
+    '';
+
+  const handleSelectApp = (slug: string) => {
+    setLocalSelectedAppSlug(slug);
+    onSelectAppSlug?.(slug);
+    setRollbackTag('');
+  };
+
+  // Auto-select running app when controlledAppSlug is empty
+  useEffect(() => {
+    if (!controlledAppSlug && runningApp) {
+      setLocalSelectedAppSlug(runningApp.manifest.slug);
+      onSelectAppSlug?.(runningApp.manifest.slug);
+    }
+  }, [controlledAppSlug, runningApp?.manifest.slug]);
+
+  const effectiveTrackedJobIds = trackedDeployJobIds ?? localTrackedJobIds;
+
+  const handleTrackJob = (slug: string, jobId: string) => {
+    setLocalTrackedJobIds((prev) => ({ ...prev, [slug]: jobId }));
+    onTrackDeployJob?.(slug, jobId);
+  };
+
+  const handleDismissJob = (slug: string) => {
+    setLocalTrackedJobIds((prev) => {
+      const next = { ...prev };
+      delete next[slug];
+      return next;
+    });
+    onDismissDeployJob?.(slug);
+  };
+
+  // Automatically sync running deployment/rollback jobs into trackedDeployJobIds
+  useEffect(() => {
+    for (const app of apps) {
+      const activeJob = getAppDeployJob(app.manifest.slug);
+      if (activeJob && effectiveTrackedJobIds[app.manifest.slug] !== activeJob.id) {
+        handleTrackJob(app.manifest.slug, activeJob.id);
+      }
+    }
+  }, [terminalTabs, apps]);
+
+  const selectedApp = apps.find((a) => a.manifest.slug === effectiveSelectedSlug) || apps[0];
   const comp = selectedApp?.composition;
   const prodRelease = selectedApp?.health?.release;
   const isHealthy = selectedApp?.health?.status === 'healthy';
-
-  // Helper to detect if an app has an active running deployment job and inspect its logs
-  const getAppDeployJob = (slug: string) => {
-    return terminalTabs.find(
-      (t) => t.id.startsWith(`deploy-${slug}`) && t.isRunning
-    );
-  };
 
   // Deterministically and monotonically parse deployment progress & exact build steps
   const getDeploymentStage = (tab?: TerminalTab) => {
@@ -178,7 +275,49 @@ export function ReleasePipelineView({
   };
 
   const activeSelectedDeployJob = selectedApp ? getAppDeployJob(selectedApp.manifest.slug) : undefined;
-  const currentStageInfo = getDeploymentStage(activeSelectedDeployJob);
+  const allSelectedAppDeployJobs = selectedApp ? getAllAppDeployJobs(selectedApp.manifest.slug) : [];
+  const latestAvailableDeployJob = allSelectedAppDeployJobs[0];
+  const trackedJobIdForSelected = selectedApp ? effectiveTrackedJobIds[selectedApp.manifest.slug] : undefined;
+
+  const displayedDeployJob =
+    activeSelectedDeployJob ||
+    (trackedJobIdForSelected
+      ? terminalTabs.find((t) => t.id === trackedJobIdForSelected)
+      : undefined);
+
+  const currentStageInfo = getDeploymentStage(displayedDeployJob);
+
+  // Auto-scroll terminal log when active and new lines arrive
+  useEffect(() => {
+    if (!isStreamCollapsed && showLogTerminal && displayedDeployJob?.isRunning) {
+      terminalEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [displayedDeployJob?.lines?.length, displayedDeployJob?.isRunning, isStreamCollapsed, showLogTerminal]);
+
+  const handleCopyLogs = async () => {
+    if (!displayedDeployJob?.lines || displayedDeployJob.lines.length === 0) return;
+    try {
+      await navigator.clipboard.writeText(displayedDeployJob.lines.join('\n'));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy deployment logs to clipboard:', err);
+    }
+  };
+
+  const handleClearDisplayedJob = () => {
+    if (!displayedDeployJob || !selectedApp) return;
+    onClearTab?.(displayedDeployJob.id);
+    onCloseTab?.(displayedDeployJob.id);
+    handleDismissJob(selectedApp.manifest.slug);
+  };
+
+  const handleReopenLatestStream = (slug: string, job: TerminalTab) => {
+    handleSelectApp(slug);
+    handleTrackJob(slug, job.id);
+    setIsStreamCollapsed(false);
+    setShowLogTerminal(true);
+  };
 
   // Candidate rollback tags: derive from git candidates, known release info, and local head
   interface RollbackTagEntry {
@@ -241,11 +380,33 @@ export function ReleasePipelineView({
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {selectedApp && latestAvailableDeployJob && !displayedDeployJob && (
+            <button
+              type="button"
+              onClick={() => handleReopenLatestStream(selectedApp.manifest.slug, latestAvailableDeployJob)}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-colors whitespace-nowrap flex-shrink-0"
+              title="Re-open the deployment stream container for this application"
+            >
+              <Terminal className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Open Deployment Stream ({latestAvailableDeployJob.lines.length} lines)</span>
+            </button>
+          )}
+          {selectedApp && latestAvailableDeployJob && onOpenInConsoleDrawer && (
+            <button
+              type="button"
+              onClick={() => onOpenInConsoleDrawer(latestAvailableDeployJob.id)}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-colors whitespace-nowrap flex-shrink-0"
+              title="Open this deployment stream in the bottom SRE Console Drawer"
+            >
+              <Terminal className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Open in Console Drawer</span>
+            </button>
+          )}
           {isDeployingAll && onHaltDeployments ? (
             <button
               onClick={onHaltDeployments}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white shadow-lg transition-all animate-pulse"
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white shadow-lg transition-all animate-pulse whitespace-nowrap flex-shrink-0"
               title="Immediately halt suite deployments and abort any running deployment job"
             >
               <Square className="w-3.5 h-3.5 fill-current" />
@@ -254,7 +415,7 @@ export function ReleasePipelineView({
           ) : (
             <button
               onClick={() => setShowDeployAllModal(true)}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg transition-all"
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg transition-all whitespace-nowrap flex-shrink-0"
             >
               <Layers className="w-4 h-4" />
               <span>Batch / Multi-App Deployment...</span>
@@ -290,6 +451,7 @@ export function ReleasePipelineView({
               app.provenanceState === 'DIRTY_PROD' ||
               app.provenanceState === 'DIVERGED';
             const isDeploying = !!getAppDeployJob(app.manifest.slug);
+            const appLatestJob = getAllAppDeployJobs(app.manifest.slug)[0];
             const isSelected = selectedApp?.manifest.slug === app.manifest.slug;
             const isHealthy = app.health?.status === 'healthy';
             const isCritical = !isHealthy || app.provenanceState === 'PROD_UNREACHABLE' || app.provenanceState === 'DIRTY_PROD';
@@ -297,10 +459,7 @@ export function ReleasePipelineView({
             return (
               <div
                 key={app.manifest.slug}
-                onClick={() => {
-                  setSelectedAppSlug(app.manifest.slug);
-                  setRollbackTag('');
-                }}
+                onClick={() => handleSelectApp(app.manifest.slug)}
                 className={`p-3.5 rounded-lg border cursor-pointer transition-all flex flex-col justify-between space-y-2.5 ${
                   isCritical
                     ? isSelected
@@ -350,25 +509,41 @@ export function ReleasePipelineView({
                 </div>
 
                 {/* Drift Details & Inspect Diff Trigger */}
-                <div className="text-[11px] font-mono flex items-center justify-between text-slate-500 dark:text-slate-400 border-t border-slate-100 dark:border-slate-900 pt-2">
+                <div className="text-[11px] font-mono flex items-center justify-between gap-1.5 text-slate-500 dark:text-slate-400 border-t border-slate-100 dark:border-slate-900 pt-2">
                   <div className="flex items-center gap-1.5 truncate">
                     <span>Pending:</span>
                     <span className={`font-bold ${undeployedCount > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-500'}`}>
                       {undeployedCount} {isLocalDirty ? '(+ uncommitted)' : ''}
                     </span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setInspectApp(app);
-                    }}
-                    className="px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700/60 transition-colors flex items-center gap-1 shrink-0"
-                    title={`Inspect git diff & provenance for ${app.manifest.displayName}`}
-                  >
-                    <Eye className="w-3 h-3 text-emerald-500 dark:text-emerald-400" />
-                    <span>Inspect Diff</span>
-                  </button>
+                  <div className="flex items-center gap-1 shrink-0">
+                    {appLatestJob && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleReopenLatestStream(app.manifest.slug, appLatestJob);
+                        }}
+                        className="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 transition-colors flex items-center gap-1 shrink-0 whitespace-nowrap"
+                        title={`Open deployment stream for ${app.manifest.displayName}`}
+                      >
+                        <Terminal className="w-3 h-3 text-emerald-500 dark:text-emerald-400" />
+                        <span>Stream</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setInspectApp(app);
+                      }}
+                      className="px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700/60 transition-colors flex items-center gap-1 shrink-0 whitespace-nowrap"
+                      title={`Inspect git diff & provenance for ${app.manifest.displayName}`}
+                    >
+                      <Eye className="w-3 h-3 text-emerald-500 dark:text-emerald-400" />
+                      <span>Inspect Diff</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             );
@@ -378,27 +553,79 @@ export function ReleasePipelineView({
 
       {selectedApp && (
         <div className="space-y-6">
-          {/* Active Live Deployment Progress Banner (when deployment is executing) */}
-          {activeSelectedDeployJob && (
-            <div className="p-4 rounded-xl border border-amber-500/40 bg-gradient-to-r from-amber-500/10 via-slate-900 to-slate-900 shadow-lg space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400">
-                    <Loader2 className="w-4 h-4 animate-spin" />
+          {/* Deployment Pipeline Progress & Live Stream Container */}
+          {displayedDeployJob && (
+            <div
+              className={`rounded-2xl border shadow-xl overflow-hidden transition-all animate-in fade-in duration-300 ${
+                currentStageInfo?.isFailed
+                  ? 'border-rose-500/40 bg-white dark:bg-slate-900'
+                  : currentStageInfo?.isFinished
+                  ? 'border-emerald-500/40 bg-white dark:bg-slate-900'
+                  : 'border-amber-500/40 bg-white dark:bg-slate-900'
+              }`}
+            >
+              {/* Header Bar */}
+              <div className="p-4 sm:p-5 border-b border-slate-100 dark:border-slate-800/80 bg-slate-50/80 dark:bg-slate-950/60 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-3.5">
+                  <div
+                    className={`w-10 h-10 rounded-xl border flex items-center justify-center shrink-0 ${
+                      currentStageInfo?.isFailed
+                        ? 'bg-rose-500/15 border-rose-500/30 text-rose-500 shadow-[0_0_12px_rgba(244,63,94,0.15)]'
+                        : currentStageInfo?.isFinished
+                        ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.15)]'
+                        : 'bg-amber-500/15 border-amber-500/30 text-amber-400 shadow-[0_0_12px_rgba(245,158,11,0.15)]'
+                    }`}
+                  >
+                    {currentStageInfo?.isFailed ? (
+                      <XCircle className="w-5 h-5 text-rose-400" />
+                    ) : currentStageInfo?.isFinished ? (
+                      <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                    ) : (
+                      <Loader2 className="w-5 h-5 animate-spin text-amber-400" />
+                    )}
                   </div>
                   <div>
-                    <h4 className="text-sm font-bold text-amber-300 flex items-center gap-2">
-                      <span>Release Pipeline in Progress</span>
-                      <span className="text-xs font-mono font-normal text-slate-400">
-                        ({selectedApp.manifest.displayName})
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h4 className="text-sm sm:text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                        <span>
+                          {displayedDeployJob.isRunning
+                            ? 'Release Pipeline in Progress'
+                            : currentStageInfo?.isFinished
+                            ? 'Release Pipeline Completed'
+                            : 'Release Pipeline Failed'}
+                        </span>
+                        <span className="text-xs font-mono font-normal text-slate-400">
+                          ({selectedApp.manifest.displayName})
+                        </span>
+                      </h4>
+                      <span
+                        className={`px-2.5 py-0.5 rounded-full text-[11px] font-mono font-bold border flex items-center gap-1.5 ${
+                          currentStageInfo?.isFailed
+                            ? 'bg-rose-500/20 text-rose-400 border-rose-500/40'
+                            : currentStageInfo?.isFinished
+                            ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+                            : 'bg-amber-500/20 text-amber-300 border-amber-500/40 animate-pulse'
+                        }`}
+                      >
+                        {displayedDeployJob.isRunning && (
+                          <span className="w-2 h-2 rounded-full bg-amber-400" />
+                        )}
+                        {currentStageInfo?.isFailed
+                          ? `FAILED (EXIT ${displayedDeployJob.exitCode ?? 1})`
+                          : currentStageInfo?.isFinished
+                          ? 'COMPLETED (EXIT 0)'
+                          : `STAGE ${currentStageInfo?.stage || 1} OF 6`}
                       </span>
-                    </h4>
-                    <div className="flex flex-wrap items-center gap-2 mt-0.5">
-                      <p className="text-xs text-slate-300">
-                        Stage: <span className="font-semibold text-emerald-400">{currentStageInfo?.label || 'Executing Pipeline'}</span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 mt-1">
+                      <p className="text-xs text-slate-600 dark:text-slate-300">
+                        Stage:{' '}
+                        <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+                          {currentStageInfo?.label || 'Executing Pipeline'}
+                        </span>
                       </p>
                       {currentStageInfo?.subStep && (
-                        <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-950/80 text-amber-300 border border-amber-500/30">
+                        <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-900 dark:bg-slate-950/80 text-amber-300 border border-amber-500/30">
                           {currentStageInfo.subStep}
                         </span>
                       )}
@@ -406,63 +633,183 @@ export function ReleasePipelineView({
                   </div>
                 </div>
 
-                <span className="px-2.5 py-1 rounded-full text-xs font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1.5 animate-pulse">
-                  <span className="w-2 h-2 rounded-full bg-amber-400" />
-                  STAGE {currentStageInfo?.stage || 1} OF 6
-                </span>
-              </div>
+                {/* Action Toolbar Buttons */}
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* 1. Copy Output */}
+                  <button
+                    type="button"
+                    onClick={handleCopyLogs}
+                    disabled={!displayedDeployJob.lines || displayedDeployJob.lines.length === 0}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700/80 transition-colors flex items-center gap-1.5 shadow-xs disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap flex-shrink-0"
+                    title="Copy all captured console output to clipboard"
+                  >
+                    {copied ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-emerald-500" />
+                        <span className="text-emerald-500">Copied!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400" />
+                        <span>Copy Output</span>
+                      </>
+                    )}
+                  </button>
 
-              {/* 6-Stage Visual Stepper */}
-              <div className="grid grid-cols-2 md:grid-cols-6 gap-2 pt-2 border-t border-slate-800/80 text-xs font-mono">
-                {[
-                  { num: 1, name: 'SemVer & Git', key: 'semver' },
-                  { num: 2, name: 'Docker Buildx', key: 'build' },
-                  { num: 3, name: 'SSH & SCP', key: 'scp' },
-                  { num: 4, name: 'Rolling Swap', key: 'swap' },
-                  { num: 5, name: 'Health Probe', key: 'health' },
-                  { num: 6, name: 'Manifest Sync', key: 'sync' },
-                ].map((st) => {
-                  const currentStageNum = currentStageInfo?.stage || 1;
-                  const isDone = currentStageInfo?.isFinished || currentStageNum > st.num;
-                  const isActive = !currentStageInfo?.isFinished && currentStageNum === st.num;
-                  const isFailed = currentStageInfo?.isFailed && currentStageNum === st.num;
+                  {/* 2. Hide Console / Show Console toggle */}
+                  <button
+                    type="button"
+                    onClick={() => setShowLogTerminal(!showLogTerminal)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
+                      showLogTerminal
+                        ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
+                        : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+                    }`}
+                    title={showLogTerminal ? 'Hide Terminal Stream' : 'Show Terminal Stream'}
+                  >
+                    <Terminal className="w-3.5 h-3.5" />
+                    <span>{showLogTerminal ? 'Hide Console' : 'Show Console'}</span>
+                  </button>
 
-                  return (
-                    <div
-                      key={st.num}
-                      className={`p-2 rounded border flex flex-col gap-1 transition-all ${
-                        isFailed
-                          ? 'bg-rose-500/10 border-rose-500/50 text-rose-300'
-                          : isActive
-                          ? 'bg-amber-500/15 border-amber-500/50 text-amber-300 shadow-[0_0_10px_rgba(245,158,11,0.2)]'
-                          : isDone
-                          ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
-                          : 'bg-slate-950/40 border-slate-800 text-slate-500'
-                      }`}
+                  {/* 3. Bottom Console button */}
+                  {onOpenInConsoleDrawer && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenInConsoleDrawer(displayedDeployJob.id)}
+                      className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700/80 transition-colors flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                      title="Open and focus this stream in the bottom global SRE Console Drawer"
                     >
-                      <div className="flex items-center gap-1.5">
-                        {isFailed ? (
-                          <XCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-                        ) : isActive ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400 shrink-0" />
-                        ) : isDone ? (
-                          <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                        ) : (
-                          <span className="w-3.5 h-3.5 rounded-full border border-slate-700 flex items-center justify-center text-[10px] shrink-0">
-                            {st.num}
-                          </span>
-                        )}
-                        <span className="truncate font-semibold">{st.name}</span>
-                      </div>
-                      {isActive && currentStageInfo?.subStep && (
-                        <span className="text-[10px] text-amber-400/90 truncate font-mono">
-                          {currentStageInfo.subStep}
-                        </span>
-                      )}
-                    </div>
-                  );
-                })}
+                      <Terminal className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Bottom Console</span>
+                    </button>
+                  )}
+
+                  {/* 4. Collapse / Expand chevron */}
+                  <button
+                    type="button"
+                    onClick={() => setIsStreamCollapsed(!isStreamCollapsed)}
+                    className="p-1.5 rounded-lg text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-colors whitespace-nowrap flex-shrink-0"
+                    title={isStreamCollapsed ? 'Expand Details' : 'Collapse Details'}
+                  >
+                    {isStreamCollapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+                  </button>
+
+                  {/* 5. Clear Stream trash button */}
+                  {(onClearTab || onCloseTab) && (
+                    <button
+                      type="button"
+                      onClick={handleClearDisplayedJob}
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-500/10 transition-colors whitespace-nowrap flex-shrink-0"
+                      title="Clear & Remove Stream"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+
+                  {/* 6. Dismiss (X) button */}
+                  <button
+                    type="button"
+                    onClick={() => handleDismissJob(selectedApp.manifest.slug)}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-colors whitespace-nowrap flex-shrink-0"
+                    title="Dismiss Progress Panel"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
+
+              {/* Body (when !isStreamCollapsed) */}
+              {!isStreamCollapsed && (
+                <div className="p-4 sm:p-5 space-y-4">
+                  {/* 6-Stage Visual Stepper */}
+                  <div className="grid grid-cols-2 md:grid-cols-6 gap-2 text-xs font-mono">
+                    {[
+                      { num: 1, name: 'SemVer & Git', key: 'semver' },
+                      { num: 2, name: 'Docker Buildx', key: 'build' },
+                      { num: 3, name: 'SSH & SCP', key: 'scp' },
+                      { num: 4, name: 'Rolling Swap', key: 'swap' },
+                      { num: 5, name: 'Health Probe', key: 'health' },
+                      { num: 6, name: 'Manifest Sync', key: 'sync' },
+                    ].map((st) => {
+                      const currentStageNum = currentStageInfo?.stage || 1;
+                      const isDone = currentStageInfo?.isFinished || currentStageNum > st.num;
+                      const isActive = !currentStageInfo?.isFinished && !currentStageInfo?.isFailed && currentStageNum === st.num;
+                      const isFailed = currentStageInfo?.isFailed && currentStageNum === st.num;
+
+                      return (
+                        <div
+                          key={st.num}
+                          className={`p-2.5 rounded-lg border flex flex-col gap-1 transition-all ${
+                            isFailed
+                              ? 'bg-rose-500/10 border-rose-500/50 text-rose-600 dark:text-rose-300'
+                              : isActive
+                              ? 'bg-amber-500/15 border-amber-500/50 text-amber-700 dark:text-amber-300 shadow-[0_0_10px_rgba(245,158,11,0.2)]'
+                              : isDone
+                              ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-700 dark:text-emerald-400'
+                              : 'bg-slate-50 dark:bg-slate-950/40 border-slate-200 dark:border-slate-800 text-slate-500'
+                          }`}
+                        >
+                          <div className="flex items-center gap-1.5">
+                            {isFailed ? (
+                              <XCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                            ) : isActive ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400 shrink-0" />
+                            ) : isDone ? (
+                              <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                            ) : (
+                              <span className="w-3.5 h-3.5 rounded-full border border-slate-400 dark:border-slate-700 flex items-center justify-center text-[10px] shrink-0">
+                                {st.num}
+                              </span>
+                            )}
+                            <span className="truncate font-semibold">{st.name}</span>
+                          </div>
+                          {isActive && currentStageInfo?.subStep && (
+                            <span className="text-[10px] text-amber-600 dark:text-amber-400/90 truncate font-mono">
+                              {currentStageInfo.subStep}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Collapsible Live Deployment Stream terminal window */}
+                  {showLogTerminal && (
+                    <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-950 overflow-hidden shadow-inner">
+                      <div className="px-3 py-2 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between text-slate-400 text-[11px] font-mono">
+                        <span className="flex items-center gap-1.5">
+                          <Terminal className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>Live Deployment Stream</span>
+                          {displayedDeployJob.isRunning && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 text-[10px] border border-amber-500/30">
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
+                              LIVE
+                            </span>
+                          )}
+                        </span>
+                        <div className="flex items-center gap-3">
+                          <span className="text-[10px] text-slate-500">
+                            {displayedDeployJob.lines.length} lines captured
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="max-h-80 min-h-[180px] overflow-y-auto bg-slate-950 p-4 font-mono text-xs space-y-0.5 select-text">
+                        {displayedDeployJob.lines.length > 0 ? (
+                          displayedDeployJob.lines.map((line, idx) => (
+                            <div key={idx}>{formatConsoleLine(line)}</div>
+                          ))
+                        ) : (
+                          <div className="text-slate-500 italic">
+                            Waiting for deployment output stream...
+                          </div>
+                        )}
+                        <div ref={terminalEndRef} />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -631,11 +978,33 @@ export function ReleasePipelineView({
 
               {/* Deploy Trigger Form */}
               <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-4">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider">
                     Stage 6: Orchestrate Production Deployment
                   </h4>
-                  <span className="text-[11px] text-slate-500 font-mono">Triggers deploy-docker.ps1</span>
+                  <div className="flex items-center gap-2">
+                    {latestAvailableDeployJob && !displayedDeployJob && (
+                      <button
+                        type="button"
+                        onClick={() => handleReopenLatestStream(selectedApp.manifest.slug, latestAvailableDeployJob)}
+                        className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 transition-colors flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                      >
+                        <Terminal className="w-3 h-3" />
+                        <span>Show Deployment Stream ({latestAvailableDeployJob.lines.length} lines)</span>
+                      </button>
+                    )}
+                    {latestAvailableDeployJob && onOpenInConsoleDrawer && (
+                      <button
+                        type="button"
+                        onClick={() => onOpenInConsoleDrawer(latestAvailableDeployJob.id)}
+                        className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 transition-colors flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                      >
+                        <Terminal className="w-3 h-3 text-cyan-400" />
+                        <span>Open in Console Drawer</span>
+                      </button>
+                    )}
+                    <span className="text-[11px] text-slate-500 font-mono">Triggers deploy-docker.ps1</span>
+                  </div>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-4 text-xs">
