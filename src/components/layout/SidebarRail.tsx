@@ -7,8 +7,7 @@ import {
   Server, 
   ShieldCheck, 
   HardDrive, 
-  Settings as SettingsIcon,
-  CircleDot
+  Settings as SettingsIcon
 } from 'lucide-react';
 import { APP_VERSION_INFO } from '../../lib/version';
 
@@ -69,15 +68,30 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
       <div>
         {/* App Title / Header */}
         <div className="h-14 flex items-center px-4 border-b border-slate-200 dark:border-slate-800 space-x-3">
-          <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border ${
-            unhealthyCount > 0
-              ? 'bg-rose-500/10 border-rose-500/40'
-              : 'bg-emerald-500/10 border-emerald-500/30'
-          }`}>
-            <CircleDot className={`w-4 h-4 ${unhealthyCount > 0 ? 'text-rose-400 animate-ping' : 'text-emerald-500 dark:text-emerald-400 animate-pulse'}`} />
+          <div className="relative w-8 h-8 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-center shadow-sm overflow-hidden shrink-0">
+            <img
+              src="/logo-dark.png"
+              alt="PanoramaSRE"
+              className="w-full h-full object-contain hidden dark:block"
+            />
+            <img
+              src="/logo-light.png"
+              alt="PanoramaSRE"
+              className="w-full h-full object-contain block dark:hidden"
+            />
+            <span
+              className={`w-2 h-2 rounded-full absolute top-0.5 right-0.5 ring-1 ring-white dark:ring-slate-900 ${
+                unhealthyCount > 0
+                  ? 'bg-rose-500 animate-ping'
+                  : 'bg-emerald-500 dark:bg-emerald-400 animate-pulse'
+              }`}
+              aria-hidden="true"
+            />
           </div>
           <div className="hidden md:block">
-            <h1 className="text-sm font-bold tracking-tight text-slate-900 dark:text-slate-100">PanoramaSRE</h1>
+            <h1 className="text-sm font-bold tracking-tight bg-gradient-to-r from-orange-500 to-amber-500 dark:from-orange-400 dark:to-amber-300 bg-clip-text text-transparent">
+              PanoramaSRE
+            </h1>
             <p className="text-[10px] text-slate-500 dark:text-slate-400 font-mono">
               Control Plane v{APP_VERSION_INFO.version} {APP_VERSION_INFO.buildDate ? `(${APP_VERSION_INFO.buildDate})` : ''}
             </p>
@@ -99,7 +113,7 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
                   isActive
                     ? isAlertTab
                       ? 'bg-rose-500/20 text-rose-800 dark:text-rose-300 border border-rose-500/40 ring-1 ring-rose-500/40 font-semibold'
-                      : 'bg-emerald-500/15 text-emerald-800 dark:text-emerald-400 border border-emerald-500/30 dark:border-emerald-500/20 font-semibold shadow-sm'
+                      : 'bg-orange-500/15 text-orange-800 dark:text-orange-400 border border-orange-500/30 dark:border-orange-500/20 font-semibold shadow-sm'
                     : isAlertTab
                     ? 'text-rose-700 dark:text-rose-400 hover:text-rose-800 dark:hover:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/30 border border-rose-500/30'
                     : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-900 border border-transparent'
@@ -107,7 +121,7 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
                 title={item.label}
               >
                 <Icon className={`w-5 h-5 shrink-0 transition-colors ${
-                  isAlertTab ? 'text-rose-600 dark:text-rose-400 animate-pulse' : isActive ? 'text-emerald-700 dark:text-emerald-400' : 'text-slate-400 group-hover:text-slate-600 dark:group-hover:text-slate-200'
+                  isAlertTab ? 'text-rose-600 dark:text-rose-400 animate-pulse' : isActive ? 'text-orange-600 dark:text-orange-400' : 'text-slate-400 group-hover:text-slate-600 dark:group-hover:text-slate-200'
                 }`} />
                 <span className="ml-3 hidden md:inline whitespace-nowrap">{item.label}</span>
 

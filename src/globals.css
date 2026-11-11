@@ -5,10 +5,23 @@
 @theme {
   --color-slate-925: #070d19;
   --color-slate-950: #050b14;
+  --color-brand: var(--color-brand);
+  --color-brand-hover: var(--color-brand-hover);
+  --color-accent: var(--color-accent);
 }
 
 :root {
   color-scheme: light dark;
+  --color-brand: #ea580c;
+  --color-brand-hover: #c2410c;
+  --color-accent: #0d9488;
+}
+
+.dark,
+html.dark {
+  --color-brand: #ff7b00;
+  --color-brand-hover: #ff9500;
+  --color-accent: #00f5d4;
 }
 
 body {

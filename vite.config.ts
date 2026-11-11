@@ -17,7 +17,7 @@ try {
   commitDate = new Date().toISOString().slice(0, 10).replace(/-/g, '');
 }
 
-let pkgVersion = '1.2.0';
+let pkgVersion = '1.3.1';
 try {
   const pkg = JSON.parse(readFileSync(path.resolve(__dirname, './package.json'), 'utf-8'));
   if (pkg.version) pkgVersion = pkg.version;

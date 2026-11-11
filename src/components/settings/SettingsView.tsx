@@ -168,7 +168,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">Settings & SRE Governance</h2>
         <button
           onClick={handleSave}
-          className="flex items-center space-x-1.5 px-3 py-1.5 text-xs bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-colors font-medium"
+          className="flex items-center space-x-1.5 px-3 py-1.5 text-xs bg-orange-600 hover:bg-orange-500 text-white rounded-lg transition-colors font-medium cursor-pointer shadow-sm"
         >
           {isSaved ? <Check className="w-3.5 h-3.5" /> : <RefreshCw className="w-3.5 h-3.5" />}
           <span>{isSaved ? 'Saved!' : 'Save Changes'}</span>
@@ -180,7 +180,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         <button
           onClick={() => setActiveTab('general')}
           className={`py-3 text-sm font-medium border-b-2 flex items-center space-x-2 transition-colors ${
-            activeTab === 'general' ? 'border-emerald-500 text-emerald-600 dark:text-emerald-400 font-semibold' : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+            activeTab === 'general' ? 'border-orange-500 text-orange-600 dark:text-orange-400 font-semibold' : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
           }`}
         >
           <Sliders className="w-4 h-4" />
@@ -189,7 +189,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         <button
           onClick={() => setActiveTab('ssh')}
           className={`py-3 text-sm font-medium border-b-2 flex items-center space-x-2 transition-colors ${
-            activeTab === 'ssh' ? 'border-emerald-500 text-emerald-600 dark:text-emerald-400 font-semibold' : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+            activeTab === 'ssh' ? 'border-orange-500 text-orange-600 dark:text-orange-400 font-semibold' : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
           }`}
         >
           <Shield className="w-4 h-4" />
@@ -198,7 +198,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         <button
           onClick={() => setActiveTab('logs')}
           className={`py-3 text-sm font-medium border-b-2 flex items-center space-x-2 transition-colors ${
-            activeTab === 'logs' ? 'border-emerald-500 text-emerald-600 dark:text-emerald-400 font-semibold' : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+            activeTab === 'logs' ? 'border-orange-500 text-orange-600 dark:text-orange-400 font-semibold' : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
           }`}
         >
           <Terminal className="w-4 h-4" />
@@ -207,7 +207,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         <button
           onClick={() => setActiveTab('database')}
           className={`py-3 text-sm font-medium border-b-2 flex items-center space-x-2 transition-colors ${
-            activeTab === 'database' ? 'border-emerald-500 text-emerald-600 dark:text-emerald-400 font-semibold' : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+            activeTab === 'database' ? 'border-orange-500 text-orange-600 dark:text-orange-400 font-semibold' : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
           }`}
         >
           <Database className="w-4 h-4" />
@@ -237,7 +237,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   onClick={() => setTheme('dark')}
                   className={`p-3 rounded-lg border flex flex-col items-center gap-2 transition-all cursor-pointer ${
                     theme === 'dark'
-                      ? 'bg-emerald-500/10 border-emerald-500 text-emerald-600 dark:text-emerald-400 ring-1 ring-emerald-500/50'
+                      ? 'bg-orange-500/10 border-orange-500 text-orange-600 dark:text-orange-400 ring-1 ring-orange-500/50'
                       : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700/80 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:border-slate-300 dark:hover:border-slate-600'
                   }`}
                 >
@@ -250,7 +250,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   onClick={() => setTheme('light')}
                   className={`p-3 rounded-lg border flex flex-col items-center gap-2 transition-all cursor-pointer ${
                     theme === 'light'
-                      ? 'bg-emerald-500/10 border-emerald-500 text-emerald-600 dark:text-emerald-400 ring-1 ring-emerald-500/50'
+                      ? 'bg-orange-500/10 border-orange-500 text-orange-600 dark:text-orange-400 ring-1 ring-orange-500/50'
                       : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700/80 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:border-slate-300 dark:hover:border-slate-600'
                   }`}
                 >
@@ -263,7 +263,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   onClick={() => setTheme('system')}
                   className={`p-3 rounded-lg border flex flex-col items-center gap-2 transition-all cursor-pointer ${
                     theme === 'system'
-                      ? 'bg-emerald-500/10 border-emerald-500 text-emerald-600 dark:text-emerald-400 ring-1 ring-emerald-500/50'
+                      ? 'bg-orange-500/10 border-orange-500 text-orange-600 dark:text-orange-400 ring-1 ring-orange-500/50'
                       : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700/80 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:border-slate-300 dark:hover:border-slate-600'
                   }`}
                 >
@@ -294,7 +294,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     value={workspaceRoot}
                     onChange={(e) => setWorkspaceRoot(e.target.value)}
                     placeholder="e.g. C:\Users\<Username>\Documents\AG Projects"
-                    className="flex-1 px-3 py-2 text-xs font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                    className="flex-1 px-3 py-2 text-xs font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-orange-500"
                   />
                   <button
                     type="button"
@@ -308,7 +308,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <button
                     type="button"
                     onClick={handleSaveWorkspaceRoot}
-                    className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-sm transition-colors cursor-pointer"
+                    className="px-3 py-2 rounded-lg bg-orange-600 hover:bg-orange-500 text-white text-xs font-semibold shadow-sm transition-colors cursor-pointer"
                   >
                     Apply
                   </button>
@@ -323,10 +323,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <div className="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-3 shadow-sm">
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-2">
-                  <Info className="w-4 h-4 text-emerald-500 dark:text-emerald-400" />
+                  <Info className="w-4 h-4 text-orange-500 dark:text-orange-400" />
                   <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-200">PanoramaSRE Build Provenance</h3>
                 </div>
-                <span className="px-2 py-0.5 rounded text-xs font-mono font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30">
+                <span className="px-2 py-0.5 rounded text-xs font-mono font-semibold bg-orange-500/10 text-orange-700 dark:text-orange-400 border border-orange-500/30">
                   {APP_VERSION_INFO.fullVersionString}
                 </span>
               </div>
@@ -337,7 +337,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
                 <div>
                   <span className="text-slate-500 block text-[11px]">Git Commit SHA:</span>
-                  <span className="text-emerald-600 dark:text-emerald-400 font-semibold">{APP_VERSION_INFO.buildHash}</span>
+                  <span className="text-teal-600 dark:text-cyan-400 font-semibold">{APP_VERSION_INFO.buildHash}</span>
                 </div>
                 <div>
                   <span className="text-slate-500 block text-[11px]">Build Timestamp:</span>
@@ -362,7 +362,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   type="checkbox"
                   checked={minimizeToTray}
                   onChange={(e) => setMinimizeToTray(e.target.checked)}
-                  className="w-4 h-4 accent-emerald-500 rounded bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-700"
+                  className="w-4 h-4 accent-orange-500 rounded bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-700"
                 />
               </label>
 
@@ -375,7 +375,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   type="checkbox"
                   checked={toastAlerts}
                   onChange={(e) => setToastAlerts(e.target.checked)}
-                  className="w-4 h-4 accent-emerald-500 rounded bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-700"
+                  className="w-4 h-4 accent-orange-500 rounded bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-700"
                 />
               </label>
             </div>
