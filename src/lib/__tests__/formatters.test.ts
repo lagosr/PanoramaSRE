@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseUtcDate, formatLocalDateTime, formatLocalDate, formatRelativeTime } from '../formatters';
+import { parseUtcDate, formatLocalDateTime, formatLocalDate, formatLocalTime, formatLocalIsoDate, formatRelativeTime } from '../formatters';
 
 describe('formatters and date normalization', () => {
   it('correctly normalizes SQLite space-separated UTC strings', () => {
@@ -8,6 +8,8 @@ describe('formatters and date normalization', () => {
     expect(parsed?.toISOString()).toBe('2026-11-01T12:00:00.000Z');
     expect(formatLocalDateTime(parsed)).toBeDefined();
     expect(formatLocalDate(parsed)).toBeDefined();
+    expect(formatLocalTime(parsed)).toBeDefined();
+    expect(formatLocalIsoDate(parsed)).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 
   it('correctly normalizes standard ISO UTC strings', () => {

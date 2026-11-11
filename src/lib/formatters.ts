@@ -44,6 +44,26 @@ export function formatLocalDate(input: string | number | Date | null | undefined
   });
 }
 
+export function formatLocalTime(input: string | number | Date | null | undefined): string {
+  const d = parseUtcDate(input);
+  if (!d) return 'N/A';
+  return d.toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+  });
+}
+
+export function formatLocalIsoDate(input: string | number | Date | null | undefined): string {
+  const d = parseUtcDate(input);
+  if (!d) return 'N/A';
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 export function formatRelativeTime(input: string | number | Date | null | undefined): string {
   const d = parseUtcDate(input);
   if (!d) return 'Never';

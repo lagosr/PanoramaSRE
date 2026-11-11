@@ -4,6 +4,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GfsTiersBreakdown {
+    pub daily_count: usize,
+    pub weekly_count: usize,
+    pub monthly_count: usize,
+    pub total_archives: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalBackupArchive {
     pub file_name: String,
     pub full_path: String,
@@ -12,6 +20,7 @@ pub struct LocalBackupArchive {
     pub date_str: String,
     pub timestamp_str: String,
     pub is_auto_gfs: bool,
+    pub gfs_tier: String,
     pub health_snapshot: Option<serde_json::Value>,
 }
 
@@ -19,6 +28,7 @@ pub struct LocalBackupArchive {
 pub struct BackupScanResult {
     pub backup_dir: String,
     pub archives: Vec<LocalBackupArchive>,
+    pub gfs_breakdown: GfsTiersBreakdown,
 }
 
 fn parse_archive_metadata(path: &Path) -> (u32, String, String, bool) {
@@ -139,6 +149,18 @@ pub async fn scan_local_backups(workspace_path: String) -> Result<BackupScanResu
                             let file_name = name.to_string();
                             let (schema_version, date_str, timestamp_str, is_auto_gfs) = parse_archive_metadata(&path);
 
+                            let today = chrono::Local::now().date_naive();
+                            let archive_date = chrono::NaiveDate::parse_from_str(&date_str, "%Y-%m-%d").unwrap_or(today);
+                            let age_days = (today - archive_date).num_days();
+
+                            let gfs_tier = if age_days <= 7 {
+                                "Daily".to_string()
+                            } else if age_days <= 30 {
+                                "Weekly".to_string()
+                            } else {
+                                "Monthly".to_string()
+                            };
+
                             archives.push(LocalBackupArchive {
                                 file_name,
                                 full_path: path.to_string_lossy().to_string(),
@@ -147,6 +169,7 @@ pub async fn scan_local_backups(workspace_path: String) -> Result<BackupScanResu
                                 date_str,
                                 timestamp_str,
                                 is_auto_gfs,
+                                gfs_tier,
                                 health_snapshot: None, // Fast scan initially
                             });
                         }
@@ -163,9 +186,28 @@ pub async fn scan_local_backups(workspace_path: String) -> Result<BackupScanResu
             a.health_snapshot = peek_health_json_from_tar(Path::new(&a.full_path));
         }
 
+        let mut daily_count = 0;
+        let mut weekly_count = 0;
+        let mut monthly_count = 0;
+        for a in &archives {
+            match a.gfs_tier.as_str() {
+                "Daily" => daily_count += 1,
+                "Weekly" => weekly_count += 1,
+                _ => monthly_count += 1,
+            }
+        }
+
+        let gfs_breakdown = GfsTiersBreakdown {
+            daily_count,
+            weekly_count,
+            monthly_count,
+            total_archives: archives.len(),
+        };
+
         Ok(BackupScanResult {
             backup_dir: backups_dir.to_string_lossy().to_string(),
             archives,
+            gfs_breakdown,
         })
     })
     .await

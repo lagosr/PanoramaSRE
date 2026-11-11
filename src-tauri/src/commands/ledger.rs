@@ -26,12 +26,26 @@ pub struct BackupRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DayBackupStatus {
+    pub date: String,       // YYYY-MM-DD
+    pub day_label: String,  // "Mon", "Tue", etc.
+    pub status: String,     // "Success" | "Failed" | "NoRun"
+    pub run_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupLedgerSummary {
     pub history_file_exists: bool,
     pub ledger_source_path: String,
     pub total_runs: usize,
     pub successful_runs: usize,
     pub failed_runs: usize,
+    pub runs_7d: usize,
+    pub successful_runs_7d: usize,
+    pub failed_runs_7d: usize,
+    pub daily_pips_7d: Vec<DayBackupStatus>,
+    pub total_pruned_count: usize,
+    pub pruned_per_app: HashMap<String, usize>,
     pub last_run_timestamp: Option<String>,
     pub last_run_status: Option<String>,
     pub latest_app_details: Vec<AppBackupDetail>,
@@ -67,6 +81,12 @@ pub async fn read_backup_ledger(custom_path: Option<String>) -> Result<BackupLed
                     total_runs: 0,
                     successful_runs: 0,
                     failed_runs: 0,
+                    runs_7d: 0,
+                    successful_runs_7d: 0,
+                    failed_runs_7d: 0,
+                    daily_pips_7d: vec![],
+                    total_pruned_count: 0,
+                    pruned_per_app: HashMap::new(),
                     last_run_timestamp: None,
                     last_run_status: None,
                     latest_app_details: vec![],
@@ -144,7 +164,7 @@ pub async fn read_backup_ledger(custom_path: Option<String>) -> Result<BackupLed
                 r["apps_backed_up"].as_u64().unwrap_or(0) as u32
             };
 
-            if parsed.len() < 30 {
+            if parsed.len() < 50 {
                 parsed.push(BackupRecord {
                     timestamp: r["timestamp"].as_str().unwrap_or("").to_string(),
                     status: if is_success { "Success".into() } else { "Failed".into() },
@@ -161,12 +181,80 @@ pub async fn read_backup_ledger(custom_path: Option<String>) -> Result<BackupLed
         let last_run = parsed.first();
         let latest_app_details = last_run.map(|r| r.app_details.clone()).unwrap_or_default();
 
+        // Calculate all-time pruned files
+        let mut total_pruned_count: usize = 0;
+        let mut pruned_per_app: HashMap<String, usize> = HashMap::new();
+        for r in &records {
+            if let Some(pruning_map) = r["pruning"].as_object() {
+                for (app_name, pinfo) in pruning_map {
+                    if let Some(del_arr) = pinfo["deleted"].as_array() {
+                        total_pruned_count += del_arr.len();
+                        *pruned_per_app.entry(app_name.clone()).or_insert(0) += del_arr.len();
+                    }
+                }
+            }
+        }
+
+        // Calculate 7-day rolling window & daily status pips
+        let today = chrono::Local::now().date_naive();
+        let mut daily_pips_7d: Vec<DayBackupStatus> = Vec::new();
+        let mut runs_7d = 0;
+        let mut successful_runs_7d = 0;
+        let mut failed_runs_7d = 0;
+
+        for day_offset in (0..7).rev() {
+            let day_date = today - chrono::Duration::days(day_offset);
+            let date_str = day_date.format("%Y-%m-%d").to_string();
+            let day_label = day_date.format("%a").to_string();
+
+            let mut day_success_count = 0;
+            let mut day_failed_count = 0;
+
+            for r in &records {
+                let ts = r["timestamp"].as_str().unwrap_or("");
+                if ts.starts_with(&date_str) {
+                    let status_raw = r["status"].as_str().unwrap_or("Unknown");
+                    if status_raw.eq_ignore_ascii_case("success") {
+                        day_success_count += 1;
+                    } else {
+                        day_failed_count += 1;
+                    }
+                }
+            }
+
+            let day_run_count = day_success_count + day_failed_count;
+            let day_status = if day_failed_count > 0 {
+                "Failed".to_string()
+            } else if day_success_count > 0 {
+                "Success".to_string()
+            } else {
+                "NoRun".to_string()
+            };
+
+            runs_7d += day_run_count;
+            successful_runs_7d += day_success_count;
+            failed_runs_7d += day_failed_count;
+
+            daily_pips_7d.push(DayBackupStatus {
+                date: date_str,
+                day_label,
+                status: day_status,
+                run_count: day_run_count,
+            });
+        }
+
         Ok(BackupLedgerSummary {
             history_file_exists: true,
             ledger_source_path: path_str,
             total_runs,
             successful_runs,
             failed_runs,
+            runs_7d,
+            successful_runs_7d,
+            failed_runs_7d,
+            daily_pips_7d,
+            total_pruned_count,
+            pruned_per_app,
             last_run_timestamp: last_run.map(|r| r.timestamp.clone()),
             last_run_status: last_run.map(|r| r.status.clone()),
             latest_app_details,

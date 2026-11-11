@@ -142,6 +142,20 @@ export interface DevServerInfo {
   sqlite_user_version: number | null;
 }
 
+export interface DayBackupStatus {
+  date: string;
+  day_label: string;
+  status: 'Success' | 'Failed' | 'NoRun';
+  run_count: number;
+}
+
+export interface GfsTiersBreakdown {
+  daily_count: number;
+  weekly_count: number;
+  monthly_count: number;
+  total_archives: number;
+}
+
 export interface LocalBackupArchive {
   file_name: string;
   full_path: string;
@@ -150,12 +164,14 @@ export interface LocalBackupArchive {
   date_str: string;
   timestamp_str: string;
   is_auto_gfs: boolean;
+  gfs_tier: 'Daily' | 'Weekly' | 'Monthly' | string;
   health_snapshot: Record<string, unknown> | null;
 }
 
 export interface BackupScanResult {
   backup_dir: string;
   archives: LocalBackupArchive[];
+  gfs_breakdown: GfsTiersBreakdown;
 }
 
 export interface DiscoveredApp {
@@ -213,6 +229,12 @@ export interface BackupLedgerSummary {
   total_runs: number;
   successful_runs: number;
   failed_runs: number;
+  runs_7d: number;
+  successful_runs_7d: number;
+  failed_runs_7d: number;
+  daily_pips_7d: DayBackupStatus[];
+  total_pruned_count: number;
+  pruned_per_app?: Record<string, number>;
   last_run_timestamp: string | null;
   last_run_status: string | null;
   latest_app_details: AppBackupDetail[];
