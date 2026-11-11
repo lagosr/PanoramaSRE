@@ -33,6 +33,18 @@ try {
   const content = readFileSync(tauriConfPath, 'utf-8');
   const json = JSON.parse(content);
   json.version = pkgVersion;
+  if (json.bundle?.windows?.signCommand?.args) {
+    const signScriptPath = path.resolve(__dirname, './sign-binary.ps1').replace(/\\/g, '/');
+    json.bundle.windows.signCommand.args = [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      signScriptPath,
+      '%1'
+    ];
+  }
   if (json.app?.windows?.[0]) {
     json.app.windows[0].title = fullTitle;
     writeFileSync(tauriConfPath, JSON.stringify(json, null, 2) + '\n', 'utf-8');

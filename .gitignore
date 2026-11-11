@@ -12,6 +12,9 @@ src-tauri/gen/
 .env
 .env*.local
 .env.deploy
+*.pfx
+*.p12
+*.key
 
 # Editor / OS
 .DS_Store

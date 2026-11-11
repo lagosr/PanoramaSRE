@@ -13,6 +13,8 @@
     "test:integration": "vitest run src/lib/__tests__/network-integration.test.ts",
     "test:pester": "pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command \"Invoke-Pester -Script ./tests/pester -EnableExit\"",
     "test:all": "npm test && npm run test:pester",
+    "cert:setup": "pwsh.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/Setup-CodeSigningCert.ps1",
+    "cert:verify": "pwsh.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/Verify-Authenticode.ps1",
     "tauri": "tauri"
   },
   "dependencies": {

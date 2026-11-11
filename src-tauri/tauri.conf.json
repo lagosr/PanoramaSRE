@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "PanoramaSRE Control Plane v1.2.4 (Build 20261110.1027)",
+        "title": "PanoramaSRE Control Plane v1.2.4 (Build 20261110.2058)",
         "width": 1280,
         "height": 800,
         "minWidth": 900,
@@ -29,13 +29,37 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "nsis"
+    ],
+    "publisher": "PanoramaDrSuite",
+    "copyright": "Copyright (c) 2026 PanoramaDrSuite. All rights reserved.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": {
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "http://timestamp.digicert.com",
+      "tsp": false,
+      "signCommand": {
+        "cmd": "pwsh.exe",
+        "args": [
+          "-NoProfile",
+          "-NonInteractive",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "C:/Users/rodrigo/Documents/AG Projects/PanoramaSRE/scripts/sign-binary.ps1",
+          "%1"
+        ]
+      },
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
   }
 }

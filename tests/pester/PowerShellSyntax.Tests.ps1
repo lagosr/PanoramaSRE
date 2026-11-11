@@ -1,10 +1,13 @@
 # Pester 3.4+ compatible test suite for PowerShell Automation Scripts in PanoramaDrSuite
 $toolsDir = Resolve-Path "$PSScriptRoot/../../../PanoramaDrSuite/tools"
+$sreScriptsDir = Resolve-Path "$PSScriptRoot/../../scripts"
 
 Describe "PowerShell Tooling Syntax & AST Validation" {
-    $scriptFiles = Get-ChildItem -Path $toolsDir -Filter "*.ps1" -Recurse
+    $scriptFiles = @()
+    $scriptFiles += Get-ChildItem -Path $toolsDir -Filter "*.ps1" -Recurse
+    $scriptFiles += Get-ChildItem -Path $sreScriptsDir -Filter "*.ps1" -Recurse
 
-    It "Finds PowerShell automation scripts in tools directory" {
+    It "Finds PowerShell automation scripts in tools and scripts directories" {
         $scriptFiles.Count | Should BeGreaterThan 0
     }
 

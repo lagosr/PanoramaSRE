@@ -168,10 +168,15 @@ PanoramaSRE/
 ├── vitest.config.ts                         # Vitest test runner configuration
 ├── index.html                               # HTML root template
 ├── public/                                  # Static branding assets
-├── scripts/                                 # Host probes & build synchronization scripts
+├── certs/                                   # Public Authenticode code signing certificates
+│   └── PanoramaDrSuite-CodeSigning.cer      # Public RSA-4096 SHA-256 Code Signing Certificate
+├── scripts/                                 # Host probes, Authenticode signing & build scripts
+│   ├── Setup-CodeSigningCert.ps1            # RSA-4096 SHA-256 self-signed code signing PKI provisioner
+│   ├── sign-binary.ps1                      # Automated Authenticode binary/installer signing hook
+│   ├── Verify-Authenticode.ps1              # Post-build Authenticode signature & store verifier
 │   ├── probe_ssl_dual.ps1                   # Dual-probe TLS certificate query script
 │   ├── run-pester-json.ps1                  # Pester unit test JSON output adapter
-│   ├── sync-build-info.mjs                  # Build metadata stamper (timestamp, git revision)
+│   ├── sync-build-info.mjs                  # Build metadata & portable signCommand path stamper
 │   ├── Test-PanoramaSREStartup.ps1          # Cold start verification script
 │   └── wsh_snapshot.sh                      # Stateless read-only DietPi host & docker probe
 ├── src/                                     # React 19 Frontend
@@ -226,13 +231,60 @@ PanoramaSRE/
 
 ---
 
+## 🛡️ Windows Authenticode Code Signing & Zero-UAC Installer Pipeline
+
+Because **PanoramaSRE** runs as a standard unprivileged user (`rodrigo`) to preserve direct access to workstation DPAPI secrets (`.cf-token.enc`), `HKCU` SSH/PuTTY keys, Docker Desktop contexts, and user-scoped npm/Git credentials, its installer and desktop binaries are engineered for **Zero-UAC Per-User Installation** paired with **Automated RSA-4096 SHA-256 Authenticode Code Signing**.
+
+### 1. Why NSIS `currentUser` Exclusively (No `.msi` Per-Machine Target)
+*   **Zero UAC Elevation (`installMode: "currentUser"`):** Configured with `"targets": ["nsis"]` and `"nsis": { "installMode": "currentUser" }` in `src-tauri/tauri.conf.json`. The generated NSIS installer compiles with `RequestExecutionLevel user` and installs cleanly into `%LOCALAPPDATA%\PanoramaSRE` without triggering a Windows User Account Control (UAC) administrator prompt.
+*   **Elimination of Legacy WiX `.msi` UAC Conflicts:** Tauri's WiX `.msi` bundler hardcodes `InstallScope="perMachine"` (`C:\Program Files\PanoramaSRE`). Furthermore, if a per-machine `.msi` was ever installed in `HKLM`, Tauri's NSIS template (`FindWixInstall`) detects the `HKLM` uninstall key and spawns `MsiExec.exe /X{GUID}` during upgrades—triggering an unexpected UAC prompt even in a `currentUser` installer. Restricting `"targets": ["nsis"]` guarantees 100% unprivileged, UAC-free installations and upgrades.
+
+### 2. End-to-End Build & 4-Stage Authenticode Signing Flow
+
+```text
++-----------------------------------------------------------------------------------+
+| 1. npm run prebuild (scripts/sync-build-info.mjs)                                 |
+|    - Stamps version + Git build ID into window title                              |
+|    - Resolves portable absolute path for scripts/sign-binary.ps1 in tauri.conf    |
++-----------------------------------------+-----------------------------------------+
+                                          |
+                                          v
++-----------------------------------------------------------------------------------+
+| 2. cargo build --release & tauri-bundler (NSIS x64)                               |
+|    - Stage A: Signs src-tauri/target/release/panorama-sre.exe                     |
+|    - Stage B: Signs NSIS helper plugin DLLs (nsis_tauri_utils.dll)                |
+|    - Stage C: Invokes !uninstfinalize hook to sign generated uninstall.exe        |
+|    - Stage D: Signs final PanoramaSRE_<version>_x64-setup.exe installer           |
++-----------------------------------------+-----------------------------------------+
+                                          |
+                                          v
++-----------------------------------------------------------------------------------+
+| 3. npm run cert:verify (scripts/Verify-Authenticode.ps1)                          |
+|    - Re-signs restored standalone target/release/panorama-sre.exe on disk         |
+|    - Verifies Authenticode signatures & TrustedPublisher presence (Exit Code 0)   |
++-----------------------------------------------------------------------------------+
+```
+
+### 3. Code Signing Scripts & `tauri-bundler` Integration
+*   **`scripts/Setup-CodeSigningCert.ps1` (`npm run cert:setup`):**
+    *   Idempotently checks `Cert:\CurrentUser\My` for an active code signing certificate matching `CN=PanoramaDrSuite, O=PanoramaDrSuite` with $> 30\text{ days}$ validity remaining.
+    *   If absent (or `-Force` is passed), provisions a 5-year **RSA-4096 SHA-256** self-signed `CodeSigningCert` (`2.5.29.37={text}1.3.6.1.5.5.7.3.3`), exports the public certificate to `certs/PanoramaDrSuite-CodeSigning.cer`, and imports it into `Cert:\CurrentUser\TrustedPublisher` and `Cert:\CurrentUser\Root` (supports `-SkipRootPrompt` for non-interactive CI/background builds).
+*   **`scripts/sign-binary.ps1`:**
+    *   Automatically locates the latest Windows 10/11 SDK `x64\signtool.exe` (or `$env:SIGNTOOL_PATH`) and the active `PanoramaDrSuite` certificate in `Cert:\CurrentUser\My` (auto-invoking `Setup-CodeSigningCert.ps1 -SkipRootPrompt` if needed).
+    *   Executes `signtool.exe sign /sha1 <Thumbprint> /fd sha256 /tr "http://timestamp.digicert.com" /td sha256 /d "PanoramaSRE Control Plane" <FilePath>`, with automatic fallback to offline SHA-256 signing if the RFC 3161 timestamp server is unreachable.
+    *   **Standalone `"%1"` Contract:** Tauri v2's `tauri-bundler` substitutes `"%1"` only when it appears as an exact standalone element in `bundle.windows.signCommand.args`, and `makensis.exe` executes `!uninstfinalize` from `src-tauri/target/release/nsis/x64/`. To remain immune to working-directory shifts across machines, `scripts/sync-build-info.mjs` dynamically writes the resolved host path of `scripts/sign-binary.ps1` into `tauri.conf.json` prior to every build.
+*   **`scripts/Verify-Authenticode.ps1` (`npm run cert:verify`):**
+    *   Because `tauri-bundler` temporarily patches `panorama-sre.exe` with `__TAURI_BUNDLE_TYPE="nsis"`, signs it, packs it into the setup `.exe`, and then restores the unpatched `panorama-sre.exe` backup on disk after `makensis` finishes, `Verify-Authenticode.ps1` automatically signs the restored standalone `src-tauri/target/release/panorama-sre.exe` if `NotSigned` and verifies that both the standalone binary and latest `PanoramaSRE_*_x64-setup.exe` installer carry valid `CN=PanoramaDrSuite` Authenticode signatures.
+
+---
+
 ## 🚀 Development & Testing Guide
 
 ### Prerequisites
 *   **Operating System:** Windows 11 (`x86_64`)
 *   **Node.js:** v20+ or v22+
 *   **Rust & Cargo:** Modern stable Rust (`rustup default stable`)
-*   **Build Tools:** Microsoft C++ Build Tools (installed with Visual Studio or Visual Studio Build Tools)
+*   **Build Tools:** Microsoft C++ Build Tools & Windows 10/11 SDK (`signtool.exe`)
 *   **OpenSSH:** Windows OpenSSH client installed (`ssh.exe` and `scp.exe`)
 
 ### Setup & Launch
@@ -244,9 +296,9 @@ PanoramaSRE/
     ```powershell
     npm run dev
     ```
-3.  **Execute Automated Frontend Tests:**
+3.  **Execute Automated Frontend & PowerShell Tests:**
     ```powershell
-    npm run test
+    npm run test:all
     ```
 4.  **Verify Rust Backend Compilation:**
     ```powershell
@@ -256,8 +308,15 @@ PanoramaSRE/
     ```powershell
     npm run tauri dev
     ```
-6.  **Compile Production Desktop Application:**
+6.  **Provision Code Signing Certificate & Compile Signed Production Installer:**
     ```powershell
+    # One-time setup: generates RSA-4096 cert & installs into CurrentUser\TrustedPublisher & Root
+    npm run cert:setup
+
+    # Build & Authenticode-sign the per-user NSIS installer
     npm run tauri build
+
+    # Verify Authenticode signatures on standalone binary & NSIS setup.exe
+    npm run cert:verify
     ```
-    *Builds production `.exe` installer (NSIS) and `.msi` package in `src-tauri/target/release/bundle/`.*
+    *Produces the signed, zero-UAC per-user installer `src-tauri/target/release/bundle/nsis/PanoramaSRE_<version>_x64-setup.exe`.*
