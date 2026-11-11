@@ -9,8 +9,10 @@ pub mod commands {
     pub mod ssl_ops;
     pub mod workspace;
 }
+pub mod control_server;
 pub mod db;
 pub mod dev_supervisor;
+pub mod ipc_security;
 pub mod job_manager;
 pub mod notifications;
 pub mod scheduler;
@@ -74,6 +76,8 @@ pub fn run() {
             SreDatabase::new("sre.sqlite").expect("Failed to initialize SQLite database")
         })
     ));
+    let sre_db_clone = Arc::clone(&sre_db);
+    let dev_supervisor_ipc = Arc::clone(&dev_supervisor);
 
     {
         if let Ok(guard) = sre_db.lock() {
@@ -131,6 +135,13 @@ pub fn run() {
             // Start background TelemetryScheduler
             scheduler_clone.start(app.handle().clone());
 
+            // Start Zero-Trust Named Pipe IPC Control Server for AI Agent MCP Bridge
+            control_server::start_control_server(
+                app.handle().clone(),
+                Arc::clone(&dev_supervisor_ipc),
+                Arc::clone(&sre_db_clone),
+            );
+
             // Window close-to-tray handler per ADR-01
             if let Some(window) = app.get_webview_window("main") {
                 if let Ok(app_icon) = tauri::image::Image::from_bytes(include_bytes!("../icons/128x128@2x.png")) {
@@ -145,6 +156,7 @@ pub fn run() {
                 window.on_window_event(move |event| {
                     match event {
                         tauri::WindowEvent::Destroyed => {
+                            control_server::cleanup_current_lease();
                             ds.stop_all();
                             let jm_task = Arc::clone(&jm);
                             tokio::spawn(async move {

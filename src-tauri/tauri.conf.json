@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "PanoramaSRE Control Plane v1.3.1 (Build 20261111.0915)",
+        "title": "PanoramaSRE Control Plane v1.3.1 (Build 20261111.1019)",
         "width": 1280,
         "height": 800,
         "minWidth": 900,
@@ -53,7 +53,7 @@
           "-ExecutionPolicy",
           "Bypass",
           "-File",
-          "c:/Users/rodrigo/Documents/AG Projects/PanoramaSRE/scripts/sign-binary.ps1",
+          "C:/Users/rodrigo/Documents/AG Projects/PanoramaSRE/scripts/sign-binary.ps1",
           "%1"
         ]
       },

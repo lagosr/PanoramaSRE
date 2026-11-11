@@ -133,6 +133,190 @@ impl DevSupervisor {
             let _ = child.kill();
         }
     }
+
+    /// Return currently active managed app IDs (pruning any exited children first)
+    pub fn managed_app_ids(&self) -> Vec<String> {
+        let mut map = match self.managed_processes.lock() {
+            Ok(g) => g,
+            Err(_) => return Vec::new(),
+        };
+        map.retain(|_, child| matches!(child.try_wait(), Ok(None)));
+        let mut ids: Vec<String> = map.keys().cloned().collect();
+        ids.sort();
+        ids
+    }
+
+    /// Query dev server status for discovered suite apps directly (used by IPC Control Server)
+    pub fn query_status_for_discovered(
+        &self,
+        apps: &[crate::commands::workspace::DiscoveredAppDto],
+    ) -> Vec<DevServerInfo> {
+        let mut results = Vec::new();
+        let mut managed_map = self.managed_processes.lock().unwrap();
+
+        managed_map.retain(|_app_id, child| matches!(child.try_wait(), Ok(None)));
+
+        for app in apps {
+            let app_id = app
+                .manifest
+                .app_id
+                .clone()
+                .unwrap_or_else(|| app.manifest.slug.clone());
+            let port = app.manifest.port;
+            let base_path = app.manifest.base_path.clone();
+            let workspace_path = &app.workspace_path;
+            let local_sqlite_rel = app
+                .manifest
+                .local_sqlite_path
+                .as_deref()
+                .unwrap_or("");
+
+            let local_url = format!("http://localhost:{}{}", port, base_path);
+            let managed_pid = managed_map.get(&app_id).map(|c| c.id());
+            let is_open = DevSupervisor::is_port_listening(port);
+
+            let status = if managed_pid.is_some() {
+                DevServerStatus::RunningManaged
+            } else if is_open {
+                DevServerStatus::RunningExternal
+            } else {
+                DevServerStatus::Stopped
+            };
+
+            let (sqlite_size, sqlite_version) =
+                if !local_sqlite_rel.is_empty() && !workspace_path.is_empty() {
+                    let db_path = Path::new(workspace_path).join(local_sqlite_rel);
+                    DevSupervisor::inspect_sqlite(&db_path)
+                } else {
+                    (None, None)
+                };
+
+            results.push(DevServerInfo {
+                app_id,
+                status,
+                pid: managed_pid,
+                port,
+                base_path,
+                local_url,
+                sqlite_path: if local_sqlite_rel.is_empty() {
+                    None
+                } else {
+                    Some(local_sqlite_rel.to_string())
+                },
+                sqlite_size_bytes: sqlite_size,
+                sqlite_user_version: sqlite_version,
+            });
+        }
+
+        results
+    }
+
+    /// Start a dev server and register it in `managed_processes`
+    pub fn start_app_internal(
+        &self,
+        db: &Arc<Mutex<crate::db::SreDatabase>>,
+        app_id: &str,
+        workspace_path: &str,
+        dev_command: Option<&str>,
+        port: Option<u16>,
+    ) -> Result<u32, String> {
+        let mut map = self.managed_processes.lock().unwrap();
+
+        if let Some(child) = map.get_mut(app_id) {
+            if let Ok(None) = child.try_wait() {
+                let pid = child.id();
+                if let Ok(guard) = db.lock() {
+                    let _ = guard.log_action(
+                        "DEV_SUPERVISOR",
+                        "INFO",
+                        &format!("Dev server {} already running", app_id),
+                        Some(&format!("pid={}", pid)),
+                    );
+                }
+                return Ok(pid);
+            }
+        }
+
+        let raw_cmd = dev_command.unwrap_or("npm run dev").to_string();
+        if raw_cmd.trim().is_empty() {
+            return Err("Empty dev command".into());
+        }
+
+        let mut cmd_str = raw_cmd.clone();
+        if let Some(p) = port {
+            if cmd_str == "npm run dev" || cmd_str == "npm run dev --" {
+                cmd_str = format!("npm run dev -- -p {}", p);
+            }
+        }
+
+        #[cfg(windows)]
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+        let mut cmd = Command::new("cmd");
+        cmd.current_dir(workspace_path).args(["/c", &cmd_str]);
+
+        if let Some(p) = port {
+            cmd.env("PORT", p.to_string());
+        }
+
+        #[cfg(windows)]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+
+        let child = cmd
+            .spawn()
+            .map_err(|e| format!("Failed to spawn {}: {}", cmd_str, e))?;
+        let pid = child.id();
+        map.insert(app_id.to_string(), child);
+
+        if let Ok(guard) = db.lock() {
+            let _ = guard.log_action(
+                "DEV_SUPERVISOR",
+                "INFO",
+                &format!("Started dev server for {}", app_id),
+                Some(&format!(
+                    "pid={}, cmd={}, port={:?}, path={}",
+                    pid, cmd_str, port, workspace_path
+                )),
+            );
+        }
+
+        Ok(pid)
+    }
+
+    /// Stop a dev server by app_id and port
+    pub fn stop_app_internal(
+        &self,
+        db: &Arc<Mutex<crate::db::SreDatabase>>,
+        app_id: &str,
+        port: Option<u16>,
+    ) -> Result<bool, String> {
+        let mut map = self.managed_processes.lock().unwrap();
+        let mut stopped = false;
+
+        if let Some(mut child) = map.remove(app_id) {
+            let pid = child.id();
+            DevSupervisor::kill_process_tree(pid);
+            let _ = child.kill();
+            stopped = true;
+        }
+
+        if let Some(p) = port {
+            DevSupervisor::kill_by_port(p);
+            stopped = true;
+        }
+
+        if let Ok(guard) = db.lock() {
+            let _ = guard.log_action(
+                "DEV_SUPERVISOR",
+                "INFO",
+                &format!("Stopped dev server for {}", app_id),
+                Some(&format!("port={:?}", port)),
+            );
+        }
+
+        Ok(stopped)
+    }
 }
 
 #[tauri::command]

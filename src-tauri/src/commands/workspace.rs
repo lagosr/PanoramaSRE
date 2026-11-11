@@ -11,6 +11,7 @@ pub async fn exit_app_completely(
     dev_supervisor: tauri::State<'_, std::sync::Arc<crate::dev_supervisor::DevSupervisor>>,
     job_manager: tauri::State<'_, std::sync::Arc<crate::job_manager::JobManager>>,
 ) -> Result<(), String> {
+    crate::control_server::cleanup_current_lease();
     dev_supervisor.stop_all();
     job_manager.abort_all().await;
     app.exit(0);
@@ -65,6 +66,10 @@ pub struct AppManifestDto {
     pub icon: Option<String>,
     #[serde(rename = "hasDatabase")]
     pub has_database: bool,
+    #[serde(default)]
+    pub dev_command: Option<String>,
+    #[serde(default)]
+    pub requires_auth_in_dev: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -205,9 +210,8 @@ pub async fn save_workspace_setting(
     Ok(resolved.to_string_lossy().to_string())
 }
 
-#[tauri::command]
-pub async fn discover_suite_apps(
-    db: State<'_, Arc<Mutex<SreDatabase>>>,
+pub fn discover_suite_apps_internal(
+    db: &Arc<Mutex<SreDatabase>>,
     workspace_root: Option<String>,
 ) -> Result<Vec<DiscoveredAppDto>, String> {
     let configured = if let Some(r) = workspace_root {
@@ -247,6 +251,16 @@ pub async fn discover_suite_apps(
                         }
 
                         if !slug.is_empty() {
+                            let sre_block = manifest_val.get("sre");
+                            let dev_command = sre_block
+                                .and_then(|s| s.get("devCommand"))
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
+                            let requires_auth_in_dev = sre_block
+                                .and_then(|s| s.get("requiresAuthInDev"))
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(slug != "auth" && slug != "res");
+
                             let dto = AppManifestDto {
                                 schema_version: manifest_val["schemaVersion"].as_i64().map(|v| v as i32),
                                 app_id: manifest_val["appId"].as_str().map(|s| s.to_string()),
@@ -263,6 +277,8 @@ pub async fn discover_suite_apps(
                                 theme_color: manifest_val["themeColor"].as_str().map(|s| s.to_string()),
                                 icon: manifest_val["icon"].as_str().map(|s| s.to_string()),
                                 has_database: manifest_val.get("hasDatabase").and_then(|v| v.as_bool()).unwrap_or(true),
+                                dev_command,
+                                requires_auth_in_dev,
                             };
 
                             apps.push(DiscoveredAppDto {
@@ -280,6 +296,14 @@ pub async fn discover_suite_apps(
     // Sort stably by port
     apps.sort_by_key(|a| a.manifest.port);
     Ok(apps)
+}
+
+#[tauri::command]
+pub async fn discover_suite_apps(
+    db: State<'_, Arc<Mutex<SreDatabase>>>,
+    workspace_root: Option<String>,
+) -> Result<Vec<DiscoveredAppDto>, String> {
+    discover_suite_apps_internal(&db, workspace_root)
 }
 
 #[cfg(test)]

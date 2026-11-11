@@ -483,6 +483,33 @@ export const App: React.FC = () => {
     };
   }, [refreshDevServers, refreshAppliances, refreshWshTelemetry, refreshBackupLedger, refreshSslStatus, syncFullTelemetry]);
 
+  // Listen for AI Agent MCP Control Plane IPC actions & security alerts
+  useEffect(() => {
+    let unlistenAction: (() => void) | undefined;
+    let unlistenAlert: (() => void) | undefined;
+
+    listen<{ action: string; slug: string; message: string }>('sre://agent-action', (event) => {
+      const msg = event.payload?.message || `AI Agent executed ${event.payload?.action || 'action'}`;
+      showActionFeedback(msg, 'success', 4000);
+      refreshDevServers();
+      setTimeout(() => refreshDevServers(), 800);
+    }).then((unsub) => {
+      unlistenAction = unsub;
+    });
+
+    listen<{ pid: number; exePath: string; reason: string }>('sre://security-alert', (event) => {
+      const reason = event.payload?.reason || 'Unauthorized IPC access blocked';
+      showActionFeedback(`[SECURITY ALERT] ${reason}`, 'error', 8000);
+    }).then((unsub) => {
+      unlistenAlert = unsub;
+    });
+
+    return () => {
+      if (unlistenAction) unlistenAction();
+      if (unlistenAlert) unlistenAlert();
+    };
+  }, [showActionFeedback, refreshDevServers]);
+
   // Periodic WSH Security Hardening & Penetration Audit Timer
   useEffect(() => {
     const minutes = parseInt(securityAuditInterval, 10);

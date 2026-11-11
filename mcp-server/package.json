@@ -1,0 +1,12 @@
+{
+  "name": "@panoramasre/mcp-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Zero-Trust Named Pipe MCP Server and PreToolUse Guard for PanoramaSRE Desktop Control Plane",
+  "scripts": {
+    "start": "node ./src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --config ./vitest.config.ts"
+  }
+}

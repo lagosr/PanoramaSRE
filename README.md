@@ -204,12 +204,34 @@ PanoramaSRE/
 │       ├── types.ts                         # Strict TypeScript type definitions
 │       ├── version.ts                       # SemVer & Git SHA provenance comparators
 │       └── __tests__/                       # Comprehensive Vitest test suites (28 tests)
+├── mcp-server/                              # Zero-Trust Agent MCP Server & PreToolUse Guard (TypeScript)
+│   ├── package.json                         # MCP server scripts & metadata
+│   ├── tsconfig.json                        # Strict TypeScript NodeNext configuration
+│   ├── vitest.config.ts                     # Fork-isolated Vitest configuration
+│   ├── src/
+│   │   ├── index.ts                         # JSON-RPC 2.0 stdio MCP server & extensible domain registry
+│   │   ├── types/ipc.ts                     # Lease, signed envelope & tool schema contracts
+│   │   ├── client/
+│   │   │   ├── crypto.ts                    # Canonical BTreeMap-sorted JSON & HMAC-SHA256 signer
+│   │   │   ├── pipeClient.ts                # Windows Named Pipe NDJSON client (256 KiB cap)
+│   │   │   └── discovery.ts                 # Multi-instance election & Authenticode auto-launcher
+│   │   ├── domains/
+│   │   │   ├── instances.ts                 # sre_instances_list tool
+│   │   │   ├── devServers.ts                # sre_dev_status, sre_dev_start, sre_dev_stop, sre_dev_restart
+│   │   │   ├── composition.ts               # sre_git_composition tool
+│   │   │   └── diagnostics.ts               # sre_ops_telemetry tool (scrubbed logs, posture, backups, ssl)
+│   │   └── guard/
+│   │       └── preToolHook.ts               # Antigravity PreToolUse hook blocking unmanaged dev servers
+│   └── tests/
+│       └── mcp.test.ts                      # Unit & Named Pipe integration tests
 └── src-tauri/                               # Tauri v2 (Rust Backend)
-    ├── Cargo.toml                           # Rust dependencies (Tokio, Rusqlite, Serde, Reqwest)
+    ├── Cargo.toml                           # Rust dependencies (Tokio, Rusqlite, Serde, Reqwest, Sha2, Subtle)
     ├── tauri.conf.json                      # Tauri v2 window, tray, and plugin configurations
     └── src/
         ├── main.rs                          # Desktop application entrypoint
         ├── lib.rs                           # IPC command registration and lifecycle setup
+        ├── ipc_security.rs                  # 5-Gate Named Pipe security, HMAC-SHA256, ReplayGuard & PID lineage
+        ├── control_server.rs                # Async Named Pipe server & multi-instance lease manager
         ├── db.rs                            # Rusqlite SreDatabase initialization (data/sre.sqlite)
         ├── dev_supervisor.rs                # Child dev process supervision & port monitoring
         ├── job_manager.rs                   # FIFO job execution queue and mutex locks
@@ -275,6 +297,74 @@ Because **PanoramaSRE** runs as a standard unprivileged user (`rodrigo`) to pres
     *   **Standalone `"%1"` Contract:** Tauri v2's `tauri-bundler` substitutes `"%1"` only when it appears as an exact standalone element in `bundle.windows.signCommand.args`, and `makensis.exe` executes `!uninstfinalize` from `src-tauri/target/release/nsis/x64/`. To remain immune to working-directory shifts across machines, `scripts/sync-build-info.mjs` dynamically writes the resolved host path of `scripts/sign-binary.ps1` into `tauri.conf.json` prior to every build.
 *   **`scripts/Verify-Authenticode.ps1` (`npm run cert:verify`):**
     *   Because `tauri-bundler` temporarily patches `panorama-sre.exe` with `__TAURI_BUNDLE_TYPE="nsis"`, signs it, packs it into the setup `.exe`, and then restores the unpatched `panorama-sre.exe` backup on disk after `makensis` finishes, `Verify-Authenticode.ps1` automatically signs the restored standalone `src-tauri/target/release/panorama-sre.exe` if `NotSigned` and verifies that both the standalone binary and latest `PanoramaSRE_*_x64-setup.exe` installer carry valid `CN=PanoramaDrSuite` Authenticode signatures.
+
+---
+
+## 🤖 Zero-Trust Agent Control Plane & Extensible MCP Server
+
+To prevent AI coding agents from spawning unmanaged background `node.exe` dev servers via shell tools (which causes port collisions on `:3000`–`:3004`, locks `.next/lock`, and triggers `RUNNING_EXTERNAL` warnings in the UI), **PanoramaSRE** exposes a zero-trust local control plane paired with the global **`panorama-sre` Antigravity Plugin** (`C:\Users\rodrigo\.gemini\config\plugins\panorama-sre\`).
+
+```text
++-------------------------------------------------------------------------+
+| Antigravity IDE / Agent Conversation                                    |
+|                                                                         |
+|  1. Agent calls MCP tool: sre_dev_start({ slug: "biomed" })             |
+|     OR attempts run_command("npm run dev") -> Intercepted by PreToolUse |
++------------------------------------+------------------------------------+
+                                     |
+                                     v
++-------------------------------------------------------------------------+
+| PanoramaSRE MCP Server (mcp-server/src/index.ts, Node 24 TypeScript)    |
+|  - Discovers live leases in %LOCALAPPDATA%\com.panoramadr.sre\ipc\      |
+|  - Elects primary instance (Active Supervisor Affinity -> Installed)    |
+|  - Auto-launches PanoramaSRE (Authenticode X.509 verified) if offline   |
+|  - Signs payload with 256-bit HMAC-SHA256 + timestamp + 128-bit nonce   |
++------------------------------------+------------------------------------+
+                                     | Windows Named Pipe (No TCP Port!)
+                                     | \\.\pipe\panoramasre-ctl-<pid>-<rand>
+                                     v
++-------------------------------------------------------------------------+
+| PanoramaSRE Rust Control Server (src-tauri/src/control_server.rs)       |
+|  - Gate 1: Named Pipe Owner-SID DACL + .reject_remote_clients(true)     |
+|  - Gate 2: GetNamedPipeClientProcessId + Toolhelp32 Lineage Attestation |
+|  - Gate 3: Constant-Time HMAC-SHA256 + 15s Skew + Nonce ReplayGuard     |
+|  - Gate 4: Strict Slug & Manifest Command Pinning (Zero Raw Shell Cmds) |
+|  - Gate 5: DevSupervisor Execution + Live Tauri UI Event Sync           |
++-------------------------------------------------------------------------+
+```
+
+### 1. Seven-Layer Zero-Trust IPC Security Architecture (`ipc_security.rs`)
+1. **Zero Network Socket Exposure:** Communication uses Windows Named Pipes (`\\.\pipe\panoramasre-ctl-<pid>-<16_hex_rand>`) with `.reject_remote_clients(true)`. No TCP/UDP port is ever opened, making SSRF, browser `fetch()`, or LAN scanning impossible.
+2. **Owner-SID Lease Directory Lockdown:** `%LOCALAPPDATA%\com.panoramadr.sre\ipc\lease-<pid>.json` is locked down via `icacls /inheritance:r /grant:r "<CurrentUser>:(OI)(CI)F"`.
+3. **Kernel Caller PID & Process Lineage Attestation:** Upon connection, `GetNamedPipeClientProcessId` extracts the unforgeable kernel PID of the caller and walks up to 8 parent processes via `CreateToolhelp32Snapshot` + `QueryFullProcessImageNameW` to verify the caller is `node.exe` spawned by an authorized IDE/host (`Antigravity.exe`, `Code.exe`, `Cursor.exe`, `language_server_windows_x64.exe`, or `panorama-sre.exe`).
+4. **Constant-Time HMAC-SHA256 & Anti-Replay Guard:** Every request is signed over `<ts>.<nonce>.<action>.<canonical_btree_json>` using a per-instance 256-bit secret and verified via `subtle::ConstantTimeEq`. `ReplayGuard` rejects timestamps skewed $>15\text{s}$, caches consumed nonces, and triggers a 30-second lockout circuit breaker after 5 failed authentication attempts.
+5. **Strict Manifest Pinning:** The IPC server never accepts raw shell strings or file paths from callers—only validated slugs (`^[a-z0-9-]{2,24}$`) resolved against trusted `panorama.app.json` manifests and checked via `validate_dev_command`.
+6. **X.509 Authenticode Verification Before Auto-Launch:** If no `PanoramaSRE` instance is running when a tool or hook fires, `discovery.ts` verifies the binary's X.509 Authenticode signature via `Get-AuthenticodeSignature` before spawning it detached.
+7. **Secret Scrubbing & Intrusion Telemetry:** All logs returned over `ops.telemetry` pass through `scrubber::scrub_secrets`, and any blocked IPC attempt logs a `SECURITY_ALERT` entry and emits `sre://security-alert` to the UI.
+
+### 2. Multi-Session Coexistence (`installed` vs `dev` / Pre-Release)
+Multiple `PanoramaSRE` instances can run side-by-side (e.g., the daily-driver installed binary in `%LOCALAPPDATA%\PanoramaSRE` alongside a pre-release `npm run tauri dev` instance). Each writes its own `lease-<pid>.json` and pipe endpoint. When `instance: "auto"` (default) is used, `electInstance()` resolves the target deterministically:
+1. **Active Supervisor Affinity:** If an instance is already supervising the target `slug` (`RUNNING_MANAGED`), route to that instance immediately.
+2. **Highest Active Workload:** Otherwise, route to the instance with the highest `managedCount > 0`.
+3. **Channel Priority Tie-Breaker:** Prefer `"installed"` $>$ `"portable"` $>$ `"dev"`.
+4. **Explicit Override:** Any tool can pass `instance: "installed"`, `"dev"`, `"portable"`, or `"sre-<pid>"` to target a specific session.
+
+### 3. Extensible MCP Tool Catalog (`mcp-server/src/domains/`)
+| MCP Tool | Domain Module | Description |
+| :--- | :--- | :--- |
+| `sre_instances_list` | `domains/instances.ts` | Lists all live `PanoramaSRE` instances (`instanceId`, `pid`, `channel`, `managedApps`, `isPrimaryElected`) and supports `autoLaunchIfNone`. |
+| `sre_dev_status` | `domains/devServers.ts` | Returns `STOPPED` \| `RUNNING_MANAGED` \| `RUNNING_EXTERNAL` status, PID, port, `localUrl`, and SQLite metrics for all suite apps. |
+| `sre_dev_start` | `domains/devServers.ts` | Starts `<slug>` (or `"all"`) inside `PanoramaSRE` (auto-starting `PanoramaAuth` `:3000` first when required) and awaits TCP readiness. |
+| `sre_dev_stop` | `domains/devServers.ts` | Cleanly stops `<slug>` (or `"all"`) inside `PanoramaSRE` and releases its TCP port and `.next/lock`. |
+| `sre_dev_restart` | `domains/devServers.ts` | Cleanly stops and restarts `<slug>` inside `PanoramaSRE` and awaits TCP readiness. |
+| `sre_git_composition` | `domains/composition.ts` | Computes Git provenance, dirty files, ahead/behind counts, and blast-radius badges (`DB_MIGRATION`, `AUTH_SECURITY`, `ENV_CONTRACT`). |
+| `sre_ops_telemetry` | `domains/diagnostics.ts` | Queries scrubbed system logs (`"logs"`), split-DNS posture (`"posture"`), GFS backup ledger (`"backups"`), or SSL drift status (`"ssl"`). |
+
+### 4. `PreToolUse` Guardrail Hook (`hooks.json` & `preToolHook.ts`)
+Configured in `C:\Users\rodrigo\.gemini\config\plugins\panorama-sre\hooks.json` and `C:\Users\rodrigo\.gemini\config\hooks.json`, the `panorama-sre-dev-guard` hook intercepts `run_command` before execution:
+*   **Blocked Patterns:** Direct web dev server startups (`npm run dev`, `npm start`, `npx next dev`), port/process termination on suite ports (`3000`–`3009`, `4000`, `taskkill /IM node.exe`), and background daemon spawns (`IsDaemon: true`, `Start-Process npm/node`).
+*   **Explicitly Allowed:** Developing `PanoramaSRE` itself (`npm run tauri dev`, `cargo test`), production builds (`npm run build`), unit tests (`npx vitest run`), and typechecks (`npx tsc --noEmit`).
+*   **Auto-Launch & Redirect:** If `PanoramaSRE` is not running when a blocked command is attempted, the hook automatically launches `PanoramaSRE` and returns `"decision": "deny"` instructing the agent to call `sre_dev_start` / `sre_dev_restart` / `sre_dev_stop`.
 
 ---
 
