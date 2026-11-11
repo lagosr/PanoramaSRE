@@ -133,6 +133,12 @@ pub fn run() {
 
             // Window close-to-tray handler per ADR-01
             if let Some(window) = app.get_webview_window("main") {
+                if let Ok(app_icon) = tauri::image::Image::from_bytes(include_bytes!("../icons/128x128@2x.png")) {
+                    let _ = window.set_icon(app_icon);
+                } else if let Some(default_icon) = app.default_window_icon().cloned() {
+                    let _ = window.set_icon(default_icon);
+                }
+
                 let jm = Arc::clone(&job_manager_clone);
                 let ds = Arc::clone(&dev_supervisor_clone);
 

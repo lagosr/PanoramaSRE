@@ -67,20 +67,22 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
     <aside className="w-16 md:w-64 bg-white dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 flex flex-col justify-between select-none shrink-0">
       <div>
         {/* App Title / Header */}
-        <div className="h-14 flex items-center px-4 border-b border-slate-200 dark:border-slate-800 space-x-3">
-          <div className="relative w-8 h-8 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-center shadow-sm overflow-hidden shrink-0">
-            <img
-              src="/logo-dark.png"
-              alt="PanoramaSRE"
-              className="w-full h-full object-contain hidden dark:block"
-            />
-            <img
-              src="/logo-light.png"
-              alt="PanoramaSRE"
-              className="w-full h-full object-contain block dark:hidden"
-            />
+        <div className="h-16 flex items-center px-2.5 md:px-4 border-b border-slate-200 dark:border-slate-800 space-x-3">
+          <div className="relative shrink-0">
+            <div className="w-11 h-11 rounded-xl bg-white dark:bg-slate-900 border border-amber-500/40 dark:border-amber-400/40 flex items-center justify-center shadow-md shadow-amber-500/10 overflow-hidden">
+              <img
+                src="/logo-dark.png"
+                alt="PanoramaSRE"
+                className="w-full h-full object-cover hidden dark:block"
+              />
+              <img
+                src="/logo-light.png"
+                alt="PanoramaSRE"
+                className="w-full h-full object-cover block dark:hidden"
+              />
+            </div>
             <span
-              className={`w-2 h-2 rounded-full absolute top-0.5 right-0.5 ring-1 ring-white dark:ring-slate-900 ${
+              className={`w-2.5 h-2.5 rounded-full absolute -top-0.5 -right-0.5 ring-2 ring-white dark:ring-slate-950 ${
                 unhealthyCount > 0
                   ? 'bg-rose-500 animate-ping'
                   : 'bg-emerald-500 dark:bg-emerald-400 animate-pulse'
@@ -89,7 +91,7 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
             />
           </div>
           <div className="hidden md:block">
-            <h1 className="text-sm font-bold tracking-tight bg-gradient-to-r from-orange-500 to-amber-500 dark:from-orange-400 dark:to-amber-300 bg-clip-text text-transparent">
+            <h1 className="text-sm font-bold tracking-tight bg-gradient-to-r from-orange-500 to-amber-500 dark:from-amber-300 dark:to-orange-400 bg-clip-text text-transparent">
               PanoramaSRE
             </h1>
             <p className="text-[10px] text-slate-500 dark:text-slate-400 font-mono">

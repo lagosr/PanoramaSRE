@@ -11,7 +11,9 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 
     let menu = Menu::with_items(app, &[&show_item, &hide_item, &quit_item])?;
 
-    let icon = app.default_window_icon().cloned()
+    let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/128x128@2x.png"))
+        .ok()
+        .or_else(|| app.default_window_icon().cloned())
         .or_else(|| {
             tauri::image::Image::from_app_icon_resource(32).ok()
         });
