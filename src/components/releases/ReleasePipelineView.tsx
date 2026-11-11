@@ -457,7 +457,7 @@ export function ReleasePipelineView({
           </span>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
           {apps.map((app) => {
             const appComp = app.composition;
             const undeployedCount = appComp?.undeployed_commits?.length || 0;
@@ -498,12 +498,12 @@ export function ReleasePipelineView({
               >
                 {/* App Title & Status Badge */}
                 <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
+                  <div className="min-w-0 flex-1">
                     <h4 className="text-xs font-bold text-slate-900 dark:text-slate-100 truncate flex items-center gap-1.5">
-                      <span className={`w-2 h-2 rounded-full ${isHealthy ? 'bg-emerald-400' : 'bg-rose-500 animate-ping'}`} />
-                      {app.manifest.displayName}
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${isHealthy ? 'bg-emerald-400' : 'bg-rose-500 animate-ping'}`} />
+                      <span className="truncate">{app.manifest.displayName}</span>
                     </h4>
-                    <span className="text-[10px] text-slate-500 font-mono block">
+                    <span className="text-[10px] text-slate-500 font-mono block truncate">
                       Prod: {app.health?.release?.semver || app.health?.version || 'v1.0.0'} ({app.health?.release?.commit_short || 'unstamped'})
                     </span>
                   </div>
@@ -531,14 +531,14 @@ export function ReleasePipelineView({
                 </div>
 
                 {/* Drift Details & Inspect Diff Trigger */}
-                <div className="text-[11px] font-mono flex items-center justify-between gap-1.5 text-slate-500 dark:text-slate-400 border-t border-slate-100 dark:border-slate-900 pt-2">
-                  <div className="flex items-center gap-1.5 truncate">
+                <div className="text-[11px] font-mono flex flex-wrap items-center justify-between gap-y-2 gap-x-1.5 text-slate-500 dark:text-slate-400 border-t border-slate-100 dark:border-slate-800/80 pt-2">
+                  <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
                     <span>Pending:</span>
                     <span className={`font-bold ${undeployedCount > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-500'}`}>
                       {undeployedCount} {isLocalDirty ? '(+ uncommitted)' : ''}
                     </span>
                     <span
-                      className={`px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold border whitespace-nowrap ${
+                      className={`px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold border whitespace-nowrap shrink-0 ${
                         appBuildBadge.tone === 'emerald'
                           ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
                           : appBuildBadge.tone === 'amber'
@@ -552,7 +552,7 @@ export function ReleasePipelineView({
                       {appBuildBadge.shortLabel}
                     </span>
                   </div>
-                  <div className="flex items-center gap-1 shrink-0">
+                  <div className="flex items-center gap-1.5 shrink-0 ml-auto">
                     {appLatestJob && (
                       <button
                         type="button"
