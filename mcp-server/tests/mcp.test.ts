@@ -288,6 +288,27 @@ describe('PanoramaSRE MCP Server & Zero-Trust Named Pipe Client', () => {
     expect(daemon2.intercepted).toBe(true);
     expect(daemon2.category).toBe('BACKGROUND_DAEMON_SPAWN');
 
+    // Blocked direct smoke test executions (must use sre_ops_telemetry({ domain: "smoke_run" }))
+    const smoke1 = classifyShellCommand(
+      'pwsh -File "c:\\Users\\rodrigo\\Documents\\AG Projects\\PanoramaDrSuite\\tools\\smoke-tester\\Run-SmokeTests.ps1"'
+    );
+    expect(smoke1.intercepted).toBe(true);
+    expect(smoke1.category).toBe('SMOKE_TEST_EXECUTION');
+
+    const smoke2 = classifyShellCommand(
+      'node --experimental-strip-types smoke-tests.ts --target https://wsh.panoramadr.com'
+    );
+    expect(smoke2.intercepted).toBe(true);
+    expect(smoke2.category).toBe('SMOKE_TEST_EXECUTION');
+
+    // Allowed OS schedule registration flag & git commands mentioning the script
+    expect(
+      classifyShellCommand('./Run-SmokeTests.ps1 -RegisterDailyTask').intercepted
+    ).toBe(false);
+    expect(
+      classifyShellCommand('git commit -m "update Run-SmokeTests.ps1 and smoke-tests.ts"').intercepted
+    ).toBe(false);
+
     // Allowed commands (Tauri dev, builds, tests, git, tsc)
     expect(classifyShellCommand('npm run tauri dev').intercepted).toBe(false);
     expect(classifyShellCommand('cargo test --offline').intercepted).toBe(false);

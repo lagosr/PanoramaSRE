@@ -10,20 +10,20 @@ export const diagnosticsDomain: SreToolDomain = {
     {
       name: 'sre_ops_telemetry',
       description:
-        'Retrieves operational telemetry from PanoramaSRE: scrubbed system/audit logs ("logs"), network posture ("posture"), GFS database backup ledger ("backups"), or 5-domain SSL certificate drift status ("ssl").',
+        'Retrieves operational telemetry or triggers production smoke tests via PanoramaSRE: scrubbed system/audit logs ("logs"), network posture ("posture"), GFS database backup ledger ("backups"), 5-domain SSL certificate drift status ("ssl"), smoke test history ("smoke"), or live smoke test execution ("smoke_run").',
       inputSchema: {
         type: 'object',
         properties: {
           domain: {
             type: 'string',
             description:
-              'Telemetry domain to query: "logs" | "posture" | "backups" | "ssl" | "smoke" (recent smoke test runs) | "smoke_run" (trigger live smoke test suite).',
+              'Telemetry domain to query: "logs" | "posture" | "backups" | "ssl" | "smoke" (recent smoke test runs) | "smoke_run" (trigger live smoke test suite inside PanoramaSRE).',
             enum: ['logs', 'posture', 'backups', 'ssl', 'smoke', 'smoke_run'],
             default: 'logs',
           },
           limit: {
             type: 'number',
-            description: 'Maximum number of log entries to return when domain="logs" (default 50, max 500).',
+            description: 'Maximum number of entries to return when domain="logs" or "smoke" (default 50, max 500).',
             default: 50,
           },
           category: {
@@ -63,7 +63,7 @@ export const diagnosticsDomain: SreToolDomain = {
           ensured.instance.lease,
           'ops.telemetry',
           params,
-          { timeoutMs: 15000 }
+          { timeoutMs: domain === 'smoke_run' ? 60000 : 15000 }
         );
 
         return {

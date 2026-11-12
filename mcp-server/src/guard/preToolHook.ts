@@ -7,7 +7,11 @@ import {
 
 export interface CommandInterceptionAnalysis {
   intercepted: boolean;
-  category?: 'DEV_SERVER_START' | 'DEV_SERVER_KILL' | 'BACKGROUND_DAEMON_SPAWN';
+  category?:
+    | 'DEV_SERVER_START'
+    | 'DEV_SERVER_KILL'
+    | 'BACKGROUND_DAEMON_SPAWN'
+    | 'SMOKE_TEST_EXECUTION';
   detectedSlug?: string;
   reason?: string;
 }
@@ -100,7 +104,19 @@ export function classifyShellCommand(
     };
   }
 
-  // 4. Intercept background process / daemon spawning in conversation threads
+  // 4. Intercept direct smoke test execution via run_command (must run inside PanoramaSRE via MCP)
+  const smokeTestExecRegex =
+    /(?:^|[;&|]\s*)(?:pwsh(?:\.exe)?|powershell(?:\.exe)?|node(?:\.exe)?|npx(?:\.cmd)?|tsx(?:\.cmd)?|&|\.[\\/])[^\r\n]*\b(?:Run-SmokeTests\.ps1|smoke-tests\.ts)\b/i;
+
+  if (smokeTestExecRegex.test(trimmed) && !/-RegisterDailyTask\b/i.test(trimmed)) {
+    return {
+      intercepted: true,
+      category: 'SMOKE_TEST_EXECUTION',
+      reason: `Direct shell smoke test execution ('${trimmed}') bypasses PanoramaSRE live telemetry streaming and run history.`,
+    };
+  }
+
+  // 5. Intercept background process / daemon spawning in conversation threads
   const bgProcessRegex =
     /\b(?:Start-Process|Start-Job)\b[^\r\n]*\b(?:npm|npx|node|next|dev)\b/i;
 
@@ -167,10 +183,12 @@ export async function evaluatePreToolUse(
   }
 
   const slugHint = analysis.detectedSlug || '<slug>';
-  const recommendedTool =
-    analysis.category === 'DEV_SERVER_KILL'
-      ? `sre_dev_stop({ slug: "${slugHint}" }) or sre_dev_restart({ slug: "${slugHint}" })`
-      : `sre_dev_start({ slug: "${slugHint}" }) or sre_dev_restart({ slug: "${slugHint}" })`;
+  const isSmokeTest = analysis.category === 'SMOKE_TEST_EXECUTION';
+  const recommendedTool = isSmokeTest
+    ? `sre_ops_telemetry({ domain: "smoke_run" }) (or domain: "smoke" to inspect recent run history)`
+    : analysis.category === 'DEV_SERVER_KILL'
+    ? `sre_dev_stop({ slug: "${slugHint}" }) or sre_dev_restart({ slug: "${slugHint}" })`
+    : `sre_dev_start({ slug: "${slugHint}" }) or sre_dev_restart({ slug: "${slugHint}" })`;
 
   // Check if PanoramaSRE is already running
   const liveInstances = await discoverLiveInstances();
@@ -187,7 +205,9 @@ export async function evaluatePreToolUse(
       'deny',
       `[PanoramaSRE Control Plane Guard] ${analysis.reason} ` +
         `Active PanoramaSRE instance(s): ${summaryList} (elected primary: ${primary?.ping.instanceId}). ` +
-        `Instead of starting or killing dev servers via run_command, invoke the PanoramaSRE MCP tool: ${recommendedTool} (or sre_dev_status() to inspect ports).`
+        (isSmokeTest
+          ? `Instead of running smoke tests directly via run_command, invoke the PanoramaSRE MCP tool: ${recommendedTool} so execution streams live inside PanoramaSRE.`
+          : `Instead of starting or killing dev servers via run_command, invoke the PanoramaSRE MCP tool: ${recommendedTool} (or sre_dev_status() to inspect ports).`)
     );
   }
 
@@ -198,7 +218,9 @@ export async function evaluatePreToolUse(
       'deny',
       `[PanoramaSRE Auto-Launched] PanoramaSRE was not running and has now been automatically verified and launched ` +
         `(instance ${autoLaunch.instance.ping.instanceId}, PID ${autoLaunch.instance.ping.pid}, channel=${autoLaunch.instance.ping.channel}). ` +
-        `Do NOT start or kill dev servers via run_command — now call the PanoramaSRE MCP tool: ${recommendedTool}.`
+        (isSmokeTest
+          ? `Do NOT run smoke tests via run_command — now call the PanoramaSRE MCP tool: ${recommendedTool}.`
+          : `Do NOT start or kill dev servers via run_command — now call the PanoramaSRE MCP tool: ${recommendedTool}.`)
     );
   }
 
@@ -222,6 +244,6 @@ async function runCliHook(): Promise<void> {
   }
 }
 
-if (process.argv[1] && process.argv[1].replace(/\\/g, '/').endsWith('preToolHook.ts')) {
+if (process.argv[1] && process.argv[1].replace(/\\/g, '/').endsWith('guard/preToolHook.ts')) {
   runCliHook();
 }

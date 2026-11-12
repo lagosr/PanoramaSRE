@@ -1588,6 +1588,78 @@ export const App: React.FC = () => {
     return () => clearInterval(timer);
   }, [handleRunSmokeTests]);
 
+  // Listen for AI Agent MCP-triggered Smoke Test executions (`sre_ops_telemetry({ domain: "smoke_run" })`)
+  useEffect(() => {
+    let unlistenStart: (() => void) | undefined;
+    let unlistenLine: (() => void) | undefined;
+    let unlistenComplete: (() => void) | undefined;
+
+    listen<{ jobId: string; triggeredBy: string; targetUrl: string }>('sre://smoke-run-start', (event) => {
+      const { jobId, triggeredBy } = event.payload || {
+        jobId: `smoke-mcp-${Date.now()}`,
+        triggeredBy: 'mcp-agent',
+      };
+      setIsSmokeRunning(true);
+      setActiveSmokeJobId(jobId);
+      setSmokeError(null);
+
+      const newTab: TerminalTab = {
+        id: jobId,
+        title: `Smoke Tests (${triggeredBy})`,
+        lines: [`[PanoramaSRE] AI Agent triggered Production Smoke Suite (${triggeredBy})...`],
+        isRunning: true,
+        createdAt: new Date().toISOString(),
+      };
+      setTerminalTabs((prev) => [...prev, newTab]);
+      setActiveTerminalTabId(jobId);
+      saveTabToDb(newTab);
+      showActionFeedback(`AI Agent started Production Smoke Suite (${triggeredBy})`, 'pending');
+    }).then((unsub) => {
+      unlistenStart = unsub;
+    });
+
+    listen<{ jobId: string; line: string }>('sre://smoke-run-line', (event) => {
+      if (event.payload?.jobId && typeof event.payload?.line === 'string') {
+        appendTerminalLine(event.payload.jobId, event.payload.line);
+      }
+    }).then((unsub) => {
+      unlistenLine = unsub;
+    });
+
+    listen<{ jobId: string; exitCode: number; run?: SmokeTestRun }>('sre://smoke-run-complete', (event) => {
+      const { jobId, exitCode, run } = event.payload || {};
+      if (jobId) {
+        finalizeTerminalJob(jobId, typeof exitCode === 'number' ? exitCode : 0);
+      }
+      setIsSmokeRunning(false);
+      refreshSmokeHistory();
+      refreshMcpStatus();
+      if (run) {
+        if (run.failed === 0) {
+          showActionFeedback(
+            `AI Agent Smoke Suite passed (${run.passed}/${run.total} checks)`,
+            'success',
+            5000
+          );
+        } else {
+          showActionFeedback(
+            `AI Agent Smoke Suite detected ${run.failed} failure(s) (${run.passed}/${run.total} passed)`,
+            'error',
+            8000
+          );
+        }
+      }
+    }).then((unsub) => {
+      unlistenComplete = unsub;
+    });
+
+    return () => {
+      if (unlistenStart) unlistenStart();
+      if (unlistenLine) unlistenLine();
+      if (unlistenComplete) unlistenComplete();
+    };
+  }, [appendTerminalLine, finalizeTerminalJob, refreshMcpStatus, refreshSmokeHistory, saveTabToDb, showActionFeedback]);
+
   return (
     <div className="flex flex-col h-screen w-screen bg-slate-50 dark:bg-[#050b14] text-slate-900 dark:text-slate-100 overflow-hidden font-sans">
       {/* Upper Area: Sidebar Navigation + Main Application Content */}
@@ -1881,6 +1953,7 @@ export const App: React.FC = () => {
             activeTab !== 'dietpi' &&
             activeTab !== 'edge' &&
             activeTab !== 'backups' &&
+            activeTab !== 'smoke' &&
             activeTab !== 'settings' && (
               <div className="flex-1 flex items-center justify-center p-12 text-slate-500 text-sm">
                 Module <span className="font-mono text-emerald-400 mx-1">{activeTab}</span> will hydrate in subsequent milestones.

@@ -1,7 +1,7 @@
 use crate::commands::git_ops::compute_app_composition;
 use crate::commands::ledger::read_backup_ledger;
 use crate::commands::monitor::detect_network_posture;
-use crate::commands::smoke_ops::{get_smoke_test_history, run_smoke_tests_now};
+use crate::commands::smoke_ops::{get_smoke_test_history, run_smoke_tests_streaming};
 use crate::commands::ssl_ops::get_ssl_fleet_status;
 use crate::commands::workspace::{discover_suite_apps_internal, resolve_suite_workspace_root};
 use crate::db::SreDatabase;
@@ -1201,9 +1201,46 @@ pub async fn process_ipc_message(
                     let ws_root = resolve_suite_workspace_root(None)
                         .to_string_lossy()
                         .to_string();
-                    match run_smoke_tests_now(ws_root, None, Some("mcp-agent".to_string())).await {
-                        Ok(run) => IpcResponse::success(&req.id, json!(run)),
-                        Err(e) => IpcResponse::err(&req.id, "SMOKE_RUN_ERROR", e),
+                    match run_smoke_tests_streaming(
+                        app_handle,
+                        ws_root,
+                        None,
+                        Some("mcp-agent".to_string()),
+                    )
+                    .await
+                    {
+                        Ok(run) => {
+                            if let Ok(guard) = sre_db.lock() {
+                                let _ = guard.log_action(
+                                    "AGENT_IPC",
+                                    if run.failed == 0 { "INFO" } else { "WARN" },
+                                    &format!(
+                                        "Agent executed Production Smoke Suite via IPC: {}/{} passed ({} failed)",
+                                        run.passed, run.total, run.failed
+                                    ),
+                                    Some(&format!("caller_pid={}", attestation.pid)),
+                                );
+                            }
+                            record_telemetry_action(
+                                "ops.smoke_run",
+                                None,
+                                run.failed == 0,
+                                Some(&format!(
+                                    "Smoke tests: {}/{} passed",
+                                    run.passed, run.total
+                                )),
+                            );
+                            IpcResponse::success(&req.id, json!(run))
+                        }
+                        Err(e) => {
+                            record_telemetry_action(
+                                "ops.smoke_run",
+                                None,
+                                false,
+                                Some(&format!("Smoke test error: {}", e)),
+                            );
+                            IpcResponse::err(&req.id, "SMOKE_RUN_ERROR", e)
+                        }
                     }
                 }
                 other => IpcResponse::err(
