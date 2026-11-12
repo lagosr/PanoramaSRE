@@ -57,6 +57,7 @@ export const App: React.FC = () => {
   const [mcpStatus, setMcpStatus] = useState<McpBridgeStatus | null>(null);
   const [smokeRuns, setSmokeRuns] = useState<SmokeTestRun[]>([]);
   const [isSmokeRunning, setIsSmokeRunning] = useState<boolean>(false);
+  const [activeSmokeJobId, setActiveSmokeJobId] = useState<string>('');
   const [smokeError, setSmokeError] = useState<string | null>(null);
   const [isLoadingSsl, setIsLoadingSsl] = useState<boolean>(false);
   const [isLoadingWsh, setIsLoadingWsh] = useState<boolean>(false);
@@ -1478,22 +1479,57 @@ export const App: React.FC = () => {
   }, [getWorkspaceRoot]);
 
   const handleRunSmokeTests = useCallback(
-    async (triggeredBy = 'sre-manual') => {
+    (triggeredBy = 'sre-manual') => {
       if (isSmokeRunning) return;
+      const jobId = `smoke-${Date.now()}`;
+      const smokeDir = `${getWorkspaceRoot()}\\PanoramaDrSuite\\tools\\smoke-tester`;
       setIsSmokeRunning(true);
+      setActiveSmokeJobId(jobId);
       setSmokeError(null);
-      try {
-        await invoke<SmokeTestRun>('run_smoke_tests_now', {
-          workspaceRoot: getWorkspaceRoot(),
-          targetUrl: 'https://wsh.panoramadr.com',
+
+      const newTab: TerminalTab = {
+        id: jobId,
+        title: `Smoke Tests (${triggeredBy})`,
+        lines: [`[PanoramaSRE] Starting Production Smoke Suite (trigger=${triggeredBy})...`],
+        isRunning: true,
+        createdAt: new Date().toISOString(),
+      };
+      setTerminalTabs((prev) => [...prev, newTab]);
+      setActiveTerminalTabId(jobId);
+      saveTabToDb(newTab);
+
+      runStreamJob({
+        jobId,
+        label: `Smoke Tests (${triggeredBy})`,
+        command: 'pwsh.exe',
+        args: [
+          '-NoProfile',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-File',
+          './Run-SmokeTests.ps1',
+          '-TargetUrl',
+          'https://wsh.panoramadr.com',
+          '-TriggeredBy',
           triggeredBy,
-        });
-        await refreshSmokeHistory();
-      } catch (err) {
-        setSmokeError(String(err));
-      } finally {
-        setIsSmokeRunning(false);
-      }
+        ],
+        workingDir: smokeDir,
+        lockType: 'None',
+        onLine: (line) => {
+          appendTerminalLine(jobId, line);
+        },
+        onComplete: (exitCode) => {
+          finalizeTerminalJob(jobId, exitCode);
+          setIsSmokeRunning(false);
+          refreshSmokeHistory();
+        },
+        onError: (err) => {
+          failTerminalJob(jobId, `Smoke tests failed: ${err}`);
+          setSmokeError(String(err));
+          setIsSmokeRunning(false);
+          refreshSmokeHistory();
+        },
+      });
     },
     [getWorkspaceRoot, isSmokeRunning, refreshSmokeHistory]
   );
@@ -1809,6 +1845,7 @@ export const App: React.FC = () => {
             <SmokeTestsView
               runs={smokeRuns}
               isRunning={isSmokeRunning}
+              streamLines={terminalTabs.find((t) => t.id === activeSmokeJobId)?.lines || []}
               onRunNow={() => handleRunSmokeTests('sre-manual')}
               onRefreshHistory={refreshSmokeHistory}
               onRegisterOsSchedule={handleRegisterSmokeSchedule}

@@ -16,8 +16,9 @@ export const diagnosticsDomain: SreToolDomain = {
         properties: {
           domain: {
             type: 'string',
-            description: 'Telemetry domain to query: "logs" | "posture" | "backups" | "ssl".',
-            enum: ['logs', 'posture', 'backups', 'ssl'],
+            description:
+              'Telemetry domain to query: "logs" | "posture" | "backups" | "ssl" | "smoke" (recent smoke test runs) | "smoke_run" (trigger live smoke test suite).',
+            enum: ['logs', 'posture', 'backups', 'ssl', 'smoke', 'smoke_run'],
             default: 'logs',
           },
           limit: {

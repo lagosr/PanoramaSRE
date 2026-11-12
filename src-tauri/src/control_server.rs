@@ -1,6 +1,7 @@
 use crate::commands::git_ops::compute_app_composition;
 use crate::commands::ledger::read_backup_ledger;
 use crate::commands::monitor::detect_network_posture;
+use crate::commands::smoke_ops::{get_smoke_test_history, run_smoke_tests_now};
 use crate::commands::ssl_ops::get_ssl_fleet_status;
 use crate::commands::workspace::{discover_suite_apps_internal, resolve_suite_workspace_root};
 use crate::db::SreDatabase;
@@ -1186,6 +1187,25 @@ pub async fn process_ipc_message(
                     Ok(summary) => IpcResponse::success(&req.id, json!(summary)),
                     Err(e) => IpcResponse::err(&req.id, "SSL_FLEET_ERROR", e),
                 },
+                "smoke" => {
+                    let limit = req.params["limit"].as_u64().unwrap_or(20).min(100) as usize;
+                    let ws_root = resolve_suite_workspace_root(None)
+                        .to_string_lossy()
+                        .to_string();
+                    match get_smoke_test_history(ws_root, Some(limit)).await {
+                        Ok(runs) => IpcResponse::success(&req.id, json!({ "runs": runs })),
+                        Err(e) => IpcResponse::err(&req.id, "SMOKE_HISTORY_ERROR", e),
+                    }
+                }
+                "smoke_run" => {
+                    let ws_root = resolve_suite_workspace_root(None)
+                        .to_string_lossy()
+                        .to_string();
+                    match run_smoke_tests_now(ws_root, None, Some("mcp-agent".to_string())).await {
+                        Ok(run) => IpcResponse::success(&req.id, json!(run)),
+                        Err(e) => IpcResponse::err(&req.id, "SMOKE_RUN_ERROR", e),
+                    }
+                }
                 other => IpcResponse::err(
                     &req.id,
                     "UNKNOWN_TELEMETRY_DOMAIN",

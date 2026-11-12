@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   FlaskConical,
   Play,
@@ -8,12 +8,15 @@ import {
   Clock,
   CalendarClock,
   ShieldCheck,
+  Terminal,
 } from 'lucide-react';
 import { SmokeTestRun } from '../../lib/types';
+import { formatConsoleLine } from '../layout/ConsoleColorizer';
 
 interface SmokeTestsViewProps {
   runs: SmokeTestRun[];
   isRunning: boolean;
+  streamLines?: string[];
   onRunNow: () => void;
   onRefreshHistory: () => void;
   onRegisterOsSchedule: () => void;
@@ -49,6 +52,7 @@ function getNextScheduleSlot(slots: string[]): string {
 export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
   runs,
   isRunning,
+  streamLines = [],
   onRunNow,
   onRefreshHistory,
   onRegisterOsSchedule,
@@ -57,6 +61,13 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
 }) => {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
+  const consoleEndRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (consoleEndRef.current) {
+      consoleEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [streamLines.length, isRunning]);
 
   const selectedRun = useMemo(() => {
     if (runs.length === 0) return null;
@@ -187,6 +198,35 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
           <div className="text-[11px] text-slate-500 mt-1">Failed smoke gate reverts container</div>
         </div>
       </div>
+
+      {/* Live Execution Telemetry Console */}
+      {(isRunning || streamLines.length > 0) && (
+        <div className="rounded-xl bg-[#050b14] border border-slate-800 overflow-hidden shadow-xl">
+          <div className="px-4 py-2.5 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Terminal className="w-4 h-4 text-emerald-400" />
+              <span className="text-xs font-semibold text-slate-200 uppercase tracking-wider">
+                Live Execution Telemetry Stream
+              </span>
+              {isRunning && (
+                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                  <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-ping" />
+                  STREAMING
+                </span>
+              )}
+            </div>
+            <span className="text-[11px] font-mono text-slate-500">{streamLines.length} lines</span>
+          </div>
+          <div className="p-4 max-h-64 overflow-y-auto font-mono text-xs space-y-1">
+            {streamLines.map((line, idx) => (
+              <div key={idx} className="leading-relaxed whitespace-pre-wrap break-all">
+                {formatConsoleLine(line)}
+              </div>
+            ))}
+            <div ref={consoleEndRef} />
+          </div>
+        </div>
+      )}
 
       {/* Main Split: Run History (Left) + Check Breakdown (Right) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
