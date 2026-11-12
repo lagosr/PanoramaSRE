@@ -251,7 +251,7 @@ export const App: React.FC = () => {
   }, []);
 
   // Refresh WSH Snapshot & Posture
-  const refreshWshTelemetry = useCallback(async () => {
+  const refreshWshTelemetry = useCallback(async (force = false) => {
     setIsLoadingWsh(true);
     try {
       const posture = await invoke<NetworkPosture>('detect_network_posture', {});
@@ -260,6 +260,7 @@ export const App: React.FC = () => {
       if (posture === 'LAN_DIRECT') {
         const snap = await invoke<WshSnapshot>('fetch_wsh_snapshot', {
           mode: '--fast',
+          force,
         });
         setWshSnapshot(snap);
         setLastSecurityAuditTime(new Date().toLocaleTimeString());
@@ -305,7 +306,7 @@ export const App: React.FC = () => {
   }, []);
 
   // Full Initial App Discovery & Telemetry Probe
-  const syncFullTelemetry = useCallback(async (isUserInitiated = false) => {
+  const syncFullTelemetry = useCallback(async (isUserInitiated = false, includeWshSnapshot = true) => {
     if (isUserInitiated) {
       setIsManualSyncing(true);
     }
@@ -429,10 +430,11 @@ export const App: React.FC = () => {
       await refreshAppliances();
 
       // 6. Fetch WSH Host & Topology Snapshot (LAN Direct only)
-      if (posture === 'LAN_DIRECT') {
+      if (includeWshSnapshot && posture === 'LAN_DIRECT') {
         try {
           const snap = await invoke<WshSnapshot>('fetch_wsh_snapshot', {
             mode: '--fast',
+            force: isUserInitiated,
           });
           setWshSnapshot(snap);
           setLastSecurityAuditTime(new Date().toLocaleTimeString());
@@ -477,16 +479,15 @@ export const App: React.FC = () => {
         refreshMcpStatus();
       }
 
-      // Tier 2 (every 60s): update WSH host telemetry, backup ledger & SSL dual-probes
+      // Tier 2 (every 60s): update backup ledger & SSL dual-probes (no SSH to WSH port 22 to avoid IDS scan thresholds)
       if (tier === 2) {
-        refreshWshTelemetry();
         refreshBackupLedger();
         refreshSslStatus();
       }
 
-      // Tier 3 (every 300s): update git composition & health probes
+      // Tier 3 (every 300s): update git composition & health probes (WSH SSH snapshot is handled by the configurable Security Audit timer)
       if (tier === 3) {
-        syncFullTelemetry(false);
+        syncFullTelemetry(false, false);
       }
     }).then((unsub) => {
       unlisten = unsub;
@@ -1192,7 +1193,7 @@ export const App: React.FC = () => {
         await new Promise((r) => setTimeout(r, 4000)); // give systemd 4s to settle services
 
         try {
-          const freshSnap = await invoke<WshSnapshot>('fetch_wsh_snapshot', { mode: '--fast' });
+          const freshSnap = await invoke<WshSnapshot>('fetch_wsh_snapshot', { mode: '--fast', force: true });
           setWshSnapshot(freshSnap);
 
           const uptimeSecs = freshSnap.uptime_secs;
@@ -1210,12 +1211,12 @@ export const App: React.FC = () => {
 
           finalizeTerminalJob(jobId, 0);
           showActionFeedback('DietPi WSH successfully rebooted and online', 'success', 5000);
-          syncFullTelemetry(false);
+          syncFullTelemetry(false, false);
         } catch (postBootErr) {
           appendTerminalLine(jobId, `[WARN] SSH is up, but telemetry snapshot returned warning: ${postBootErr}`);
           finalizeTerminalJob(jobId, 0);
           showActionFeedback('DietPi WSH online (telemetry settling)', 'success', 4000);
-          refreshWshTelemetry();
+          refreshWshTelemetry(true);
         } finally {
           setIsHostRebooting(false);
         }
@@ -1311,7 +1312,7 @@ export const App: React.FC = () => {
       },
       onComplete: (exitCode) => {
         finalizeTerminalJob(jobId, exitCode);
-        refreshWshTelemetry();
+        refreshWshTelemetry(true);
         setLastSecurityAuditTime(new Date().toLocaleTimeString());
       },
       onError: (err) => {
@@ -1355,7 +1356,7 @@ export const App: React.FC = () => {
       },
       onComplete: (exitCode) => {
         finalizeTerminalJob(jobId, exitCode);
-        refreshWshTelemetry();
+        refreshWshTelemetry(true);
         setLastSecurityAuditTime(new Date().toLocaleTimeString());
       },
       onError: (err) => {
@@ -1521,7 +1522,7 @@ export const App: React.FC = () => {
               snapshot={wshSnapshot}
               apps={apps}
               isLoading={isManualSyncing}
-              onRefresh={refreshWshTelemetry}
+              onRefresh={() => refreshWshTelemetry(true)}
               onRunPenetrationAudit={handleRunPenetrationAudit}
               onReapplyHardening={handleReapplyHardening}
               onRunAuditCommand={(actionLabel, cmd, args) => {
@@ -1563,7 +1564,7 @@ export const App: React.FC = () => {
             <DietPiHostView
               snapshot={wshSnapshot}
               isLoading={isLoadingWsh}
-              onRefresh={refreshWshTelemetry}
+              onRefresh={() => refreshWshTelemetry(true)}
               onTriggerReboot={handleRebootWshWithVerification}
               isRebooting={isHostRebooting}
               onTriggerAction={(actionLabel, cmd, args) => {
@@ -1590,26 +1591,27 @@ export const App: React.FC = () => {
                   },
                   onComplete: async (exitCode) => {
                     finalizeTerminalJob(jobId, exitCode);
-                    await refreshWshTelemetry();
+                    const snap = await invoke<WshSnapshot>('fetch_wsh_snapshot', { mode: '--fast', force: true }).catch(() => null);
+                    if (snap) {
+                      setWshSnapshot(snap);
+                      setLastSecurityAuditTime(new Date().toLocaleTimeString());
+                    }
 
                     // If an upgrade just ran and host reports a reboot is required, offer to reboot immediately
-                    if (actionLabel.toLowerCase().includes('upgrade') && exitCode === 0) {
+                    if (actionLabel.toLowerCase().includes('upgrade') && exitCode === 0 && snap?.reboot_required) {
                       try {
-                        const freshSnap = await invoke<WshSnapshot>('fetch_wsh_snapshot', { mode: '--fast' });
-                        if (freshSnap.reboot_required) {
-                          const confirmReboot = await ask(
-                            'Package upgrade completed successfully, but the DietPi Linux kernel or core system libraries require a reboot (/var/run/reboot-required).\n\nWould you like PanoramaSRE to initiate the graceful reboot and monitor recovery now?',
-                            {
-                              title: 'Reboot Required After Upgrade',
-                              kind: 'warning',
-                              okLabel: 'Reboot & Verify Now',
-                              cancelLabel: 'Reboot Later',
-                            }
-                          );
-
-                          if (confirmReboot) {
-                            handleRebootWshWithVerification();
+                        const confirmReboot = await ask(
+                          'Package upgrade completed successfully, but the DietPi Linux kernel or core system libraries require a reboot (/var/run/reboot-required).\n\nWould you like PanoramaSRE to initiate the graceful reboot and monitor recovery now?',
+                          {
+                            title: 'Reboot Required After Upgrade',
+                            kind: 'warning',
+                            okLabel: 'Reboot & Verify Now',
+                            cancelLabel: 'Reboot Later',
                           }
+                        );
+
+                        if (confirmReboot) {
+                          handleRebootWshWithVerification();
                         }
                       } catch (checkErr) {
                         console.warn('[PanoramaSRE] Failed to check post-upgrade reboot status:', checkErr);

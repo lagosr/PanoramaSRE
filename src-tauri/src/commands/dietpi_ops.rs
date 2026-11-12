@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
-use std::process::Command;
 use std::path::Path;
+use std::process::Command;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WshSnapshot {
@@ -48,12 +50,40 @@ pub fn default_ssh_key_path() -> String {
     "C:\\Users\\rodrigo\\.ssh\\rsa-key-deployment".to_string()
 }
 
+struct SnapshotCacheState {
+    last_snapshot: Option<(Instant, WshSnapshot)>,
+}
+
+fn snapshot_gate() -> &'static Mutex<SnapshotCacheState> {
+    static GATE: OnceLock<Mutex<SnapshotCacheState>> = OnceLock::new();
+    GATE.get_or_init(|| Mutex::new(SnapshotCacheState { last_snapshot: None }))
+}
+
+const SNAPSHOT_COOLDOWN: Duration = Duration::from_secs(30);
+
 #[tauri::command]
 pub async fn fetch_wsh_snapshot(
     ssh_key_path: Option<String>,
     mode: Option<String>,
+    force: Option<bool>,
 ) -> Result<WshSnapshot, String> {
+    let force_refresh = force.unwrap_or(false);
+
     tokio::task::spawn_blocking(move || {
+        // Hold the mutex across check + execution so concurrent callers serialize and reuse fresh snapshots
+        // rather than spawning parallel ssh.exe processes that trip UniFi Suricata rule 2003068 (5 SYNs / 120s).
+        let mut guard = snapshot_gate()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        if !force_refresh {
+            if let Some((captured_at, ref cached)) = guard.last_snapshot {
+                if captured_at.elapsed() < SNAPSHOT_COOLDOWN {
+                    return Ok(cached.clone());
+                }
+            }
+        }
+
         let key = ssh_key_path.unwrap_or_else(default_ssh_key_path);
         let run_mode = mode.unwrap_or_else(|| "--fast".to_string());
         
@@ -136,8 +166,11 @@ pub async fn fetch_wsh_snapshot(
         let end = trimmed.rfind('}').ok_or("Malformed JSON output from snapshot")?;
         let json_str = &trimmed[start..=end];
 
-        serde_json::from_str::<WshSnapshot>(json_str)
-            .map_err(|e| format!("Failed to parse snapshot JSON: {}. Raw snippet: {}", e, &json_str[..json_str.len().min(200)]))
+        let parsed = serde_json::from_str::<WshSnapshot>(json_str)
+            .map_err(|e| format!("Failed to parse snapshot JSON: {}. Raw snippet: {}", e, &json_str[..json_str.len().min(200)]))?;
+
+        guard.last_snapshot = Some((Instant::now(), parsed.clone()));
+        Ok(parsed)
     })
     .await
     .map_err(|e| format!("Join error: {}", e))?
