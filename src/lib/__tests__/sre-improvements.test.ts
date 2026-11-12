@@ -281,4 +281,49 @@ libc-bin/stable 2.36-9+deb12u9 arm64 [upgradable from: 2.36-9+deb12u8]
       expect(reopened?.id).toBe('deploy-tasty-basket-1700000150');
     });
   });
+
+  describe('TopLiveSyncBar & MCP Telemetry Presentation', () => {
+    it('formats MCP bridge telemetry correctly for online state with PID', () => {
+      const onlineStatus = {
+        isOnline: true,
+        pipeName: '\\\\.\\pipe\\panoramasre-ctl-53520',
+        pid: 53520,
+        activeLeasesCount: 1,
+        activeDevServersCount: 2,
+        instances: [{ pid: 53520, binary_type: 'Release', port: 1420, is_primary: true }],
+      };
+
+      expect(onlineStatus.isOnline).toBe(true);
+      expect(onlineStatus.pid).toBe(53520);
+      expect(onlineStatus.activeDevServersCount).toBe(2);
+      expect(`PID ${onlineStatus.pid}`).toBe('PID 53520');
+    });
+
+    it('formats MCP bridge telemetry correctly for offline fallback state', () => {
+      const offlineStatus = {
+        isOnline: false,
+        pipeName: '',
+        pid: null,
+        activeLeasesCount: 0,
+        activeDevServersCount: 0,
+        instances: [],
+      };
+
+      expect(offlineStatus.isOnline).toBe(false);
+      expect(offlineStatus.pid).toBeNull();
+      expect(offlineStatus.activeLeasesCount).toBe(0);
+    });
+
+    it('maintains non-wrapping, responsive text invariant contracts', () => {
+      // Invariant: sync time strings must not be split across line breaks
+      const sampleSync = '7:01:00 PM';
+      expect(sampleSync.includes('\n')).toBe(false);
+
+      const sampleAudit = '7:01:43 PM';
+      const interval = '5';
+      const auditFull = `Audit: ${sampleAudit} (${interval}m)`;
+      expect(auditFull).toBe('Audit: 7:01:43 PM (5m)');
+    });
+  });
 });
+

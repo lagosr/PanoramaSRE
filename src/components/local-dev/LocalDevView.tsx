@@ -1,9 +1,11 @@
-import { DiscoveredApp } from '../../lib/types';
+import { DiscoveredApp, McpBridgeStatus } from '../../lib/types';
 import { DevServerCard } from './DevServerCard';
+import { McpBridgeBanner } from './McpBridgeBanner';
 import { Play, Square, Loader2 } from 'lucide-react';
 
 interface LocalDevViewProps {
   apps: DiscoveredApp[];
+  mcpStatus?: McpBridgeStatus | null;
   onStart: (appId: string, workspacePath: string, devCommand: string, port?: number) => void;
   onStartAuthAndApp: (appId: string, workspacePath: string, devCommand: string, port?: number) => void;
   onStop: (appId: string, port?: number) => void;
@@ -16,6 +18,7 @@ interface LocalDevViewProps {
 
 export function LocalDevView({
   apps,
+  mcpStatus,
   onStart,
   onStartAuthAndApp,
   onStop,
@@ -89,6 +92,9 @@ export function LocalDevView({
           </div>
         </div>
       </div>
+
+      {/* Agent MCP Bridge Status Banner */}
+      {mcpStatus && <McpBridgeBanner status={mcpStatus} />}
 
       {/* Grid of Dev Server Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">

@@ -26,6 +26,7 @@ import {
   WshSnapshot,
   BackupLedgerSummary,
   SslFleetSummary,
+  McpBridgeStatus,
   isAppDeployCandidate,
 } from './lib/types';
 import { buildSslCertCommand, buildCloudflareTunnelCommand, buildRemoteSshCommand } from './lib/script-adapters';
@@ -51,6 +52,7 @@ export const App: React.FC = () => {
   const [wshSnapshot, setWshSnapshot] = useState<WshSnapshot | null>(null);
   const [backupLedger, setBackupLedger] = useState<BackupLedgerSummary | null>(null);
   const [sslFleet, setSslFleet] = useState<SslFleetSummary | null>(null);
+  const [mcpStatus, setMcpStatus] = useState<McpBridgeStatus | null>(null);
   const [isLoadingSsl, setIsLoadingSsl] = useState<boolean>(false);
   const [isLoadingWsh, setIsLoadingWsh] = useState<boolean>(false);
   // Terminal Drawer State
@@ -292,6 +294,16 @@ export const App: React.FC = () => {
     }
   }, []);
 
+  // Refresh Agent MCP Bridge Status
+  const refreshMcpStatus = useCallback(async () => {
+    try {
+      const status = await invoke<McpBridgeStatus>('get_mcp_bridge_status');
+      setMcpStatus(status);
+    } catch {
+      // Ignore background MCP status polling errors
+    }
+  }, []);
+
   // Full Initial App Discovery & Telemetry Probe
   const syncFullTelemetry = useCallback(async (isUserInitiated = false) => {
     if (isUserInitiated) {
@@ -448,7 +460,8 @@ export const App: React.FC = () => {
   // Initial sync on mount
   useEffect(() => {
     syncFullTelemetry(false);
-  }, [syncFullTelemetry]);
+    refreshMcpStatus();
+  }, [syncFullTelemetry, refreshMcpStatus]);
 
   // Listen for background TelemetryScheduler ticks and update ONLY relevant tier data
   useEffect(() => {
@@ -461,6 +474,7 @@ export const App: React.FC = () => {
       if (tier === 1) {
         refreshDevServers();
         refreshAppliances();
+        refreshMcpStatus();
       }
 
       // Tier 2 (every 60s): update WSH host telemetry, backup ledger & SSL dual-probes
@@ -492,7 +506,11 @@ export const App: React.FC = () => {
       const msg = event.payload?.message || `AI Agent executed ${event.payload?.action || 'action'}`;
       showActionFeedback(msg, 'success', 4000);
       refreshDevServers();
-      setTimeout(() => refreshDevServers(), 800);
+      refreshMcpStatus();
+      setTimeout(() => {
+        refreshDevServers();
+        refreshMcpStatus();
+      }, 800);
     }).then((unsub) => {
       unlistenAction = unsub;
     });
@@ -500,6 +518,7 @@ export const App: React.FC = () => {
     listen<{ pid: number; exePath: string; reason: string }>('sre://security-alert', (event) => {
       const reason = event.payload?.reason || 'Unauthorized IPC access blocked';
       showActionFeedback(`[SECURITY ALERT] ${reason}`, 'error', 8000);
+      refreshMcpStatus();
     }).then((unsub) => {
       unlistenAlert = unsub;
     });
@@ -508,7 +527,7 @@ export const App: React.FC = () => {
       if (unlistenAction) unlistenAction();
       if (unlistenAlert) unlistenAlert();
     };
-  }, [showActionFeedback, refreshDevServers]);
+  }, [showActionFeedback, refreshDevServers, refreshMcpStatus]);
 
   // Periodic WSH Security Hardening & Penetration Audit Timer
   useEffect(() => {
@@ -1460,6 +1479,8 @@ export const App: React.FC = () => {
             onNavigateToBackups={() => setActiveTab('backups')}
             securityViolationCount={securityViolationCount}
             onNavigateToTopology={() => setActiveTab('topology')}
+            mcpStatus={mcpStatus}
+            onNavigateToDev={() => setActiveTab('local-dev')}
           />
 
           <div className="flex-1 min-h-0 overflow-y-auto">
@@ -1483,6 +1504,7 @@ export const App: React.FC = () => {
           {activeTab === 'local-dev' && (
             <LocalDevView
               apps={apps}
+              mcpStatus={mcpStatus}
               onStart={handleStartDevServer}
               onStartAuthAndApp={handleStartAuthAndApp}
               onStop={handleStopDevServer}

@@ -443,3 +443,26 @@ export function isAppDeployCandidate(app: DiscoveredApp): boolean {
 
   return isCritical || hasDrift;
 }
+
+export interface AgentActionSummary {
+  action: string;
+  slug?: string;
+  timestamp: string;
+  success: boolean;
+  message?: string;
+}
+
+export interface McpBridgeStatus {
+  isOnline: boolean;
+  instanceId: string;
+  pid: number;
+  channel: 'installed' | 'dev' | 'portable';
+  pipeName: string;
+  totalRequests: number;
+  activeConnections: number;
+  securityAlerts: number;
+  lastAction?: AgentActionSummary | null;
+  siblingInstances: number;
+  isPrimaryElected: boolean;
+}
+

@@ -211,6 +211,15 @@ impl DevSupervisor {
         results
     }
 
+    /// Return count of actively running managed processes
+    pub fn get_managed_app_count(&self) -> usize {
+        let mut managed_map = self.managed_processes.lock().unwrap();
+        managed_map.retain(|_app_id, child| {
+            matches!(child.try_wait(), Ok(None))
+        });
+        managed_map.len()
+    }
+
     /// Start a dev server and register it in `managed_processes`
     pub fn start_app_internal(
         &self,

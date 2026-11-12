@@ -124,7 +124,8 @@ pub fn run() {
             delete_console_session,
             delete_all_console_sessions,
             open_in_file_manager,
-            exit_app_completely
+            exit_app_completely,
+            control_server::get_mcp_bridge_status
         ])
         .setup(move |app| {
             // Setup System Tray

@@ -18,6 +18,171 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
 static ACTIVE_LEASE_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+static BRIDGE_TELEMETRY: OnceLock<Arc<Mutex<McpBridgeTelemetry>>> = OnceLock::new();
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentActionSummary {
+    pub action: String,
+    pub slug: Option<String>,
+    pub timestamp: String,
+    pub success: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct McpBridgeTelemetry {
+    pub total_requests: u64,
+    pub active_connections: u32,
+    pub security_alerts: u32,
+    pub last_action: Option<AgentActionSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpBridgeStatus {
+    pub is_online: bool,
+    pub instance_id: String,
+    pub pid: u32,
+    pub channel: String,
+    pub pipe_name: String,
+    pub total_requests: u64,
+    pub active_connections: u32,
+    pub security_alerts: u32,
+    pub last_action: Option<AgentActionSummary>,
+    pub sibling_instances: usize,
+    pub is_primary_elected: bool,
+}
+
+pub fn get_bridge_telemetry() -> Arc<Mutex<McpBridgeTelemetry>> {
+    BRIDGE_TELEMETRY
+        .get_or_init(|| Arc::new(Mutex::new(McpBridgeTelemetry::default())))
+        .clone()
+}
+
+pub fn record_telemetry_request() {
+    let t = get_bridge_telemetry();
+    let mut g = match t.lock() {
+        Ok(guard) => guard,
+        Err(_) => return,
+    };
+    g.total_requests = g.total_requests.saturating_add(1);
+}
+
+pub fn record_telemetry_alert() {
+    let t = get_bridge_telemetry();
+    let mut g = match t.lock() {
+        Ok(guard) => guard,
+        Err(_) => return,
+    };
+    g.security_alerts = g.security_alerts.saturating_add(1);
+}
+
+pub fn record_telemetry_action(action: &str, slug: Option<&str>, success: bool, message: Option<&str>) {
+    let t = get_bridge_telemetry();
+    let mut g = match t.lock() {
+        Ok(guard) => guard,
+        Err(_) => return,
+    };
+    g.last_action = Some(AgentActionSummary {
+        action: action.to_string(),
+        slug: slug.map(|s| s.to_string()),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        success,
+        message: message.map(|m| m.to_string()),
+    });
+}
+
+/// Reads all valid, currently-live lease files in the IPC lease directory.
+pub fn list_live_leases(lease_dir: &Path) -> Vec<SreInstanceLease> {
+    let mut leases = Vec::new();
+    let Ok(entries) = fs::read_dir(lease_dir) else {
+        return leases;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(fname) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !fname.starts_with("lease-") || !fname.ends_with(".json") {
+            continue;
+        }
+        if let Ok(raw) = fs::read_to_string(&path) {
+            if let Ok(lease) = serde_json::from_str::<SreInstanceLease>(&raw) {
+                if ipc_security::is_pid_alive(lease.pid) {
+                    leases.push(lease);
+                }
+            }
+        }
+    }
+    leases
+}
+
+#[tauri::command]
+pub async fn get_mcp_bridge_status(
+    dev_supervisor: tauri::State<'_, Arc<DevSupervisor>>,
+) -> Result<McpBridgeStatus, String> {
+    let current_pid = std::process::id();
+    let lease_dir = resolve_ipc_lease_dir();
+    let active_leases = list_live_leases(&lease_dir);
+    let sibling_instances = active_leases.len();
+
+    let exe_path = std::env::current_exe()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let channel = classify_exe_channel(&exe_path);
+
+    // Current instance info
+    let current_lease = active_leases.iter().find(|l| l.pid == current_pid);
+    let instance_id = current_lease
+        .map(|l| l.instance_id.clone())
+        .unwrap_or_else(|| format!("sre-{}-{}", channel, current_pid));
+    let pipe_name = current_lease
+        .map(|l| l.pipe_name.clone())
+        .unwrap_or_default();
+
+    let telemetry = get_bridge_telemetry();
+    let (total_requests, active_connections, security_alerts, last_action) = {
+        if let Ok(g) = telemetry.lock() {
+            (
+                g.total_requests,
+                g.active_connections,
+                g.security_alerts,
+                g.last_action.clone(),
+            )
+        } else {
+            (0, 0, 0, None)
+        }
+    };
+
+    // Determine if this instance is primary elected
+    let managed_count = dev_supervisor.get_managed_app_count();
+    let is_primary_elected = if active_leases.is_empty() {
+        true
+    } else {
+        if managed_count > 0 {
+            true
+        } else {
+            channel == "installed"
+                || !active_leases.iter().any(|l| l.channel == "installed" && l.pid != current_pid)
+        }
+    };
+
+    Ok(McpBridgeStatus {
+        is_online: true,
+        instance_id,
+        pid: current_pid,
+        channel,
+        pipe_name,
+        total_requests,
+        active_connections,
+        security_alerts,
+        last_action,
+        sibling_instances,
+        is_primary_elected,
+    })
+}
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -359,6 +524,7 @@ async fn handle_pipe_connection(
                     )),
                 );
             }
+            record_telemetry_alert();
             emit_ui_event(
                 &app_handle,
                 "sre://security-alert",
@@ -385,6 +551,8 @@ async fn handle_pipe_connection(
     if bytes_read == 0 || line.trim().is_empty() {
         return;
     }
+
+    record_telemetry_request();
 
     let response = process_ipc_message(
         line.trim(),
@@ -734,6 +902,8 @@ pub async fn process_ipc_message(
                 );
             }
 
+            record_telemetry_action("dev.start", Some(&slug), true, Some(&format!("Started {}", slug)));
+
             emit_ui_event(
                 app_handle,
                 "sre://agent-action",
@@ -823,6 +993,8 @@ pub async fn process_ipc_message(
                 );
             }
 
+            record_telemetry_action("dev.stop", Some(&slug), true, Some(&format!("Stopped {}", slug)));
+
             emit_ui_event(
                 app_handle,
                 "sre://agent-action",
@@ -907,6 +1079,8 @@ pub async fn process_ipc_message(
                             Some(&format!("caller_pid={}", attestation.pid)),
                         );
                     }
+                    record_telemetry_action("dev.restart", Some(&slug), true, Some(&format!("Restarted {}", slug)));
+
                     emit_ui_event(
                         app_handle,
                         "sre://agent-action",
