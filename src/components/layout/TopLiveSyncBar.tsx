@@ -42,7 +42,7 @@ export function TopLiveSyncBar({
 
   return (
     <header className="h-16 border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-900/50 backdrop-blur-md px-3 sm:px-4 lg:px-6 flex items-center justify-between gap-3 lg:gap-4 z-10 select-none overflow-hidden">
-      {/* 2-Row Telemetry & Status Grid (Matches SidebarRail h-16 height) */}
+      {/* 2-Row Telemetry & Status Grid (Matches SidebarRail h-16 height, no aggressive hiding) */}
       <div className="flex-1 flex flex-col justify-center gap-1.5 min-w-0 py-1">
         {/* Row 1: Infrastructure Network Posture, Dev & Fleet Health Counters, Telemetry Sync */}
         <div className="flex items-center justify-between gap-3 text-xs min-w-0">
@@ -56,7 +56,7 @@ export function TopLiveSyncBar({
                 >
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 dark:bg-emerald-400 animate-pulse shrink-0" />
                   <span>LAN DIRECT</span>
-                  <span className="hidden 2xl:inline font-mono"> (172.25.25.5)</span>
+                  <span className="font-mono font-medium text-emerald-700/80 dark:text-emerald-300/80"> (172.25.25.5)</span>
                 </span>
               )}
               {networkPosture === 'WAN_CLOUDFLARE' && (
@@ -65,8 +65,7 @@ export function TopLiveSyncBar({
                   title="Network Posture: WAN (Proxied via Cloudflare Zero Trust Tunnel)"
                 >
                   <span className="w-1.5 h-1.5 rounded-full bg-amber-600 dark:bg-amber-400 shrink-0" />
-                  <span>WAN</span>
-                  <span className="hidden sm:inline font-normal"> (Cloudflare)</span>
+                  <span>WAN (Cloudflare)</span>
                 </span>
               )}
               {networkPosture === 'OFFLINE' && (
@@ -80,7 +79,7 @@ export function TopLiveSyncBar({
               )}
             </div>
 
-            {/* Dev Servers Compact Counter */}
+            {/* Dev Servers Counter */}
             <div
               className="flex items-center gap-1 text-[11px] text-slate-600 dark:text-slate-400 border-l border-slate-200 dark:border-slate-800 pl-2 sm:pl-2.5 shrink-0 whitespace-nowrap"
               title={`Dev Servers: ${devRunningCount} of ${totalAppCount} currently active`}
@@ -95,8 +94,7 @@ export function TopLiveSyncBar({
                     : 'text-slate-600 dark:text-slate-400'
                 }`}
               >
-                {devRunningCount}/{totalAppCount}
-                <span className="hidden xl:inline"> running</span>
+                {devRunningCount}/{totalAppCount} running
               </span>
             </div>
 
@@ -107,16 +105,15 @@ export function TopLiveSyncBar({
             >
               <span className="font-medium text-slate-500 dark:text-slate-400">Prod:</span>
               {hasFleetAlert ? (
-                <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded-full bg-rose-500/20 text-rose-800 dark:text-rose-300 border border-rose-500/50 shadow-[0_0_8px_rgba(244,63,94,0.3)] animate-pulse font-semibold shrink-0">
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-rose-500/20 text-rose-800 dark:text-rose-300 border border-rose-500/50 shadow-[0_0_8px_rgba(244,63,94,0.3)] animate-pulse font-semibold shrink-0">
                   <AlertCircle className="w-3 h-3 text-rose-600 dark:text-rose-400 shrink-0" />
-                  <span>{totalAppCount - prodHealthyCount} DOWN</span>
+                  <span>CRITICAL: {totalAppCount - prodHealthyCount} DOWN</span>
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1 shrink-0">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 dark:bg-emerald-400 shrink-0" />
                   <span className="font-mono font-medium text-emerald-700 dark:text-emerald-400">
-                    {prodHealthyCount}/{totalAppCount}
-                    <span className="hidden xl:inline"> healthy</span>
+                    {prodHealthyCount}/{totalAppCount} healthy
                   </span>
                 </span>
               )}
@@ -129,7 +126,7 @@ export function TopLiveSyncBar({
               className="flex items-center text-[11px] text-slate-500 dark:text-slate-400 whitespace-nowrap shrink-0"
               title={`Last telemetry sync from host: ${lastSyncTime}`}
             >
-              <span className="text-slate-400 dark:text-slate-500 hidden sm:inline mr-1">Last sync:</span>
+              <span className="text-slate-400 dark:text-slate-500 mr-1">Last sync:</span>
               <span className="font-mono text-slate-700 dark:text-slate-300 font-medium">{lastSyncTime}</span>
             </div>
           )}
@@ -172,7 +169,7 @@ export function TopLiveSyncBar({
                 title={`Automated daily database backup failed for ${backupFailureCount} app(s)! Click to inspect.`}
               >
                 <AlertCircle className="w-3 h-3 text-rose-500 dark:text-rose-400 shrink-0" />
-                <span>BACKUP: {backupFailureCount} FAILED</span>
+                <span>BACKUP INCIDENT: {backupFailureCount} FAILED</span>
               </button>
             )}
 
@@ -184,7 +181,7 @@ export function TopLiveSyncBar({
                 title={`WSH Network or Container Security Invariant Violation Detected (${securityViolationCount} checks failed)! Click to inspect topology.`}
               >
                 <ShieldAlert className="w-3 h-3 text-rose-500 dark:text-rose-400 shrink-0" />
-                <span>SECURITY: {securityViolationCount} FAILED</span>
+                <span>SECURITY VIOLATION: {securityViolationCount} FAILED</span>
               </button>
             )}
           </div>
@@ -197,9 +194,9 @@ export function TopLiveSyncBar({
               title={`WSH Network Hardening & Penetration Audit Last Checked at ${lastSecurityAuditTime} (every ${securityAuditInterval}m). Click to inspect topology & rules advisor.`}
             >
               <ShieldCheck className="w-3 h-3 text-emerald-500 shrink-0" />
-              <span className="text-slate-400 dark:text-slate-500 hidden sm:inline">Audit:</span>
+              <span className="text-slate-400 dark:text-slate-500">Audit:</span>
               <span className="font-mono text-slate-700 dark:text-slate-300 font-medium">{lastSecurityAuditTime}</span>
-              <span className="text-[10px] font-mono text-slate-400 hidden xl:inline">({securityAuditInterval}m)</span>
+              <span className="text-[10px] font-mono text-slate-400 ml-0.5">({securityAuditInterval}m)</span>
             </button>
           )}
         </div>
