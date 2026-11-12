@@ -1478,7 +1478,7 @@ export const App: React.FC = () => {
   }, [getWorkspaceRoot]);
 
   const handleRunSmokeTests = useCallback(
-    async (liveSmsProbe = false, triggeredBy = 'sre-manual') => {
+    async (triggeredBy = 'sre-manual') => {
       if (isSmokeRunning) return;
       setIsSmokeRunning(true);
       setSmokeError(null);
@@ -1487,7 +1487,6 @@ export const App: React.FC = () => {
           workspaceRoot: getWorkspaceRoot(),
           targetUrl: 'https://wsh.panoramadr.com',
           triggeredBy,
-          liveSmsProbe,
         });
         await refreshSmokeHistory();
       } catch (err) {
@@ -1548,7 +1547,7 @@ export const App: React.FC = () => {
       if (localStorage.getItem('panoramasre_last_smoke_slot') === slotKey) return;
 
       localStorage.setItem('panoramasre_last_smoke_slot', slotKey);
-      handleRunSmokeTests(false, `sre-scheduled:${hhmm}`);
+      handleRunSmokeTests(`sre-scheduled:${hhmm}`);
     }, 30000);
     return () => clearInterval(timer);
   }, [handleRunSmokeTests]);
@@ -1810,7 +1809,7 @@ export const App: React.FC = () => {
             <SmokeTestsView
               runs={smokeRuns}
               isRunning={isSmokeRunning}
-              onRunNow={(liveSmsProbe) => handleRunSmokeTests(Boolean(liveSmsProbe), 'sre-manual')}
+              onRunNow={() => handleRunSmokeTests('sre-manual')}
               onRefreshHistory={refreshSmokeHistory}
               onRegisterOsSchedule={handleRegisterSmokeSchedule}
               lastError={smokeError}

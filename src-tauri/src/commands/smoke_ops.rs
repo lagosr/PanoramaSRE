@@ -70,7 +70,6 @@ pub async fn run_smoke_tests_now(
     workspace_root: String,
     target_url: Option<String>,
     triggered_by: Option<String>,
-    live_sms_probe: Option<bool>,
 ) -> Result<SmokeTestRun, String> {
     let dir = smoke_tester_dir(&workspace_root);
     let script_path = dir.join("smoke-tests.ts");
@@ -93,10 +92,6 @@ pub async fn run_smoke_tests_now(
         .arg(&trigger)
         .arg("--json")
         .current_dir(&dir);
-
-    if live_sms_probe.unwrap_or(false) {
-        cmd.arg("--live-sms-probe");
-    }
 
     #[cfg(windows)]
     {

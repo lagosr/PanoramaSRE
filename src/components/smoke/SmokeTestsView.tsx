@@ -8,14 +8,13 @@ import {
   Clock,
   CalendarClock,
   ShieldCheck,
-  Smartphone,
 } from 'lucide-react';
 import { SmokeTestRun } from '../../lib/types';
 
 interface SmokeTestsViewProps {
   runs: SmokeTestRun[];
   isRunning: boolean;
-  onRunNow: (liveSmsProbe?: boolean) => void;
+  onRunNow: () => void;
   onRefreshHistory: () => void;
   onRegisterOsSchedule: () => void;
   scheduleSlots?: string[];
@@ -116,16 +115,7 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
             Sync OS Schedule
           </button>
           <button
-            onClick={() => onRunNow(true)}
-            disabled={isRunning}
-            title="Run full smoke suite including live Twilio SMS probe to admin phone"
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/30 whitespace-nowrap flex-shrink-0 transition-colors cursor-pointer disabled:opacity-50"
-          >
-            <Smartphone className="w-3.5 h-3.5" />
-            Live SMS Probe
-          </button>
-          <button
-            onClick={() => onRunNow(false)}
+            onClick={() => onRunNow()}
             disabled={isRunning}
             className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/20 whitespace-nowrap flex-shrink-0 transition-colors cursor-pointer disabled:opacity-50"
           >
