@@ -7,6 +7,7 @@ import {
   Server, 
   ShieldCheck, 
   HardDrive, 
+  FlaskConical,
   Settings as SettingsIcon
 } from 'lucide-react';
 import { APP_VERSION_INFO } from '../../lib/version';
@@ -19,6 +20,7 @@ export type NavItem =
   | 'dietpi'
   | 'edge'
   | 'backups'
+  | 'smoke'
   | 'settings';
 
 interface SidebarRailProps {
@@ -29,6 +31,7 @@ interface SidebarRailProps {
   behindReleasesCount?: number;
   dietpiPackagesCount?: number;
   securityViolationCount?: number;
+  smokeFailureCount?: number;
 }
 
 export const SidebarRail: React.FC<SidebarRailProps> = ({
@@ -39,6 +42,7 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
   behindReleasesCount = 0,
   dietpiPackagesCount = 0,
   securityViolationCount = 0,
+  smokeFailureCount = 0,
 }) => {
   const navItems: { id: NavItem; label: string; icon: React.ComponentType<{ className?: string }>; badge?: number; badgeColor?: string }[] = [
     {
@@ -60,6 +64,7 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
     { id: 'dietpi', label: 'DietPi Host', icon: Server, badge: dietpiPackagesCount, badgeColor: 'bg-amber-500' },
     { id: 'edge', label: 'PKI & Certificates', icon: ShieldCheck },
     { id: 'backups', label: 'Database Backups & DR', icon: HardDrive, badge: backupFailureCount, badgeColor: 'bg-rose-500' },
+    { id: 'smoke', label: 'Smoke Tests', icon: FlaskConical, badge: smokeFailureCount > 0 ? smokeFailureCount : undefined, badgeColor: 'bg-rose-500 animate-pulse' },
     { id: 'settings', label: 'Settings', icon: SettingsIcon },
   ];
 

@@ -6,6 +6,7 @@ pub mod commands {
     pub mod log_ops;
     pub mod monitor;
     pub mod runner;
+    pub mod smoke_ops;
     pub mod ssl_ops;
     pub mod workspace;
 }
@@ -26,6 +27,7 @@ use commands::local_backups::*;
 use commands::log_ops::*;
 use commands::monitor::*;
 use commands::runner::*;
+use commands::smoke_ops::*;
 use commands::ssl_ops::*;
 use commands::workspace::*;
 use db::SreDatabase;
@@ -125,6 +127,8 @@ pub fn run() {
             delete_all_console_sessions,
             open_in_file_manager,
             exit_app_completely,
+            get_smoke_test_history,
+            run_smoke_tests_now,
             control_server::get_mcp_bridge_status
         ])
         .setup(move |app| {

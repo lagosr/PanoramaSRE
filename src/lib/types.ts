@@ -466,3 +466,23 @@ export interface McpBridgeStatus {
   isPrimaryElected: boolean;
 }
 
+export interface SmokeCheckResult {
+  name: string;
+  category: string;
+  passed: boolean;
+  durationMs: number;
+  detail: string;
+}
+
+export interface SmokeTestRun {
+  id: string;
+  timestamp: string;
+  targetUrl: string;
+  triggeredBy: string;
+  envOnly: boolean;
+  total: number;
+  passed: number;
+  failed: number;
+  results: SmokeCheckResult[];
+}
+

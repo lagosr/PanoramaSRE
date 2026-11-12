@@ -15,6 +15,7 @@ import { DietPiHostView } from './components/dietpi/DietPiHostView';
 import { EdgePkiView } from './components/edge/EdgePkiView';
 import { ReleasePipelineView } from './components/releases/ReleasePipelineView';
 import { BackupsRecoveryView } from './components/backups/BackupsRecoveryView';
+import { SmokeTestsView } from './components/smoke/SmokeTestsView';
 import { synthesizeTopology } from './lib/topology-synthesizer';
 import {
   DiscoveredApp,
@@ -27,6 +28,7 @@ import {
   BackupLedgerSummary,
   SslFleetSummary,
   McpBridgeStatus,
+  SmokeTestRun,
   isAppDeployCandidate,
 } from './lib/types';
 import { buildSslCertCommand, buildCloudflareTunnelCommand, buildRemoteSshCommand } from './lib/script-adapters';
@@ -53,6 +55,9 @@ export const App: React.FC = () => {
   const [backupLedger, setBackupLedger] = useState<BackupLedgerSummary | null>(null);
   const [sslFleet, setSslFleet] = useState<SslFleetSummary | null>(null);
   const [mcpStatus, setMcpStatus] = useState<McpBridgeStatus | null>(null);
+  const [smokeRuns, setSmokeRuns] = useState<SmokeTestRun[]>([]);
+  const [isSmokeRunning, setIsSmokeRunning] = useState<boolean>(false);
+  const [smokeError, setSmokeError] = useState<string | null>(null);
   const [isLoadingSsl, setIsLoadingSsl] = useState<boolean>(false);
   const [isLoadingWsh, setIsLoadingWsh] = useState<boolean>(false);
   // Terminal Drawer State
@@ -1450,6 +1455,103 @@ export const App: React.FC = () => {
   const topology = React.useMemo(() => synthesizeTopology(apps, wshSnapshot), [apps, wshSnapshot]);
   const securityViolationCount = wshSnapshot ? topology.securityAudit.securityViolationCount : 0;
   const failingInvariants = wshSnapshot ? topology.securityAudit.invariants.filter((i) => i.status === 'FAIL') : [];
+  const smokeFailureCount = smokeRuns[0]?.failed || 0;
+
+  const getWorkspaceRoot = useCallback(() => {
+    if (apps.length > 0 && apps[0].workspacePath) {
+      return apps[0].workspacePath.replace(/[\\/][^\\/]+$/, '');
+    }
+    return 'c:\\Users\\rodrigo\\Documents\\AG Projects';
+  }, [apps]);
+
+  const refreshSmokeHistory = useCallback(async () => {
+    try {
+      const history = await invoke<SmokeTestRun[]>('get_smoke_test_history', {
+        workspaceRoot: getWorkspaceRoot(),
+        limit: 50,
+      });
+      setSmokeRuns(history);
+      setSmokeError(null);
+    } catch (err) {
+      setSmokeError(String(err));
+    }
+  }, [getWorkspaceRoot]);
+
+  const handleRunSmokeTests = useCallback(
+    async (liveSmsProbe = false, triggeredBy = 'sre-manual') => {
+      if (isSmokeRunning) return;
+      setIsSmokeRunning(true);
+      setSmokeError(null);
+      try {
+        await invoke<SmokeTestRun>('run_smoke_tests_now', {
+          workspaceRoot: getWorkspaceRoot(),
+          targetUrl: 'https://wsh.panoramadr.com',
+          triggeredBy,
+          liveSmsProbe,
+        });
+        await refreshSmokeHistory();
+      } catch (err) {
+        setSmokeError(String(err));
+      } finally {
+        setIsSmokeRunning(false);
+      }
+    },
+    [getWorkspaceRoot, isSmokeRunning, refreshSmokeHistory]
+  );
+
+  const handleRegisterSmokeSchedule = useCallback(() => {
+    const jobId = `smoke-schedule-${Date.now()}`;
+    const smokeDir = `${getWorkspaceRoot()}\\PanoramaDrSuite\\tools\\smoke-tester`;
+    const newTab: TerminalTab = {
+      id: jobId,
+      title: 'Register 4x/Day Smoke Schedule',
+      lines: ['[PanoramaSRE] Registering 4x daily smoke test task (08:00, 13:00, 17:00, 22:00)...'],
+      isRunning: true,
+      createdAt: new Date().toISOString(),
+    };
+    setTerminalTabs((prev) => [...prev, newTab]);
+    setActiveTerminalTabId(jobId);
+    setIsDrawerOpen(true);
+    saveTabToDb(newTab);
+
+    runStreamJob({
+      jobId,
+      label: 'Register 4x/Day Smoke Schedule',
+      command: 'pwsh.exe',
+      args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', './Run-SmokeTests.ps1', '-RegisterDailyTask'],
+      workingDir: smokeDir,
+      lockType: 'None',
+      onLine: (line) => appendTerminalLine(jobId, line),
+      onComplete: (exitCode) => finalizeTerminalJob(jobId, exitCode),
+      onError: (err) => failTerminalJob(jobId, `Failed to register schedule: ${err}`),
+    });
+  }, [getWorkspaceRoot]);
+
+  useEffect(() => {
+    if (apps.length > 0) {
+      refreshSmokeHistory();
+    }
+  }, [apps.length, refreshSmokeHistory]);
+
+  // 4x Daily Smoke Test Scheduler (08:00, 13:00, 17:00, 22:00 local time)
+  useEffect(() => {
+    const SCHEDULE_SLOTS = ['08:00', '13:00', '17:00', '22:00'];
+    const timer = setInterval(() => {
+      const now = new Date();
+      const hh = String(now.getHours()).padStart(2, '0');
+      const mm = String(now.getMinutes()).padStart(2, '0');
+      const hhmm = `${hh}:${mm}`;
+      if (!SCHEDULE_SLOTS.includes(hhmm)) return;
+
+      const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const slotKey = `${dateStr} ${hhmm}`;
+      if (localStorage.getItem('panoramasre_last_smoke_slot') === slotKey) return;
+
+      localStorage.setItem('panoramasre_last_smoke_slot', slotKey);
+      handleRunSmokeTests(false, `sre-scheduled:${hhmm}`);
+    }, 30000);
+    return () => clearInterval(timer);
+  }, [handleRunSmokeTests]);
 
   return (
     <div className="flex flex-col h-screen w-screen bg-slate-50 dark:bg-[#050b14] text-slate-900 dark:text-slate-100 overflow-hidden font-sans">
@@ -1463,6 +1565,7 @@ export const App: React.FC = () => {
           behindReleasesCount={behindReleasesCount}
           dietpiPackagesCount={dietpiPackagesCount}
           securityViolationCount={securityViolationCount}
+          smokeFailureCount={smokeFailureCount}
         />
 
         <main className="flex-1 flex flex-col h-full overflow-hidden relative">
@@ -1700,6 +1803,17 @@ export const App: React.FC = () => {
               onTriggerAppBackup={handleTriggerAppBackup}
               onApplyLocalBackup={handleApplyLocalBackup}
               onRestoreRemoteBackup={handleRestoreRemoteBackup}
+            />
+          )}
+
+          {activeTab === 'smoke' && (
+            <SmokeTestsView
+              runs={smokeRuns}
+              isRunning={isSmokeRunning}
+              onRunNow={(liveSmsProbe) => handleRunSmokeTests(Boolean(liveSmsProbe), 'sre-manual')}
+              onRefreshHistory={refreshSmokeHistory}
+              onRegisterOsSchedule={handleRegisterSmokeSchedule}
+              lastError={smokeError}
             />
           )}
 
