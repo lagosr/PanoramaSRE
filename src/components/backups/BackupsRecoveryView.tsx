@@ -238,7 +238,7 @@ export function BackupsRecoveryView({
 
   useEffect(() => {
     scanAllArchives();
-  }, [selectedApp?.manifest.appId]);
+  }, [selectedApp?.manifest.appId, ledger]);
 
   const handlePrevApp = () => {
     if (carouselItems.length === 0) return;

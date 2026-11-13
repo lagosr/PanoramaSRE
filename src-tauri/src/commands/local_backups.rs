@@ -188,8 +188,11 @@ pub async fn scan_local_backups(workspace_path: String) -> Result<BackupScanResu
             }
         }
 
-        // Sort newest first by file name / timestamp
-        archives.sort_by(|a, b| b.file_name.cmp(&a.file_name));
+        // Sort newest first by parsed date/timestamp (not filename prefix like v1 vs v4)
+        archives.sort_by(|a, b| {
+            (&b.date_str, &b.timestamp_str, &b.file_name)
+                .cmp(&(&a.date_str, &a.timestamp_str, &a.file_name))
+        });
 
         // Peek health.json only for top 5 most recent archives to prevent disk thrashing
         for a in archives.iter_mut().take(5) {
