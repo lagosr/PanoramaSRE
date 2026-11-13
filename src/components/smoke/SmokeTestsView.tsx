@@ -9,6 +9,7 @@ import {
   CalendarClock,
   ShieldCheck,
   Terminal,
+  MessageSquare,
 } from 'lucide-react';
 import { SmokeTestRun } from '../../lib/types';
 import { formatConsoleLine } from '../layout/ConsoleColorizer';
@@ -17,7 +18,7 @@ interface SmokeTestsViewProps {
   runs: SmokeTestRun[];
   isRunning: boolean;
   streamLines?: string[];
-  onRunNow: () => void;
+  onRunNow: (forceSms?: boolean) => void;
   onRefreshHistory: () => void;
   onRegisterOsSchedule: () => void;
   scheduleSlots?: string[];
@@ -126,8 +127,9 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
             Sync OS Schedule
           </button>
           <button
-            onClick={() => onRunNow()}
+            onClick={() => onRunNow(false)}
             disabled={isRunning}
+            title="Run smoke suite (respects 8h E2E SMS cooldown)"
             className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/20 whitespace-nowrap flex-shrink-0 transition-colors cursor-pointer disabled:opacity-50"
           >
             {isRunning ? (
@@ -136,6 +138,15 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
               <Play className="w-3.5 h-3.5" />
             )}
             {isRunning ? 'Running Smoke Suite...' : 'Run Smoke Tests'}
+          </button>
+          <button
+            onClick={() => onRunNow(true)}
+            disabled={isRunning}
+            title="Bypass 8h SMS cooldown and send a live Twilio E2E SMS round-trip ($0.0166)"
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/30 whitespace-nowrap flex-shrink-0 transition-colors cursor-pointer disabled:opacity-50"
+          >
+            <MessageSquare className="w-3.5 h-3.5 text-emerald-400" />
+            Force E2E SMS
           </button>
         </div>
       </div>

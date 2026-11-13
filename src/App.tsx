@@ -1479,7 +1479,7 @@ export const App: React.FC = () => {
   }, [getWorkspaceRoot]);
 
   const handleRunSmokeTests = useCallback(
-    (triggeredBy = 'sre-manual') => {
+    (triggeredBy = 'sre-manual', forceSms = false) => {
       if (isSmokeRunning) return;
       const jobId = `smoke-${Date.now()}`;
       const smokeDir = `${getWorkspaceRoot()}\\PanoramaDrSuite\\tools\\smoke-tester`;
@@ -1498,21 +1498,26 @@ export const App: React.FC = () => {
       setActiveTerminalTabId(jobId);
       saveTabToDb(newTab);
 
+      const scriptArgs = [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        './Run-SmokeTests.ps1',
+        '-TargetUrl',
+        'https://wsh.panoramadr.com',
+        '-TriggeredBy',
+        triggeredBy,
+      ];
+      if (forceSms) {
+        scriptArgs.push('-ForceSms');
+      }
+
       runStreamJob({
         jobId,
         label: `Smoke Tests (${triggeredBy})`,
         command: 'pwsh.exe',
-        args: [
-          '-NoProfile',
-          '-ExecutionPolicy',
-          'Bypass',
-          '-File',
-          './Run-SmokeTests.ps1',
-          '-TargetUrl',
-          'https://wsh.panoramadr.com',
-          '-TriggeredBy',
-          triggeredBy,
-        ],
+        args: scriptArgs,
         workingDir: smokeDir,
         lockType: 'None',
         onLine: (line) => {
@@ -1918,7 +1923,9 @@ export const App: React.FC = () => {
               runs={smokeRuns}
               isRunning={isSmokeRunning}
               streamLines={terminalTabs.find((t) => t.id === activeSmokeJobId)?.lines || []}
-              onRunNow={() => handleRunSmokeTests('sre-manual')}
+              onRunNow={(force) =>
+                handleRunSmokeTests(force ? 'sre-manual:force-sms' : 'sre-manual', Boolean(force))
+              }
               onRefreshHistory={refreshSmokeHistory}
               onRegisterOsSchedule={handleRegisterSmokeSchedule}
               lastError={smokeError}
