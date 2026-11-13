@@ -710,18 +710,43 @@ export const App: React.FC = () => {
     });
   };
 
-  const handleApplyLocalBackup = (app: DiscoveredApp, archivePath: string) => {
+  const handleApplyLocalBackup = async (app: DiscoveredApp, archivePath: string) => {
     const jobId = `apply-local-${app.manifest.slug}-${Date.now()}`;
+    const isRunning =
+      app.devServer?.status === 'RUNNING_MANAGED' ||
+      app.devServer?.status === 'RUNNING_EXTERNAL';
+
     const newTab: TerminalTab = {
       id: jobId,
       title: `ApplyLocal: ${app.manifest.displayName}`,
-      lines: [`[PanoramaSRE] Extracting ${archivePath.split('\\').pop()} to local SQLite...`],
+      lines: [
+        `[PanoramaSRE] Extracting ${archivePath.split('\\').pop()} to local SQLite...`,
+        ...(isRunning
+          ? [`[PanoramaSRE] Stopping dev server for ${app.manifest.displayName} (port ${app.manifest.port}) via supervisor...`]
+          : []),
+      ],
       isRunning: true,
       createdAt: new Date().toISOString(),
     };
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
     saveTabToDb(newTab);
+
+    if (isRunning) {
+      try {
+        await invoke('stop_dev_server', {
+          appId: app.manifest.appId,
+          port: app.manifest.port,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 600));
+        appendTerminalLine(jobId, `[PanoramaSRE] Dev server stopped cleanly.`);
+      } catch (stopErr) {
+        appendTerminalLine(
+          jobId,
+          `[PanoramaSRE] Warning: supervisor stop returned (${stopErr}); continuing with db-manager.ps1 cleanup.`
+        );
+      }
+    }
 
     runStreamJob({
       jobId,
@@ -744,7 +769,20 @@ export const App: React.FC = () => {
       },
       onComplete: (exitCode) => {
         finalizeTerminalJob(jobId, exitCode);
-        refreshDevServers();
+        if (exitCode === 0) {
+          appendTerminalLine(
+            jobId,
+            `[PanoramaSRE] Starting ${app.manifest.displayName} via PanoramaSRE dev supervisor (port ${app.manifest.port})...`
+          );
+          void handleStartDevServer(
+            app.manifest.appId,
+            app.workspacePath,
+            app.manifest.sre.devCommand,
+            app.manifest.port
+          );
+        } else {
+          refreshDevServers();
+        }
       },
       onError: (err) => {
         failTerminalJob(jobId, `Apply local failed: ${err}`);
