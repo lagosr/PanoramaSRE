@@ -898,7 +898,12 @@ export const App: React.FC = () => {
   };
 
   // Deployment Execution Helpers
-  const executeAppDeploy = (app: DiscoveredApp, bump: string, allowDirty: boolean): Promise<number> => {
+  const executeAppDeploy = (
+    app: DiscoveredApp,
+    bump: string,
+    allowDirty: boolean,
+    skipSmoke = false
+  ): Promise<number> => {
     const jobId = `deploy-${app.manifest.slug}-${Date.now()}`;
     currentRunningDeployJobIdRef.current = jobId;
     setSelectedReleaseAppSlug(app.manifest.slug);
@@ -921,6 +926,9 @@ export const App: React.FC = () => {
     if (allowDirty) {
       args.push('-AllowDirty');
     }
+    if (skipSmoke) {
+      args.push('-SkipSmoke');
+    }
 
     return runStreamJob({
       jobId,
@@ -938,6 +946,9 @@ export const App: React.FC = () => {
         }
         finalizeTerminalJob(jobId, exitCode);
         syncFullTelemetry(false);
+        if (!skipSmoke) {
+          refreshSmokeHistory();
+        }
       },
       onError: (err) => {
         if (currentRunningDeployJobIdRef.current === jobId) {
@@ -951,6 +962,8 @@ export const App: React.FC = () => {
   const handleDeployAllApps = async (appsToDeploy: DiscoveredApp[], bump: string, allowDirty: boolean) => {
     setIsDeployingAll(true);
     haltDeploymentsRef.current = false;
+    const isBatch = appsToDeploy.length > 1;
+    let batchAllSucceeded = true;
 
     try {
       // Respect the user's explicit deployment order (caller passes already-ordered slice)
@@ -959,6 +972,7 @@ export const App: React.FC = () => {
       for (let i = 0; i < sortedApps.length; i++) {
         // Check if user clicked Halt
         if (haltDeploymentsRef.current) {
+          batchAllSucceeded = false;
           const remainingNames = sortedApps.slice(i).map((a) => a.manifest.displayName).join(', ');
           setActionFeedback({
             message: `Deployments halted by user. Cancelled remaining: ${remainingNames}`,
@@ -970,13 +984,14 @@ export const App: React.FC = () => {
         const app = sortedApps[i];
         let exitCode: number = -1;
         try {
-          exitCode = await executeAppDeploy(app, bump, allowDirty);
+          exitCode = await executeAppDeploy(app, bump, allowDirty, isBatch);
         } catch (err: any) {
           exitCode = -1;
         }
 
         // Check if deployment failed (exit code != 0)
         if (exitCode !== 0) {
+          batchAllSucceeded = false;
           const failedApp = app.manifest.displayName;
           const remaining = sortedApps.slice(i + 1);
           if (remaining.length > 0) {
@@ -1000,6 +1015,15 @@ export const App: React.FC = () => {
           }
           break; // Hard stop all further deployments
         }
+      }
+
+      // Run a single consolidated post-deploy smoke suite after a multi-app batch completes
+      if (isBatch && batchAllSucceeded && sortedApps.length > 0) {
+        const smsApp = sortedApps.find((a) =>
+          ['auth', 'spendy', 'basket'].includes(a.manifest.slug.toLowerCase())
+        );
+        const batchTrigger = smsApp ? `deploy:${smsApp.manifest.slug}` : 'deploy:batch';
+        handleRunSmokeTests(batchTrigger, Boolean(smsApp));
       }
     } finally {
       setIsDeployingAll(false);
