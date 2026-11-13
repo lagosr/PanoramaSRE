@@ -1469,7 +1469,7 @@ export const App: React.FC = () => {
     try {
       const history = await invoke<SmokeTestRun[]>('get_smoke_test_history', {
         workspaceRoot: getWorkspaceRoot(),
-        limit: 50,
+        limit: 500,
       });
       setSmokeRuns(history);
       setSmokeError(null);

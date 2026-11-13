@@ -10,6 +10,10 @@ import {
   ShieldCheck,
   Terminal,
   MessageSquare,
+  ChevronDown,
+  Sparkles,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { SmokeTestRun } from '../../lib/types';
 import { formatConsoleLine } from '../layout/ConsoleColorizer';
@@ -62,6 +66,10 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
 }) => {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
+  const [isRunDropdownOpen, setIsRunDropdownOpen] = useState<boolean>(false);
+  const [historyMode, setHistoryMode] = useState<'last10' | 'last7days'>('last10');
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const PAGE_SIZE = 10;
   const consoleEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -90,6 +98,24 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
     if (categoryFilter === 'all') return selectedRun.results;
     return selectedRun.results.filter((r) => r.category === categoryFilter);
   }, [selectedRun, categoryFilter]);
+
+  const filteredRuns = useMemo(() => {
+    if (historyMode === 'last10') {
+      return runs.slice(0, 10);
+    }
+    const sevenDaysAgoMs = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    return runs.filter((r) => {
+      const ts = new Date(r.timestamp).getTime();
+      return !Number.isNaN(ts) && ts >= sevenDaysAgoMs;
+    });
+  }, [runs, historyMode]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredRuns.length / PAGE_SIZE));
+  const safePage = Math.min(currentPage, totalPages);
+  const paginatedRuns = useMemo(() => {
+    const start = (safePage - 1) * PAGE_SIZE;
+    return filteredRuns.slice(start, start + PAGE_SIZE);
+  }, [filteredRuns, safePage]);
 
   const latestRun = runs[0] || null;
   const latestAllPass = latestRun ? latestRun.failed === 0 : null;
@@ -126,28 +152,87 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
             <CalendarClock className="w-3.5 h-3.5 text-amber-400" />
             Sync OS Schedule
           </button>
-          <button
-            onClick={() => onRunNow(false)}
-            disabled={isRunning}
-            title="Run smoke suite (respects 8h E2E SMS cooldown)"
-            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/20 whitespace-nowrap flex-shrink-0 transition-colors cursor-pointer disabled:opacity-50"
-          >
-            {isRunning ? (
-              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-            ) : (
-              <Play className="w-3.5 h-3.5" />
+          <div className="relative inline-flex items-stretch">
+            <button
+              type="button"
+              onClick={() => onRunNow(false)}
+              disabled={isRunning}
+              title="Run smoke suite (smart-gated: reuses recent live SMS if auth/spendy/basket unchanged within 8h)"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-l-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/20 whitespace-nowrap flex-shrink-0 transition-colors cursor-pointer disabled:opacity-50"
+            >
+              {isRunning ? (
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Play className="w-3.5 h-3.5" />
+              )}
+              {isRunning ? 'Running Smoke Suite...' : 'Run Smoke Tests'}
+            </button>
+
+            <button
+              type="button"
+              disabled={isRunning}
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsRunDropdownOpen((prev) => !prev);
+              }}
+              aria-label="Smoke Suite Run Options"
+              title="More Smoke Suite Actions (Run Smoke Suite or Force Live E2E SMS)"
+              className="inline-flex items-center justify-center w-7 rounded-r-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white border-l border-indigo-400/40 shadow-lg shadow-indigo-500/20 transition-colors cursor-pointer disabled:opacity-50 shrink-0"
+            >
+              <ChevronDown className="w-3.5 h-3.5" />
+            </button>
+
+            {isRunDropdownOpen && (
+              <>
+                <div
+                  className="fixed inset-0 z-30"
+                  onClick={() => setIsRunDropdownOpen(false)}
+                />
+                <div className="absolute right-0 top-full mt-1.5 z-40 w-64 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl py-1 text-left animate-in fade-in zoom-in-95 duration-150">
+                  <div className="px-3 py-1.5 border-b border-slate-100 dark:border-slate-800 text-[10px] font-mono text-slate-400 uppercase tracking-wider">
+                    Smoke Suite Actions
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsRunDropdownOpen(false);
+                      onRunNow(false);
+                    }}
+                    className="w-full px-3 py-2 text-xs flex items-center gap-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/80 text-slate-700 dark:text-slate-200 transition-colors cursor-pointer"
+                  >
+                    <Play className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                    <div className="text-left">
+                      <div className="font-semibold">Run Smoke Suite</div>
+                      <div className="text-[10px] text-slate-400">
+                        Smart-gated (reuses recent SMS if unchanged)
+                      </div>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsRunDropdownOpen(false);
+                      onRunNow(true);
+                    }}
+                    className="w-full px-3 py-2 text-xs flex items-center gap-2.5 hover:bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 transition-colors border-t border-slate-100 dark:border-slate-800 cursor-pointer"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <div className="text-left">
+                      <div className="font-semibold flex items-center gap-1.5">
+                        <MessageSquare className="w-3 h-3 text-emerald-400" />
+                        Force Live E2E SMS
+                      </div>
+                      <div className="text-[10px] text-emerald-600/80 dark:text-emerald-400/80">
+                        Bypass cooldown &amp; send Twilio SMS ($0.0166)
+                      </div>
+                    </div>
+                  </button>
+                </div>
+              </>
             )}
-            {isRunning ? 'Running Smoke Suite...' : 'Run Smoke Tests'}
-          </button>
-          <button
-            onClick={() => onRunNow(true)}
-            disabled={isRunning}
-            title="Bypass 8h SMS cooldown and send a live Twilio E2E SMS round-trip ($0.0166)"
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/30 whitespace-nowrap flex-shrink-0 transition-colors cursor-pointer disabled:opacity-50"
-          >
-            <MessageSquare className="w-3.5 h-3.5 text-emerald-400" />
-            Force E2E SMS
-          </button>
+          </div>
         </div>
       </div>
 
@@ -243,18 +328,50 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Recent Runs */}
         <div className="lg:col-span-4 rounded-xl bg-slate-900 border border-slate-800 overflow-hidden flex flex-col">
-          <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+          <div className="px-4 py-3 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-xs font-semibold text-slate-200 uppercase tracking-wider">
-              Recent Runs ({runs.length})
+              Recent Runs ({filteredRuns.length})
             </h2>
+            <div className="inline-flex items-center rounded-lg bg-slate-800 p-0.5 border border-slate-700/80">
+              <button
+                type="button"
+                onClick={() => {
+                  setHistoryMode('last10');
+                  setCurrentPage(1);
+                }}
+                className={`px-2 py-0.5 rounded-md text-[11px] font-medium transition-colors cursor-pointer whitespace-nowrap ${
+                  historyMode === 'last10'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Last 10
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setHistoryMode('last7days');
+                  setCurrentPage(1);
+                }}
+                className={`px-2 py-0.5 rounded-md text-[11px] font-medium transition-colors cursor-pointer whitespace-nowrap ${
+                  historyMode === 'last7days'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Last 7 Days
+              </button>
+            </div>
           </div>
-          <div className="divide-y divide-slate-800/70 max-h-[520px] overflow-y-auto">
-            {runs.length === 0 ? (
+          <div className="divide-y divide-slate-800/70 max-h-[520px] overflow-y-auto flex-1">
+            {filteredRuns.length === 0 ? (
               <div className="p-6 text-center text-xs text-slate-500">
-                No smoke test runs recorded yet.
+                {runs.length === 0
+                  ? 'No smoke test runs recorded yet.'
+                  : 'No smoke test runs recorded in the last 7 days.'}
               </div>
             ) : (
-              runs.map((run) => {
+              paginatedRuns.map((run) => {
                 const isSelected = selectedRun?.id === run.id;
                 const ok = run.failed === 0;
                 return (
@@ -284,6 +401,37 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
               })
             )}
           </div>
+          {filteredRuns.length > 0 && (
+            <div className="px-4 py-2.5 border-t border-slate-800 bg-slate-900/80 flex items-center justify-between gap-2 text-[11px] text-slate-400">
+              <span className="font-mono">
+                {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, filteredRuns.length)} of{' '}
+                {filteredRuns.length}
+              </span>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  disabled={safePage <= 1}
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  className="inline-flex items-center gap-0.5 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                  Prev
+                </button>
+                <span className="px-2 font-mono text-slate-300">
+                  {safePage} / {totalPages}
+                </span>
+                <button
+                  type="button"
+                  disabled={safePage >= totalPages}
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  className="inline-flex items-center gap-0.5 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors"
+                >
+                  Next
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Selected Run Checks */}

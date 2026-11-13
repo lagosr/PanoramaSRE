@@ -61,7 +61,7 @@ pub async fn get_smoke_test_history(
         .collect();
 
     runs.reverse();
-    let max_items = limit.unwrap_or(50);
+    let max_items = limit.unwrap_or(500);
     if runs.len() > max_items {
         runs.truncate(max_items);
     }
