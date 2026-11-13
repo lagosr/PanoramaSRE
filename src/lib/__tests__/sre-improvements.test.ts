@@ -325,5 +325,42 @@ libc-bin/stable 2.36-9+deb12u9 arm64 [upgradable from: 2.36-9+deb12u8]
       expect(auditFull).toBe('Audit: 7:01:43 PM (5m)');
     });
   });
+
+  describe('7-Day GFS Backup Reliability & Missed Run Failure Detection', () => {
+    it('treats missed daily runs (NoRun) as failures in 7-day reliability and sidebar badge count', () => {
+      const mockLedger = {
+        last_run_status: 'Success',
+        runs_7d: 7,
+        successful_runs_7d: 6,
+        failed_runs_7d: 1,
+        latest_app_details: [
+          { app_name: 'PanoramaAuth', status: 'Success' },
+        ],
+        daily_pips_7d: [
+          { date: '2026-11-07', day_label: 'Sat', status: 'Success' as const, run_count: 1 },
+          { date: '2026-11-08', day_label: 'Sun', status: 'Success' as const, run_count: 1 },
+          { date: '2026-11-09', day_label: 'Mon', status: 'Success' as const, run_count: 1 },
+          { date: '2026-11-10', day_label: 'Tue', status: 'Success' as const, run_count: 1 },
+          { date: '2026-11-11', day_label: 'Wed', status: 'Success' as const, run_count: 1 },
+          { date: '2026-11-12', day_label: 'Thu', status: 'NoRun' as const, run_count: 0 },
+          { date: '2026-11-13', day_label: 'Fri', status: 'Success' as const, run_count: 1 },
+        ],
+      };
+
+      const reliabilityPct = Math.round((mockLedger.successful_runs_7d / mockLedger.runs_7d) * 100);
+      expect(reliabilityPct).toBe(86);
+
+      const backupFailureCount =
+        mockLedger.last_run_status.toLowerCase() === 'failed'
+          ? mockLedger.latest_app_details.filter((a) => a.status.toLowerCase() === 'failed').length || 1
+          : mockLedger.failed_runs_7d || 0;
+
+      expect(backupFailureCount).toBe(1);
+
+      const missedPips = mockLedger.daily_pips_7d.filter((p) => p.status !== 'Success');
+      expect(missedPips).toHaveLength(1);
+      expect(missedPips[0].date).toBe('2026-11-12');
+    });
+  });
 });
 

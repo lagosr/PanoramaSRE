@@ -58,6 +58,10 @@ export function CommandCenterView({
   const failedBackupApps = backupLedger?.latest_app_details.filter(
     (a) => a.status.toLowerCase() === 'failed'
   ) || [];
+  const missedOrFailed7dPips = (backupLedger?.daily_pips_7d || []).filter(
+    (p) => p.status !== 'Success'
+  );
+  const hasBackupIncident = (isLastBackupFailed && failedBackupApps.length > 0) || (backupLedger?.failed_runs_7d || 0) > 0;
 
   return (
     <div className="p-4 sm:p-6 md:p-8 max-w-7xl mx-auto w-full min-w-0 space-y-6 overflow-hidden">
@@ -127,7 +131,7 @@ export function CommandCenterView({
       )}
 
       {/* Critical Database Automated Backup Incident Banner (Red Flag) */}
-      {isLastBackupFailed && failedBackupApps.length > 0 && (
+      {hasBackupIncident && (
         <div className="rounded-xl border border-rose-500/80 bg-rose-50 dark:bg-rose-950/40 p-4 sm:p-5 shadow-[0_0_25px_rgba(244,63,94,0.15)] dark:shadow-[0_0_25px_rgba(244,63,94,0.35)] ring-1 ring-rose-500/50 space-y-3">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div className="flex items-start sm:items-center gap-3">
@@ -140,18 +144,34 @@ export function CommandCenterView({
                     DISASTER RECOVERY ALERT
                   </span>
                   <span className="text-xs text-rose-600 dark:text-rose-400 font-mono">
-                    {backupLedger?.last_run_timestamp ? new Date(backupLedger.last_run_timestamp).toLocaleString() : 'Latest Run'}
+                    {isLastBackupFailed
+                      ? (backupLedger?.last_run_timestamp ? new Date(backupLedger.last_run_timestamp).toLocaleString() : 'Latest Run')
+                      : '7-Day GFS Window'}
                   </span>
                 </div>
                 <h3 className="text-sm font-bold text-rose-900 dark:text-rose-200 tracking-wide mt-1">
-                  AUTOMATED DATABASE BACKUP FAILED ACROSS {failedBackupApps.length} APPS
+                  {isLastBackupFailed && failedBackupApps.length > 0
+                    ? `AUTOMATED DATABASE BACKUP FAILED ACROSS ${failedBackupApps.length} APPS`
+                    : `AUTOMATED DATABASE BACKUP MISSED OR FAILED (${backupLedger?.failed_runs_7d} OF ${backupLedger?.runs_7d || 7} DAYS)`}
                 </h3>
                 <p className="text-xs text-rose-800 dark:text-rose-300/90 mt-0.5">
-                  Automated night backup job failed for:{' '}
-                  <span className="font-semibold text-rose-950 dark:text-white">
-                    {failedBackupApps.map((a) => a.app_name).join(', ')}
-                  </span>
-                  . Production databases lack verified recent backup snapshots.
+                  {isLastBackupFailed && failedBackupApps.length > 0 ? (
+                    <>
+                      Automated night backup job failed for:{' '}
+                      <span className="font-semibold text-rose-950 dark:text-white">
+                        {failedBackupApps.map((a) => a.app_name).join(', ')}
+                      </span>
+                      . Production databases lack verified recent backup snapshots.
+                    </>
+                  ) : (
+                    <>
+                      Scheduled daily GFS backup was missed or failed on:{' '}
+                      <span className="font-semibold text-rose-950 dark:text-white">
+                        {missedOrFailed7dPips.map((p) => `${p.day_label} (${p.date})`).join(', ')}
+                      </span>
+                      .
+                    </>
+                  )}
                 </p>
               </div>
             </div>
@@ -162,7 +182,7 @@ export function CommandCenterView({
                   className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white shadow-sm transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
-                  <span>Retry Backup</span>
+                  <span>{isLastBackupFailed ? 'Retry Backup' : 'Run Backup Now'}</span>
                 </button>
               )}
               {onNavigateToBackups && (
@@ -182,7 +202,9 @@ export function CommandCenterView({
               <AlertTriangle className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400 shrink-0" />
               <span className="font-semibold text-slate-900 dark:text-white">Root Cause:</span>
               <span>
-                Automated night backup job failed during remote execution.
+                {isLastBackupFailed
+                  ? 'Automated night backup job failed during remote execution.'
+                  : 'Workstation missed scheduled 02:00 AM GFS backup window (e.g. overnight OS reboot / Modern Standby).'}
               </span>
             </div>
           </div>

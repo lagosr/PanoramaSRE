@@ -373,65 +373,79 @@ export function BackupsRecoveryView({
       </div>
 
       {/* Critical Automated Backup Incident Alert Banner */}
-      {ledger?.last_run_status?.toLowerCase() === 'failed' && (
-        <div className="rounded-xl border border-rose-500/80 bg-rose-50 dark:bg-rose-950/40 p-5 shadow-[0_0_25px_rgba(244,63,94,0.15)] dark:shadow-[0_0_25px_rgba(244,63,94,0.35)] ring-1 ring-rose-500/50 space-y-3">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-            <div className="flex items-start sm:items-center gap-3">
-              <div className="w-10 h-10 rounded-lg bg-rose-500/20 border border-rose-500/50 flex items-center justify-center shrink-0">
-                <XCircle className="w-6 h-6 text-rose-500 dark:text-rose-400" />
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-rose-500 text-white uppercase tracking-wider">
-                    CRITICAL DR INCIDENT
-                  </span>
-                  <span className="text-xs text-rose-600 dark:text-rose-400 font-mono">
-                    {ledger.last_run_timestamp ? formatLocalDateTime(ledger.last_run_timestamp) : 'Latest Automated Run'}
-                  </span>
+      {(ledger?.last_run_status?.toLowerCase() === 'failed' || (ledger?.failed_runs_7d || 0) > 0) && (() => {
+        const isLastFailed = ledger?.last_run_status?.toLowerCase() === 'failed';
+        const missedOrFailedDays = (ledger?.daily_pips_7d || []).filter((p) => p.status !== 'Success');
+        return (
+          <div className="rounded-xl border border-rose-500/80 bg-rose-50 dark:bg-rose-950/40 p-5 shadow-[0_0_25px_rgba(244,63,94,0.15)] dark:shadow-[0_0_25px_rgba(244,63,94,0.35)] ring-1 ring-rose-500/50 space-y-3">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div className="flex items-start sm:items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-rose-500/20 border border-rose-500/50 flex items-center justify-center shrink-0">
+                  <XCircle className="w-6 h-6 text-rose-500 dark:text-rose-400" />
                 </div>
-                <h3 className="text-base font-bold text-rose-900 dark:text-rose-100 mt-1">
-                  Automated Database Backup Run Failed
-                </h3>
-                <p className="text-xs text-rose-800 dark:text-rose-300/90 mt-0.5">
-                  The automated nightly database backup run failed. Immediate remediation is required to ensure database snapshot integrity.
-                </p>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-rose-500 text-white uppercase tracking-wider">
+                      CRITICAL DR INCIDENT
+                    </span>
+                    <span className="text-xs text-rose-600 dark:text-rose-400 font-mono">
+                      {isLastFailed
+                        ? (ledger?.last_run_timestamp ? formatLocalDateTime(ledger.last_run_timestamp) : 'Latest Automated Run')
+                        : '7-Day GFS Window'}
+                    </span>
+                  </div>
+                  <h3 className="text-base font-bold text-rose-900 dark:text-rose-100 mt-1">
+                    {isLastFailed
+                      ? 'Automated Database Backup Run Failed'
+                      : `Missed or Failed Daily Backup Run (${ledger?.failed_runs_7d} of ${ledger?.runs_7d || 7} Days Failed)`}
+                  </h3>
+                  <p className="text-xs text-rose-800 dark:text-rose-300/90 mt-0.5">
+                    {isLastFailed
+                      ? 'The automated nightly database backup run failed. Immediate remediation is required to ensure database snapshot integrity.'
+                      : 'One or more scheduled daily GFS backup runs did not complete in the 7-day window. Missed daily runs are treated as DR failures.'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                <button
+                  onClick={onTriggerFullGfsBackup}
+                  disabled={isLoading}
+                  className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white shadow-sm transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+                  <span>{isLastFailed ? 'Retry Full GFS Backup Now' : 'Run Full GFS Backup Now'}</span>
+                </button>
               </div>
             </div>
 
-            <div className="flex items-center gap-2 shrink-0 flex-wrap">
-              <button
-                onClick={onTriggerFullGfsBackup}
-                disabled={isLoading}
-                className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white shadow-sm transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-                <span>Retry Full GFS Backup Now</span>
-              </button>
+            {/* Root cause and failure details */}
+            <div className="p-3.5 rounded-lg bg-white/80 dark:bg-black/40 border border-rose-200 dark:border-rose-900/60 text-xs font-mono space-y-2">
+              <div className="flex items-center gap-2 text-rose-800 dark:text-rose-300 font-semibold">
+                <AlertTriangle className="w-4 h-4 text-amber-500 dark:text-amber-400 shrink-0" />
+                <span className="text-slate-900 dark:text-white">Failure Root Cause Diagnosis:</span>
+                <span className="text-rose-900 dark:text-rose-200 font-normal">
+                  {isLastFailed
+                    ? 'Automated night backup job failed during remote execution.'
+                    : `Daily scheduled backup missed or failed on: ${missedOrFailedDays.map((d) => `${d.day_label} (${d.date}: ${d.status === 'NoRun' ? 'Missed Run' : 'Failed'})`).join(', ')}.`}
+                </span>
+              </div>
+
+              {isLastFailed && ledger.latest_app_details.some((a) => a.status.toLowerCase() === 'failed') && (
+                <div className="space-y-1.5 pt-1 border-t border-rose-200 dark:border-rose-900/50">
+                  <p className="text-[11px] font-semibold text-rose-800 dark:text-rose-300 uppercase tracking-wider">Failed Application Details:</p>
+                  {ledger.latest_app_details.filter((a) => a.status.toLowerCase() === 'failed').map((app) => (
+                    <div key={app.app_name} className="text-[11px] bg-rose-100/60 dark:bg-rose-950/30 p-2 rounded border border-rose-200 dark:border-rose-900/40">
+                      <span className="font-semibold text-rose-900 dark:text-rose-200">{app.app_name}: </span>
+                      <span className="text-slate-700 dark:text-slate-300 break-all">{app.error || 'Execution failed with exit code 1'}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
-
-          {/* Root cause and failure details */}
-          <div className="p-3.5 rounded-lg bg-white/80 dark:bg-black/40 border border-rose-200 dark:border-rose-900/60 text-xs font-mono space-y-2">
-            <div className="flex items-center gap-2 text-rose-800 dark:text-rose-300 font-semibold">
-              <AlertTriangle className="w-4 h-4 text-amber-500 dark:text-amber-400 shrink-0" />
-              <span className="text-slate-900 dark:text-white">Failure Root Cause Diagnosis:</span>
-              <span className="text-rose-900 dark:text-rose-200 font-normal">
-                Automated night backup job failed during remote execution.
-              </span>
-            </div>
-
-            <div className="space-y-1.5 pt-1 border-t border-rose-200 dark:border-rose-900/50">
-              <p className="text-[11px] font-semibold text-rose-800 dark:text-rose-300 uppercase tracking-wider">Failed Application Details:</p>
-              {ledger.latest_app_details.filter(a => a.status.toLowerCase() === 'failed').map(app => (
-                <div key={app.app_name} className="text-[11px] bg-rose-100/60 dark:bg-rose-950/30 p-2 rounded border border-rose-200 dark:border-rose-900/40">
-                  <span className="font-semibold text-rose-900 dark:text-rose-200">{app.app_name}: </span>
-                  <span className="text-slate-700 dark:text-slate-300 break-all">{app.error || 'Execution failed with exit code 1'}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Top Metrics Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 2xl:grid-cols-4 gap-4">
@@ -471,17 +485,15 @@ export function BackupsRecoveryView({
                 ledger.daily_pips_7d.map((pip) => (
                   <div
                     key={pip.date}
-                    title={`${pip.day_label} (${pip.date}): ${pip.status === 'Success' ? 'Successful GFS Run' : pip.status === 'Failed' ? 'Failed GFS Run' : 'No Run'}`}
+                    title={`${pip.day_label} (${pip.date}): ${pip.status === 'Success' ? 'Successful GFS Run' : pip.status === 'Failed' ? 'Failed GFS Run' : 'Missed GFS Run (Failed)'}`}
                     className="flex flex-col items-center gap-0.5 group cursor-default"
                   >
                     <span className={`w-2.5 h-2.5 rounded-full transition-transform group-hover:scale-125 ${
                       pip.status === 'Success'
                         ? 'bg-emerald-500 dark:bg-emerald-400 shadow-[0_0_6px_rgba(16,185,129,0.4)]'
-                        : pip.status === 'Failed'
-                        ? 'bg-rose-500 shadow-[0_0_6px_rgba(244,63,94,0.4)]'
-                        : 'bg-slate-300 dark:bg-slate-700'
+                        : 'bg-rose-500 shadow-[0_0_6px_rgba(244,63,94,0.4)]'
                     }`} />
-                    <span className="text-[9px] text-slate-400 font-mono leading-none">{pip.day_label[0]}</span>
+                    <span className={`text-[9px] font-mono leading-none ${pip.status === 'Success' ? 'text-slate-400' : 'text-rose-500 dark:text-rose-400 font-bold'}`}>{pip.day_label[0]}</span>
                   </div>
                 ))
               ) : (

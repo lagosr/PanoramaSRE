@@ -1278,7 +1278,7 @@ export const App: React.FC = () => {
         'Bypass',
         '-File',
         'C:\\Users\\rodrigo\\Documents\\AG Projects\\PanoramaDrSuite\\tools\\backup-manager\\BackupManager.ps1',
-        'Backup',
+        '-AutomatedRun',
       ],
       lockType: 'LocalBackupIo',
       onLine: (line) => {
@@ -1438,8 +1438,8 @@ export const App: React.FC = () => {
 
   const backupFailureCount =
     backupLedger?.last_run_status?.toLowerCase() === 'failed'
-      ? backupLedger?.latest_app_details.filter((a) => a.status.toLowerCase() === 'failed').length || 0
-      : 0;
+      ? backupLedger?.latest_app_details.filter((a) => a.status.toLowerCase() === 'failed').length || 1
+      : backupLedger?.failed_runs_7d || 0;
 
   // Count apps requiring release deployment (drifted, ahead, dirty, diverged, or unhealthy/unreachable)
   const behindReleasesCount = apps.filter(isAppDeployCandidate).length;

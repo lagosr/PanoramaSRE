@@ -18,6 +18,21 @@ describe('formatters and date normalization', () => {
     expect(formatLocalDateTime(parsed)).toBeDefined();
   });
 
+  it('preserves local date and time for RFC3339 archive timestamps with local timezone offset', () => {
+    // Archive filename db-backup_v8_2026-11-13_02-00-05.tar.gz is emitted by local_backups.rs
+    // with the workstation's local RFC3339 offset so it does not shift back to 2026-11-12 07:00 PM
+    const nowLocal = new Date(2026, 10, 13, 2, 0, 5); // Local 2026-11-13 02:00:05
+    const tzOffsetMin = -nowLocal.getTimezoneOffset();
+    const sign = tzOffsetMin >= 0 ? '+' : '-';
+    const absMin = Math.abs(tzOffsetMin);
+    const hh = String(Math.floor(absMin / 60)).padStart(2, '0');
+    const mm = String(absMin % 60).padStart(2, '0');
+    const rfc3339Local = `2026-11-13T02:00:05${sign}${hh}:${mm}`;
+
+    expect(formatLocalIsoDate(rfc3339Local)).toBe('2026-11-13');
+    expect(formatLocalTime(rfc3339Local)).toMatch(/02:00:05\s*AM/i);
+  });
+
   it('returns null for null, undefined or empty input', () => {
     expect(parseUtcDate(null)).toBeNull();
     expect(parseUtcDate(undefined)).toBeNull();

@@ -1,3 +1,4 @@
+use chrono::TimeZone;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -59,14 +60,23 @@ fn parse_archive_metadata(path: &Path) -> (u32, String, String, bool) {
 
     if parts.len() >= 4 && parts[2].contains('-') {
         date_str = parts[2].to_string();
-        timestamp_str = format!("{} {}", parts[2], parts[3].replace('-', ":"));
+        let naive_str = format!("{} {}", parts[2], parts[3].replace('-', ":"));
+        if let Ok(naive_dt) = chrono::NaiveDateTime::parse_from_str(&naive_str, "%Y-%m-%d %H:%M:%S") {
+            if let Some(local_dt) = chrono::Local.from_local_datetime(&naive_dt).earliest() {
+                timestamp_str = local_dt.to_rfc3339();
+            } else {
+                timestamp_str = naive_str;
+            }
+        } else {
+            timestamp_str = naive_str;
+        }
     } else if !date_str.is_empty() {
         timestamp_str = date_str.clone();
     } else if let Ok(meta) = fs::metadata(path) {
         if let Ok(mod_time) = meta.modified() {
             let datetime: chrono::DateTime<chrono::Local> = mod_time.into();
             date_str = datetime.format("%Y-%m-%d").to_string();
-            timestamp_str = datetime.format("%Y-%m-%d %H:%M:%S").to_string();
+            timestamp_str = datetime.to_rfc3339();
         }
     }
 
@@ -344,4 +354,20 @@ pub async fn launch_pageant_with_key(custom_key_path: Option<String>) -> Result<
     })
     .await
     .map_err(|e| format!("Join error: {}", e))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_archive_metadata_emits_rfc3339_local_timestamp() {
+        let p = Path::new("D:\\Backups\\db-backup_v8_2026-11-13_02-00-05.tar.gz");
+        let (schema, date_str, ts_str, is_auto) = parse_archive_metadata(p);
+        assert_eq!(schema, 8);
+        assert_eq!(date_str, "2026-11-13");
+        assert!(ts_str.starts_with("2026-11-13T02:00:05"));
+        assert!(ts_str.contains('+') || ts_str.rfind('-').unwrap_or(0) > 10 || ts_str.ends_with('Z'));
+        assert!(is_auto);
+    }
 }

@@ -1,3 +1,4 @@
+use chrono::Timelike;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -196,52 +197,9 @@ pub async fn read_backup_ledger(custom_path: Option<String>) -> Result<BackupLed
         }
 
         // Calculate 7-day rolling window & daily status pips
-        let today = chrono::Local::now().date_naive();
-        let mut daily_pips_7d: Vec<DayBackupStatus> = Vec::new();
-        let mut runs_7d = 0;
-        let mut successful_runs_7d = 0;
-        let mut failed_runs_7d = 0;
-
-        for day_offset in (0..7).rev() {
-            let day_date = today - chrono::Duration::days(day_offset);
-            let date_str = day_date.format("%Y-%m-%d").to_string();
-            let day_label = day_date.format("%a").to_string();
-
-            let mut day_success_count = 0;
-            let mut day_failed_count = 0;
-
-            for r in &records {
-                let ts = r["timestamp"].as_str().unwrap_or("");
-                if ts.starts_with(&date_str) {
-                    let status_raw = r["status"].as_str().unwrap_or("Unknown");
-                    if status_raw.eq_ignore_ascii_case("success") {
-                        day_success_count += 1;
-                    } else {
-                        day_failed_count += 1;
-                    }
-                }
-            }
-
-            let day_run_count = day_success_count + day_failed_count;
-            let day_status = if day_failed_count > 0 {
-                "Failed".to_string()
-            } else if day_success_count > 0 {
-                "Success".to_string()
-            } else {
-                "NoRun".to_string()
-            };
-
-            runs_7d += day_run_count;
-            successful_runs_7d += day_success_count;
-            failed_runs_7d += day_failed_count;
-
-            daily_pips_7d.push(DayBackupStatus {
-                date: date_str,
-                day_label,
-                status: day_status,
-                run_count: day_run_count,
-            });
-        }
+        let now_local = chrono::Local::now();
+        let (runs_7d, successful_runs_7d, failed_runs_7d, daily_pips_7d) =
+            compute_7d_window(&records, now_local);
 
         Ok(BackupLedgerSummary {
             history_file_exists: true,
@@ -263,4 +221,125 @@ pub async fn read_backup_ledger(custom_path: Option<String>) -> Result<BackupLed
     })
     .await
     .map_err(|e| format!("Join error: {}", e))?
+}
+
+/// Normalize an ISO/RFC3339 timestamp string to its local `YYYY-MM-DD` date string.
+/// Falls back to taking the first 10 characters if RFC3339 parsing fails.
+pub fn record_local_date_str(ts: &str) -> String {
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts) {
+        return dt.with_timezone(&chrono::Local).format("%Y-%m-%d").to_string();
+    }
+    ts.chars().take(10).collect()
+}
+
+/// Compute the 7-day rolling reliability window and daily status pips.
+/// Missed daily runs (`NoRun` on any past day, or today at/after the 02:00 AM window)
+/// are counted as failures in `failed_runs_7d` and `runs_7d`.
+pub fn compute_7d_window(
+    records: &[serde_json::Value],
+    now_local: chrono::DateTime<chrono::Local>,
+) -> (usize, usize, usize, Vec<DayBackupStatus>) {
+    let today = now_local.date_naive();
+    let mut daily_pips_7d: Vec<DayBackupStatus> = Vec::new();
+    let mut runs_7d = 0;
+    let mut successful_runs_7d = 0;
+    let mut failed_runs_7d = 0;
+
+    for day_offset in (0..7).rev() {
+        let day_date = today - chrono::Duration::days(day_offset);
+        let date_str = day_date.format("%Y-%m-%d").to_string();
+        let day_label = day_date.format("%a").to_string();
+
+        let mut day_success_count = 0;
+        let mut day_failed_count = 0;
+
+        for r in records {
+            // Manual Prune entries do not perform database backups
+            if r["run_type"].as_str() == Some("Manual Prune") {
+                continue;
+            }
+            let ts = r["timestamp"].as_str().unwrap_or("");
+            if record_local_date_str(ts) == date_str {
+                let status_raw = r["status"].as_str().unwrap_or("Unknown");
+                if status_raw.eq_ignore_ascii_case("success") {
+                    day_success_count += 1;
+                } else {
+                    day_failed_count += 1;
+                }
+            }
+        }
+
+        let day_run_count = day_success_count + day_failed_count;
+        let is_expected_schedule_passed = day_offset > 0 || now_local.hour() >= 2;
+
+        let day_status = if day_failed_count > 0 {
+            "Failed".to_string()
+        } else if day_success_count > 0 {
+            "Success".to_string()
+        } else {
+            "NoRun".to_string()
+        };
+
+        if day_run_count > 0 {
+            runs_7d += day_run_count;
+            successful_runs_7d += day_success_count;
+            failed_runs_7d += day_failed_count;
+        } else if is_expected_schedule_passed {
+            // A missed daily run in the 7-day window counts as 1 failed expected run
+            runs_7d += 1;
+            failed_runs_7d += 1;
+        }
+
+        daily_pips_7d.push(DayBackupStatus {
+            date: date_str,
+            day_label,
+            status: day_status,
+            run_count: day_run_count,
+        });
+    }
+
+    (runs_7d, successful_runs_7d, failed_runs_7d, daily_pips_7d)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn normalizes_utc_timestamp_to_local_date() {
+        // 2026-11-13T09:00:03Z is 02:00:03 AM in America/Denver (UTC-7), still 2026-11-13
+        let d = record_local_date_str("2026-11-13T09:00:03Z");
+        assert_eq!(d.len(), 10);
+    }
+
+    #[test]
+    fn counts_missed_days_as_failures_in_7d_window() {
+        let now_local = chrono::Local
+            .with_ymd_and_hms(2026, 11, 13, 11, 0, 0)
+            .unwrap();
+
+        // Simulate 6 days of successful runs and 1 missed day (2026-11-12)
+        let records = vec![
+            serde_json::json!({ "timestamp": "2026-11-07T09:00:04Z", "status": "Success", "run_type": "Automated" }),
+            serde_json::json!({ "timestamp": "2026-11-08T09:00:04Z", "status": "Success", "run_type": "Automated" }),
+            serde_json::json!({ "timestamp": "2026-11-09T09:00:04Z", "status": "Success", "run_type": "Automated" }),
+            serde_json::json!({ "timestamp": "2026-11-10T09:00:04Z", "status": "Success", "run_type": "Automated" }),
+            serde_json::json!({ "timestamp": "2026-11-11T09:00:05Z", "status": "Success", "run_type": "Automated" }),
+            // 2026-11-12 is missing!
+            serde_json::json!({ "timestamp": "2026-11-13T09:00:03Z", "status": "Success", "run_type": "Automated" }),
+        ];
+
+        let (runs_7d, successful_runs_7d, failed_runs_7d, pips) =
+            compute_7d_window(&records, now_local);
+
+        assert_eq!(runs_7d, 7);
+        assert_eq!(successful_runs_7d, 6);
+        assert_eq!(failed_runs_7d, 1);
+        assert_eq!(pips.len(), 7);
+
+        let thursday = pips.iter().find(|p| p.date == "2026-11-12").unwrap();
+        assert_eq!(thursday.status, "NoRun");
+        assert_eq!(thursday.run_count, 0);
+    }
 }
