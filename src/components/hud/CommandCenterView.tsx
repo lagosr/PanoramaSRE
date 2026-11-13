@@ -58,7 +58,10 @@ export function CommandCenterView({
   const failedBackupApps = backupLedger?.latest_app_details.filter(
     (a) => a.status.toLowerCase() === 'failed'
   ) || [];
-  const missedOrFailed7dPips = (backupLedger?.daily_pips_7d || []).filter(
+  const dailyPips = backupLedger?.daily_pips_7d || [];
+  const todayPip = dailyPips.length > 0 ? dailyPips[dailyPips.length - 1] : undefined;
+  const isTodayActionable = isLastBackupFailed || (todayPip !== undefined && todayPip.status !== 'Success');
+  const missedOrFailed7dPips = dailyPips.filter(
     (p) => p.status !== 'Success'
   );
   const hasBackupIncident = (isLastBackupFailed && failedBackupApps.length > 0) || (backupLedger?.failed_runs_7d || 0) > 0;
@@ -169,21 +172,26 @@ export function CommandCenterView({
                       <span className="font-semibold text-rose-950 dark:text-white">
                         {missedOrFailed7dPips.map((p) => `${p.day_label} (${p.date})`).join(', ')}
                       </span>
-                      .
+                      {!isTodayActionable && todayPip ? ` (Today's snapshot ${todayPip.date} is verified; past day cannot be backfilled).` : '.'}
                     </>
                   )}
                 </p>
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0 flex-wrap">
-              {onTriggerFullGfsBackup && (
+              {onTriggerFullGfsBackup && isTodayActionable && (
                 <button
                   onClick={onTriggerFullGfsBackup}
                   className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white shadow-sm transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
-                  <span>{isLastBackupFailed ? 'Retry Backup' : 'Run Backup Now'}</span>
+                  <span>{isLastBackupFailed ? 'Retry Backup' : 'Run Today\'s Backup'}</span>
                 </button>
+              )}
+              {!isTodayActionable && todayPip && (
+                <span className="px-2.5 py-1 rounded-lg text-[11px] font-mono font-semibold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 whitespace-nowrap">
+                  Today Protected ({todayPip.date})
+                </span>
               )}
               {onNavigateToBackups && (
                 <button

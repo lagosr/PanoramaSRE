@@ -360,6 +360,12 @@ libc-bin/stable 2.36-9+deb12u9 arm64 [upgradable from: 2.36-9+deb12u8]
       const missedPips = mockLedger.daily_pips_7d.filter((p) => p.status !== 'Success');
       expect(missedPips).toHaveLength(1);
       expect(missedPips[0].date).toBe('2026-11-12');
+
+      // When only a past day was missed and today's pip already succeeded, manual backup is not actionable
+      const todayPip = mockLedger.daily_pips_7d[mockLedger.daily_pips_7d.length - 1];
+      const isLastFailed = mockLedger.last_run_status.toLowerCase() === 'failed';
+      const isActionableNow = isLastFailed || todayPip.status !== 'Success';
+      expect(isActionableNow).toBe(false);
     });
   });
 });
