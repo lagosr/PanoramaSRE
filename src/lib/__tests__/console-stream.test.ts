@@ -107,4 +107,17 @@ describe('Console Stream Finished Details & Ordering', () => {
     expect(actualBuildKitErr.props.className).toContain('text-rose-600');
     expect(actualElfFail.props.className).toContain('text-rose-600');
   });
+
+  it('colors smoke test [PASS] and 0 failed summaries in emerald green and failures in rose red', () => {
+    const passCheck = formatConsoleLine('[PASS] [security] SpendyLedger: /api/notifications/config rejects unauth (7ms)') as React.ReactElement<{ className?: string }>;
+    const passSummary = formatConsoleLine('Summary: 25/25 passed, 0 failed.') as React.ReactElement<{ className?: string }>;
+    const failCheck = formatConsoleLine('[FAIL] [notifications] PanoramaAuth: Live Twilio/SendGrid & 24h Outbox Gate (516ms) -> http_401') as React.ReactElement<{ className?: string }>;
+    const failSummary = formatConsoleLine('Summary: 24/25 passed, 1 failed.') as React.ReactElement<{ className?: string }>;
+
+    expect(passCheck.props.className).toContain('text-emerald-700');
+    expect(passSummary.props.className).toContain('text-emerald-700');
+    expect(passSummary.props.className).not.toContain('text-rose-600');
+    expect(failCheck.props.className).toContain('text-rose-600');
+    expect(failSummary.props.className).toContain('text-rose-600');
+  });
 });

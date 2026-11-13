@@ -17,11 +17,14 @@ export interface ColoredSegment {
 export function formatConsoleLine(line: string): React.ReactNode {
   if (!line) return <span>&nbsp;</span>;
 
-  // 0a. BuildKit step completion / cache hits & explicit ELF / Telemetry OPTIMAL lines
+  // 0a. BuildKit step completion / cache hits, ELF/Telemetry OPTIMAL lines & Smoke Test passes
   if (
     /^\s*#\d+\s+(DONE\b|CACHED\b)/i.test(line) ||
     /\[ELF-GATE\] Verified/i.test(line) ||
-    /\[TELEMETRY\].*Status=OPTIMAL/i.test(line)
+    /\[TELEMETRY\].*Status=OPTIMAL/i.test(line) ||
+    /^\s*\[PASS\]/i.test(line) ||
+    /\b0\s+failed\b/i.test(line) ||
+    /\[SMOKE-GATE\]\s+PASSED\b/i.test(line)
   ) {
     return <span className="text-emerald-700 dark:text-emerald-400 font-medium">{line}</span>;
   }
@@ -44,6 +47,7 @@ export function formatConsoleLine(line: string): React.ReactNode {
 
   // 1. Critical Errors (WCAG AAA/AA 4.5:1+)
   if (
+    /^\s*\[FAIL\]/i.test(line) ||
     /error/i.test(line) ||
     /fatal/i.test(line) ||
     /\[err\]/i.test(line) ||
