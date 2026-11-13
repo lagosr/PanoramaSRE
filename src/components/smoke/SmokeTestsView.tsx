@@ -70,11 +70,11 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
   const [historyMode, setHistoryMode] = useState<'last10' | 'last7days'>('last10');
   const [currentPage, setCurrentPage] = useState<number>(1);
   const PAGE_SIZE = 10;
-  const consoleEndRef = useRef<HTMLDivElement | null>(null);
+  const consoleContainerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    if (consoleEndRef.current) {
-      consoleEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    if (consoleContainerRef.current) {
+      consoleContainerRef.current.scrollTop = consoleContainerRef.current.scrollHeight;
     }
   }, [streamLines.length, isRunning]);
 
@@ -313,13 +313,12 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
             </div>
             <span className="text-[11px] font-mono text-slate-500">{streamLines.length} lines</span>
           </div>
-          <div className="p-4 max-h-64 overflow-y-auto font-mono text-xs space-y-1">
+          <div ref={consoleContainerRef} className="p-4 max-h-64 overflow-y-auto font-mono text-xs space-y-1">
             {streamLines.map((line, idx) => (
               <div key={idx} className="leading-relaxed whitespace-pre-wrap break-all">
                 {formatConsoleLine(line)}
               </div>
             ))}
-            <div ref={consoleEndRef} />
           </div>
         </div>
       )}
