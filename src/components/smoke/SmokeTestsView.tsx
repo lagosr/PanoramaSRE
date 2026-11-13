@@ -54,6 +54,18 @@ function getNextScheduleSlot(slots: string[]): string {
   return `Tomorrow at ${slots[0] || '08:00'}`;
 }
 
+function getRunE2eSmsInfo(run: SmokeTestRun): { status: 'passed' | 'failed'; detail: string } | null {
+  const smsCheck = run.results?.find((r) => r.name.includes('E2E SMS Delivery'));
+  if (!smsCheck) return null;
+  if (!smsCheck.passed) {
+    return { status: 'failed', detail: smsCheck.detail };
+  }
+  if (smsCheck.detail.includes('out=SM') && smsCheck.detail.includes('-> in=SM')) {
+    return { status: 'passed', detail: smsCheck.detail };
+  }
+  return null;
+}
+
 export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
   runs,
   isRunning,
@@ -373,6 +385,7 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
               paginatedRuns.map((run) => {
                 const isSelected = selectedRun?.id === run.id;
                 const ok = run.failed === 0;
+                const e2eSms = getRunE2eSmsInfo(run);
                 return (
                   <button
                     key={run.id}
@@ -390,9 +403,24 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
                         {ok ? <CheckCircle2 className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}
                         {run.passed}/{run.total} Passed
                       </span>
-                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">
-                        {run.triggeredBy}
-                      </span>
+                      <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                        {e2eSms && (
+                          <span
+                            title={e2eSms.detail}
+                            className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded border whitespace-nowrap ${
+                              e2eSms.status === 'passed'
+                                ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                                : 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                            }`}
+                          >
+                            <MessageSquare className="w-2.5 h-2.5" />
+                            {e2eSms.status === 'passed' ? 'E2E SMS' : 'E2E SMS FAIL'}
+                          </span>
+                        )}
+                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">
+                          {run.triggeredBy}
+                        </span>
+                      </div>
                     </div>
                     <div className="text-[11px] text-slate-400 mt-1">{formatRunTimestamp(run.timestamp)}</div>
                   </button>
