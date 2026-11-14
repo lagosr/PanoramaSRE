@@ -1,9 +1,17 @@
 import { useState } from 'react';
 import { openUrl } from '@tauri-apps/plugin-opener';
-import { DiscoveredApp, ApplianceStatus, SslFleetSummary, BackupLedgerSummary, SecurityPostureInvariant } from '../../lib/types';
+import {
+  DiscoveredApp,
+  ApplianceStatus,
+  SslFleetSummary,
+  BackupLedgerSummary,
+  SecurityPostureInvariant,
+  TerminalTab,
+} from '../../lib/types';
 import { FleetAppCard } from './FleetAppCard';
 import { ApplianceStatusStrip } from './ApplianceStatusStrip';
 import { ReleaseCompositionDrawer } from './ReleaseCompositionDrawer';
+import { WorkStreamContainer } from '../ui/WorkStreamContainer';
 import { ShieldAlert, HardDriveDownload, RefreshCw, AlertTriangle, ShieldCheck, Network } from 'lucide-react';
 
 interface CommandCenterViewProps {
@@ -11,6 +19,7 @@ interface CommandCenterViewProps {
   appliances: ApplianceStatus[];
   sslFleet?: SslFleetSummary | null;
   backupLedger?: BackupLedgerSummary | null;
+  terminalTabs?: TerminalTab[];
   isLoading: boolean;
   onNavigateToBackups?: () => void;
   onTriggerFullGfsBackup?: () => void;
@@ -19,6 +28,9 @@ interface CommandCenterViewProps {
   onReapplyHardening?: () => void;
   onRunPenetrationAudit?: () => void;
   onNavigateToTopology?: () => void;
+  onOpenInBottomConsole?: (tabId?: string) => void;
+  onAbortJob?: (id: string) => void;
+  onClearTab?: (id: string) => void;
 }
 
 export function CommandCenterView({ 
@@ -26,6 +38,7 @@ export function CommandCenterView({
   appliances, 
   sslFleet, 
   backupLedger,
+  terminalTabs = [],
   isLoading,
   onNavigateToBackups,
   onTriggerFullGfsBackup,
@@ -34,6 +47,9 @@ export function CommandCenterView({
   onReapplyHardening,
   onRunPenetrationAudit,
   onNavigateToTopology,
+  onOpenInBottomConsole,
+  onAbortJob,
+  onClearTab,
 }: CommandCenterViewProps) {
   const [selectedApp, setSelectedApp] = useState<DiscoveredApp | null>(null);
 
@@ -302,6 +318,18 @@ export function CommandCenterView({
           })}
         </div>
       )}
+
+      {/* Position 4: Global Command HUD Operations Stream */}
+      <WorkStreamContainer
+        pageScope="hud"
+        tabs={terminalTabs}
+        title="Command HUD Remediation & Sync Stream"
+        description="Streams incident remediation actions (hardening re-apply, penetration audit, backup retry) and manual Sync Now runs."
+        emptyHint="Trigger a remediation action or click Sync Now in the top bar to stream progress here or inspect full suite history in the Bottom Console."
+        onOpenInBottomConsole={onOpenInBottomConsole}
+        onAbortJob={onAbortJob}
+        onClearTab={onClearTab}
+      />
 
       {/* Release Composition Inspector Drawer */}
       <ReleaseCompositionDrawer

@@ -1,22 +1,31 @@
-import { WshSnapshot } from '../../lib/types';
+import { WshSnapshot, TerminalTab } from '../../lib/types';
 import { RefreshCw, Server, Terminal, ShieldAlert, Cpu } from 'lucide-react';
 import { buildRemoteSshCommand } from '../../lib/script-adapters';
+import { WorkStreamContainer } from '../ui/WorkStreamContainer';
 
 interface DietPiHostViewProps {
   snapshot: WshSnapshot | null;
   isLoading: boolean;
+  terminalTabs?: TerminalTab[];
   onRefresh: () => void;
   onTriggerAction: (actionLabel: string, cmd: string, args: string[]) => void;
   onTriggerReboot: () => void;
+  onOpenInBottomConsole?: (tabId?: string) => void;
+  onAbortJob?: (id: string) => void;
+  onClearTab?: (id: string) => void;
   isRebooting?: boolean;
 }
 
 export function DietPiHostView({
   snapshot,
   isLoading,
+  terminalTabs = [],
   onRefresh,
   onTriggerAction,
   onTriggerReboot,
+  onOpenInBottomConsole,
+  onAbortJob,
+  onClearTab,
   isRebooting = false,
 }: DietPiHostViewProps) {
   const formatUptime = (totalSeconds: number) => {
@@ -222,6 +231,18 @@ export function DietPiHostView({
           </div>
         )}
       </div>
+
+      {/* Position 4: DietPi Host Maintenance & Reboot Recovery Stream */}
+      <WorkStreamContainer
+        pageScope="dietpi"
+        tabs={terminalTabs}
+        title="DietPi Host Reboot, APT Upgrade & Telemetry Stream"
+        description="Streams 4-stage graceful reboots, SSH recovery polling, apt-get dist-upgrade runs, and manual snapshot refreshes."
+        emptyHint="Click Refresh Snapshot, Upgrade All Packages, or Reboot Host above to stream host operations here."
+        onOpenInBottomConsole={onOpenInBottomConsole}
+        onAbortJob={onAbortJob}
+        onClearTab={onClearTab}
+      />
     </div>
   );
 }

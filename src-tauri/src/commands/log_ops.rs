@@ -1,18 +1,6 @@
-use crate::db::{SreDatabase, SystemLogEntry};
-use serde::{Deserialize, Serialize};
+use crate::db::{ConsoleSessionRecord, SreDatabase, SystemLogEntry};
 use std::sync::{Arc, Mutex};
 use tauri::State;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConsoleSessionRecord {
-    pub id: String,
-    pub title: String,
-    pub lines: Vec<String>,
-    pub is_running: bool,
-    pub exit_code: Option<i32>,
-    pub created_at: Option<String>,
-    pub updated_at: Option<String>,
-}
 
 #[tauri::command]
 pub async fn get_system_logs(
@@ -40,9 +28,21 @@ pub async fn save_console_session(
     lines: Vec<String>,
     is_running: bool,
     exit_code: Option<i32>,
+    page_scope: Option<String>,
+    source: Option<String>,
 ) -> Result<(), String> {
     let guard = db.lock().map_err(|e| e.to_string())?;
-    guard.save_console_session(&id, &title, &lines, is_running, exit_code).map_err(|e| e.to_string())
+    guard
+        .save_console_session(
+            &id,
+            &title,
+            &lines,
+            is_running,
+            exit_code,
+            page_scope.as_deref(),
+            source.as_deref(),
+        )
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -50,19 +50,7 @@ pub async fn get_saved_console_sessions(
     db: State<'_, Arc<Mutex<SreDatabase>>>,
 ) -> Result<Vec<ConsoleSessionRecord>, String> {
     let guard = db.lock().map_err(|e| e.to_string())?;
-    let raw = guard.get_saved_console_sessions().map_err(|e| e.to_string())?;
-    Ok(raw
-        .into_iter()
-        .map(|(id, title, lines, is_running, exit_code, created_at, updated_at)| ConsoleSessionRecord {
-            id,
-            title,
-            lines,
-            is_running,
-            exit_code,
-            created_at,
-            updated_at,
-        })
-        .collect())
+    guard.get_saved_console_sessions().map_err(|e| e.to_string())
 }
 
 #[tauri::command]

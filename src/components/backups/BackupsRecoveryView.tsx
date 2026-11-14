@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener';
-import { BackupLedgerSummary, BackupRecord, DiscoveredApp, LocalBackupArchive, GfsTiersBreakdown, BackupScanResult } from '../../lib/types';
+import { BackupLedgerSummary, BackupRecord, DiscoveredApp, LocalBackupArchive, GfsTiersBreakdown, BackupScanResult, TerminalTab } from '../../lib/types';
 import { formatLocalDate, formatLocalTime, formatLocalIsoDate, formatLocalDateTime } from '../../lib/formatters';
 import { CustomSelect } from '../ui/CustomSelect';
 import { ConfirmDangerModal } from '../ui/ConfirmDangerModal';
+import { WorkStreamContainer } from '../ui/WorkStreamContainer';
 import { 
   HardDrive, 
   CheckCircle2, 
@@ -29,12 +30,16 @@ import {
 interface BackupsRecoveryViewProps {
   apps: DiscoveredApp[];
   ledger: BackupLedgerSummary | null;
+  terminalTabs?: TerminalTab[];
   isLoading: boolean;
   onRefresh: () => void;
   onTriggerFullGfsBackup: () => void;
   onTriggerAppBackup: (app: DiscoveredApp) => void;
   onApplyLocalBackup: (app: DiscoveredApp, archivePath: string) => void;
   onRestoreRemoteBackup: (app: DiscoveredApp, archivePath: string) => void;
+  onOpenInBottomConsole?: (tabId?: string) => void;
+  onAbortJob?: (tabId: string) => void;
+  onClearTab?: (tabId: string) => void;
   isApplying?: boolean;
 }
 
@@ -122,12 +127,16 @@ function TablePagination({
 export function BackupsRecoveryView({
   apps,
   ledger,
+  terminalTabs = [],
   isLoading,
   onRefresh,
   onTriggerFullGfsBackup,
   onTriggerAppBackup,
   onApplyLocalBackup,
   onRestoreRemoteBackup,
+  onOpenInBottomConsole,
+  onAbortJob,
+  onClearTab,
   isApplying = false,
 }: BackupsRecoveryViewProps) {
   // Filter only applications backed by an operational database (declarative via panorama.app.json hasDatabase)
@@ -955,6 +964,18 @@ export function BackupsRecoveryView({
           </div>
         )}
       </div>
+
+      {/* SECTION 1.5 (POSITION 4): WORK STREAM CONTAINER — BELOW HYDRATION ENGINE */}
+      <WorkStreamContainer
+        pageScope="backups"
+        title="Backup & Recovery Stream"
+        description="GFS full backups, per-app hydration snapshots, archive scans, and remote WSH database restorations."
+        tabs={terminalTabs}
+        onOpenInBottomConsole={onOpenInBottomConsole}
+        onAbortJob={onAbortJob}
+        onClearTab={onClearTab}
+        emptyHint="Run a GFS full backup, app backup, hydration, or refresh action to inspect output."
+      />
 
       {/* SECTION 2: PARTICIPANT APPLICATIONS BACKUP INVENTORY (LATEST GFS RUN) */}
       <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4">

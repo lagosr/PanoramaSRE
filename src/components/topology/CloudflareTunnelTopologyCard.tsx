@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { SynthesizedTopology } from '../../lib/topology-synthesizer';
 import { WshSnapshot } from '../../lib/types';
+import { stripAnsiCodes, formatConsoleLine } from '../layout/ConsoleColorizer';
 
 interface CloudflareTunnelTopologyCardProps {
   topology: SynthesizedTopology;
@@ -189,17 +190,18 @@ export const CloudflareTunnelTopologyCard: React.FC<CloudflareTunnelTopologyCard
             </span>
             {logLines.length > 0 && (
               <button
+                type="button"
                 onClick={async () => {
                   try {
-                    await navigator.clipboard.writeText(logLines.join('\n'));
+                    await navigator.clipboard.writeText(stripAnsiCodes(logLines.join('\n')));
                     setCopiedTunnelLogs(true);
                     setTimeout(() => setCopiedTunnelLogs(false), 2000);
                   } catch (err) {
                     console.warn('Failed to copy tunnel logs:', err);
                   }
                 }}
-                className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 transition-colors cursor-pointer"
-                title="Copy all connection logs to clipboard"
+                className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 transition-colors cursor-pointer whitespace-nowrap flex-shrink-0"
+                title="Copy ANSI-stripped connection logs to clipboard"
               >
                 {copiedTunnelLogs ? (
                   <>
@@ -220,10 +222,11 @@ export const CloudflareTunnelTopologyCard: React.FC<CloudflareTunnelTopologyCard
           </span>
         </div>
 
-        <div className="font-mono text-xs bg-slate-950 p-3.5 rounded-lg border border-slate-800 overflow-x-auto max-h-60 space-y-1 selection:bg-purple-500/30 selection:text-purple-200 shadow-inner">
+        <div className="font-mono text-xs bg-slate-50 dark:bg-[#050b14] p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 overflow-x-auto max-h-60 space-y-1 selection:bg-purple-500/20 dark:selection:bg-purple-500/30 shadow-inner">
           {logLines.length > 0 ? (
             logLines.map((line, idx) => {
-              const match = line.match(/^(\S+)\s+(ERR|WRN|INF|DBG)\s+(.*)$/);
+              const cleanLine = stripAnsiCodes(line);
+              const match = cleanLine.match(/^(\S+)\s+(ERR|WRN|INF|DBG)\s+(.*)$/);
               if (match) {
                 const [, timestamp, level, rest] = match;
                 const isErr = level === 'ERR';
@@ -234,10 +237,10 @@ export const CloudflareTunnelTopologyCard: React.FC<CloudflareTunnelTopologyCard
                     key={idx}
                     className={`flex items-start gap-2.5 px-2.5 py-1 rounded text-xs font-mono transition-colors ${
                       isErr
-                        ? 'bg-rose-500/10 border border-rose-500/30 text-rose-300'
+                        ? 'bg-rose-500/10 border border-rose-500/30 text-rose-700 dark:text-rose-300'
                         : isWrn
-                        ? 'bg-amber-500/10 border border-amber-500/30 text-amber-300'
-                        : 'hover:bg-slate-900/60 text-emerald-400'
+                        ? 'bg-amber-500/10 border border-amber-500/30 text-amber-800 dark:text-amber-300'
+                        : 'hover:bg-slate-200/50 dark:hover:bg-slate-900/60 text-slate-800 dark:text-slate-200'
                     }`}
                   >
                     <span className="text-[11px] text-slate-500 shrink-0 select-none">
@@ -246,32 +249,24 @@ export const CloudflareTunnelTopologyCard: React.FC<CloudflareTunnelTopologyCard
                     <span
                       className={`px-1.5 py-0.2 rounded text-[10px] font-bold shrink-0 tracking-wider uppercase ${
                         isErr
-                          ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                          ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300 border border-rose-500/35'
                           : isWrn
-                          ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                          : 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                          ? 'bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-500/30'
+                          : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30'
                       }`}
                     >
                       {level}
                     </span>
-                    <span
-                      className={`break-all leading-relaxed ${
-                        isErr
-                          ? 'text-rose-300 font-semibold'
-                          : isWrn
-                          ? 'text-amber-300'
-                          : 'text-emerald-400 font-medium'
-                      }`}
-                    >
-                      {rest}
+                    <span className="break-all leading-relaxed">
+                      {formatConsoleLine(rest)}
                     </span>
                   </div>
                 );
               }
 
               return (
-                <div key={idx} className="text-slate-400 text-xs py-0.5 px-2">
-                  {line}
+                <div key={idx} className="text-xs py-0.5 px-2">
+                  {formatConsoleLine(line)}
                 </div>
               );
             })

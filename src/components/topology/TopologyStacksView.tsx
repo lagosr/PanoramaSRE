@@ -7,7 +7,7 @@ import {
   Cloud,
   Zap,
 } from 'lucide-react';
-import { WshSnapshot, DiscoveredApp } from '../../lib/types';
+import { WshSnapshot, DiscoveredApp, TerminalTab } from '../../lib/types';
 import {
   synthesizeTopology,
   TopologyRouteItem,
@@ -20,27 +20,36 @@ import { DietPiHardwareNetworkCard } from './DietPiHardwareNetworkCard';
 import { CloudflareTunnelTopologyCard } from './CloudflareTunnelTopologyCard';
 import { DockerNetworkRulesAdvisor } from './DockerNetworkRulesAdvisor';
 import { DockerNetworkInspectorDrawer } from './DockerNetworkInspectorDrawer';
+import { WorkStreamContainer } from '../ui/WorkStreamContainer';
 
 interface TopologyStacksViewProps {
   snapshot: WshSnapshot | null;
   apps?: DiscoveredApp[];
+  terminalTabs?: TerminalTab[];
   isLoading?: boolean;
   onRefresh?: () => void;
   onRunAuditCommand?: (label: string, cmd: string, args: string[]) => void;
   onTriggerTunnelAction?: (action: 'status' | 'check_update' | 'update' | 'update_force') => void;
   onRunPenetrationAudit?: () => void;
   onReapplyHardening?: () => void;
+  onOpenInBottomConsole?: (tabId?: string) => void;
+  onAbortJob?: (id: string) => void;
+  onClearTab?: (id: string) => void;
 }
 
 export function TopologyStacksView({
   snapshot,
   apps = [],
+  terminalTabs = [],
   isLoading = false,
   onRefresh,
   onRunAuditCommand,
   onTriggerTunnelAction,
   onRunPenetrationAudit,
   onReapplyHardening,
+  onOpenInBottomConsole,
+  onAbortJob,
+  onClearTab,
 }: TopologyStacksViewProps) {
   const [activeTab, setActiveTab] = useState<'visual' | 'matrix' | 'hardware' | 'tunnel' | 'rules'>('visual');
   const [selectedRouteSlug, setSelectedRouteSlug] = useState<string | null>(null);
@@ -201,6 +210,18 @@ export function TopologyStacksView({
           onReapplyHardening={onReapplyHardening}
         />
       )}
+
+      {/* Position 3: Standardized Network Topology, Tunnel & Security Stream Container */}
+      <WorkStreamContainer
+        pageScope="topology"
+        tabs={terminalTabs}
+        title="Network Topology, Tunnel & Firewall Execution Stream"
+        description="Streams Test Hop diagnostics, Cloudflare Tunnel updates/checks, penetration audits, hardening runs, and manual host refreshes."
+        emptyHint="Run Test Hop, Cloudflare Tunnel actions, Penetration Audit, Re-Apply Hardening, or Refresh Snapshot above to stream output here."
+        onOpenInBottomConsole={onOpenInBottomConsole}
+        onAbortJob={onAbortJob}
+        onClearTab={onClearTab}
+      />
 
       {/* Inspector Slide-Out Drawer */}
       <DockerNetworkInspectorDrawer

@@ -1,10 +1,14 @@
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::HashMap;
+use std::io::{BufRead, BufReader, Read};
 use std::net::TcpStream;
 use std::path::Path;
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tauri::Emitter;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum DevServerStatus {
@@ -219,30 +223,259 @@ impl DevSupervisor {
         });
         managed_map.len()
     }
+}
 
-    /// Start a dev server and register it in `managed_processes`
+const BOOT_CAPTURE_MAX_LINES: usize = 400;
+
+/// Strip basic ANSI CSI escape sequences so dev server readiness detection matches colored banners cleanly.
+fn strip_ansi_basic(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            if let Some(&next) = chars.peek() {
+                if next == '[' {
+                    chars.next();
+                    while let Some(seq_c) = chars.next() {
+                        if ('@'..='~').contains(&seq_c) {
+                            break;
+                        }
+                    }
+                    continue;
+                }
+            }
+        }
+        if c != '\r' {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Detect whether a startup stdout/stderr line indicates the dev server has started listening.
+pub fn is_dev_server_ready_line(raw_line: &str) -> bool {
+    let clean = strip_ansi_basic(raw_line).to_ascii_lowercase();
+    clean.contains("ready in ")
+        || clean.contains("started server")
+        || clean.contains("listening on")
+        || (clean.contains("local:") && clean.contains("http"))
+}
+
+fn emit_dev_stream_start(
+    app_handle: &Option<tauri::AppHandle>,
+    id: &str,
+    title: &str,
+    app_id: &str,
+    port: Option<u16>,
+    source: &str,
+) {
+    if let Some(app) = app_handle {
+        let _ = app.emit(
+            "sre://dev-stream-start",
+            json!({
+                "id": id,
+                "title": title,
+                "appId": app_id,
+                "port": port,
+                "source": source,
+            }),
+        );
+    }
+}
+
+fn emit_dev_stream_line(
+    app_handle: &Option<tauri::AppHandle>,
+    id: &str,
+    app_id: &str,
+    line: &str,
+) {
+    if let Some(app) = app_handle {
+        let _ = app.emit(
+            "sre://dev-stream-line",
+            json!({
+                "id": id,
+                "appId": app_id,
+                "line": line,
+            }),
+        );
+    }
+}
+
+fn emit_dev_stream_end(
+    app_handle: &Option<tauri::AppHandle>,
+    id: &str,
+    app_id: &str,
+    exit_code: i32,
+) {
+    if let Some(app) = app_handle {
+        let _ = app.emit(
+            "sre://dev-stream-end",
+            json!({
+                "id": id,
+                "appId": app_id,
+                "exitCode": exit_code,
+            }),
+        );
+    }
+}
+
+fn complete_dev_boot_stream(
+    app_handle: &Option<tauri::AppHandle>,
+    db: &Arc<Mutex<crate::db::SreDatabase>>,
+    boot_completed: &Arc<AtomicBool>,
+    boot_lines: &Arc<Mutex<Vec<String>>>,
+    session_id: &str,
+    title: &str,
+    app_id: &str,
+    source: &str,
+    completion_line: Option<String>,
+    exit_code: i32,
+) {
+    if boot_completed
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+
+    let final_lines = {
+        let mut lines_guard = boot_lines.lock().unwrap();
+        if let Some(line) = completion_line {
+            emit_dev_stream_line(app_handle, session_id, app_id, &line);
+            if lines_guard.len() < BOOT_CAPTURE_MAX_LINES {
+                lines_guard.push(line);
+            }
+        }
+        lines_guard.clone()
+    };
+
+    if let Ok(db_guard) = db.lock() {
+        let _ = db_guard.save_console_session(
+            session_id,
+            title,
+            &final_lines,
+            false,
+            Some(exit_code),
+            Some("local-dev"),
+            Some(source),
+        );
+    }
+
+    emit_dev_stream_end(app_handle, session_id, app_id, exit_code);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_boot_pipe_reader<R: Read + Send + 'static>(
+    reader: R,
+    app_handle: Option<tauri::AppHandle>,
+    db: Arc<Mutex<crate::db::SreDatabase>>,
+    boot_completed: Arc<AtomicBool>,
+    boot_lines: Arc<Mutex<Vec<String>>>,
+    session_id: String,
+    title: String,
+    app_id: String,
+    source: String,
+    port: Option<u16>,
+) {
+    std::thread::spawn(move || {
+        let buf = BufReader::new(reader);
+        for line_res in buf.lines() {
+            let Ok(raw_line) = line_res else {
+                break;
+            };
+            // Fast-path: drain OS pipe in Rust with zero allocations/IPC once startup completes
+            if boot_completed.load(Ordering::Acquire) {
+                continue;
+            }
+            let scrubbed = crate::scrubber::scrub_secrets(&raw_line);
+            if scrubbed.trim().is_empty() {
+                continue;
+            }
+            {
+                let mut lines_guard = boot_lines.lock().unwrap();
+                if lines_guard.len() < BOOT_CAPTURE_MAX_LINES {
+                    lines_guard.push(scrubbed.clone());
+                }
+            }
+            emit_dev_stream_line(&app_handle, &session_id, &app_id, &scrubbed);
+
+            if is_dev_server_ready_line(&scrubbed) {
+                let port_label = port
+                    .map(|p| format!("http://localhost:{}", p))
+                    .unwrap_or_else(|| "local dev port".to_string());
+                complete_dev_boot_stream(
+                    &app_handle,
+                    &db,
+                    &boot_completed,
+                    &boot_lines,
+                    &session_id,
+                    &title,
+                    &app_id,
+                    &source,
+                    Some(format!(
+                        "[DEV:{}] [PASS] Server started and listening on {} (steady-state output discarded)",
+                        app_id, port_label
+                    )),
+                    0,
+                );
+            }
+        }
+    });
+}
+
+impl DevSupervisor {
+    /// Start a dev server and register it in `managed_processes`, streaming boot output until ready.
+    #[allow(clippy::too_many_arguments)]
     pub fn start_app_internal(
         &self,
+        app_handle: Option<&tauri::AppHandle>,
         db: &Arc<Mutex<crate::db::SreDatabase>>,
         app_id: &str,
         workspace_path: &str,
         dev_command: Option<&str>,
         port: Option<u16>,
+        source: &str,
     ) -> Result<u32, String> {
-        let mut map = self.managed_processes.lock().unwrap();
+        let session_id = format!(
+            "dev-boot-{}-{}",
+            app_id.to_lowercase(),
+            chrono::Utc::now().timestamp_millis()
+        );
+        let port_suffix = port.map(|p| format!(" (:{})", p)).unwrap_or_default();
+        let title = format!("Dev Server Boot: {}{}", app_id, port_suffix);
+        let app_handle_owned = app_handle.cloned();
 
-        if let Some(child) = map.get_mut(app_id) {
-            if let Ok(None) = child.try_wait() {
-                let pid = child.id();
-                if let Ok(guard) = db.lock() {
-                    let _ = guard.log_action(
-                        "DEV_SUPERVISOR",
-                        "INFO",
-                        &format!("Dev server {} already running", app_id),
-                        Some(&format!("pid={}", pid)),
+        {
+            let mut map = self.managed_processes.lock().unwrap();
+            if let Some(child) = map.get_mut(app_id) {
+                if let Ok(None) = child.try_wait() {
+                    let pid = child.id();
+                    let msg = format!(
+                        "[DEV:{}] [PASS] Dev server already running and listening (PID {})",
+                        app_id, pid
                     );
+                    emit_dev_stream_start(&app_handle_owned, &session_id, &title, app_id, port, source);
+                    emit_dev_stream_line(&app_handle_owned, &session_id, app_id, &msg);
+                    if let Ok(guard) = db.lock() {
+                        let _ = guard.log_action(
+                            "DEV_SUPERVISOR",
+                            "INFO",
+                            &format!("Dev server {} already running", app_id),
+                            Some(&format!("pid={}", pid)),
+                        );
+                        let _ = guard.save_console_session(
+                            &session_id,
+                            &title,
+                            &[msg],
+                            false,
+                            Some(0),
+                            Some("local-dev"),
+                            Some(source),
+                        );
+                    }
+                    emit_dev_stream_end(&app_handle_owned, &session_id, app_id, 0);
+                    return Ok(pid);
                 }
-                return Ok(pid);
             }
         }
 
@@ -263,7 +496,10 @@ impl DevSupervisor {
         const CREATE_NO_WINDOW: u32 = 0x08000000;
 
         let mut cmd = Command::new("cmd");
-        cmd.current_dir(workspace_path).args(["/c", &cmd_str]);
+        cmd.current_dir(workspace_path)
+            .args(["/c", &cmd_str])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
 
         if let Some(p) = port {
             cmd.env("PORT", p.to_string());
@@ -272,11 +508,27 @@ impl DevSupervisor {
         #[cfg(windows)]
         cmd.creation_flags(CREATE_NO_WINDOW);
 
-        let child = cmd
+        let mut child = cmd
             .spawn()
             .map_err(|e| format!("Failed to spawn {}: {}", cmd_str, e))?;
         let pid = child.id();
-        map.insert(app_id.to_string(), child);
+        let stdout_pipe = child.stdout.take();
+        let stderr_pipe = child.stderr.take();
+
+        {
+            let mut map = self.managed_processes.lock().unwrap();
+            map.insert(app_id.to_string(), child);
+        }
+
+        let initial_line = format!(
+            "[DEV:{}] Spawning '{}' (PID {}, port {:?}) in {}...",
+            app_id, cmd_str, pid, port, workspace_path
+        );
+        emit_dev_stream_start(&app_handle_owned, &session_id, &title, app_id, port, source);
+        emit_dev_stream_line(&app_handle_owned, &session_id, app_id, &initial_line);
+
+        let boot_completed = Arc::new(AtomicBool::new(false));
+        let boot_lines = Arc::new(Mutex::new(vec![initial_line]));
 
         if let Ok(guard) = db.lock() {
             let _ = guard.log_action(
@@ -288,32 +540,200 @@ impl DevSupervisor {
                     pid, cmd_str, port, workspace_path
                 )),
             );
+            let lines_snapshot = boot_lines.lock().unwrap().clone();
+            let _ = guard.save_console_session(
+                &session_id,
+                &title,
+                &lines_snapshot,
+                true,
+                None,
+                Some("local-dev"),
+                Some(source),
+            );
         }
+
+        if let Some(stdout) = stdout_pipe {
+            spawn_boot_pipe_reader(
+                stdout,
+                app_handle_owned.clone(),
+                Arc::clone(db),
+                Arc::clone(&boot_completed),
+                Arc::clone(&boot_lines),
+                session_id.clone(),
+                title.clone(),
+                app_id.to_string(),
+                source.to_string(),
+                port,
+            );
+        }
+
+        if let Some(stderr) = stderr_pipe {
+            spawn_boot_pipe_reader(
+                stderr,
+                app_handle_owned.clone(),
+                Arc::clone(db),
+                Arc::clone(&boot_completed),
+                Arc::clone(&boot_lines),
+                session_id.clone(),
+                title.clone(),
+                app_id.to_string(),
+                source.to_string(),
+                port,
+            );
+        }
+
+        // Lightweight watcher thread: finalizes boot stream via TCP port open or startup exit/timeout
+        let managed_ref = Arc::clone(&self.managed_processes);
+        let db_watch = Arc::clone(db);
+        let boot_completed_watch = Arc::clone(&boot_completed);
+        let boot_lines_watch = Arc::clone(&boot_lines);
+        let app_id_watch = app_id.to_string();
+        let source_watch = source.to_string();
+        std::thread::spawn(move || {
+            for _ in 0..240 {
+                std::thread::sleep(Duration::from_millis(250));
+                if boot_completed_watch.load(Ordering::Acquire) {
+                    return;
+                }
+
+                // 1. Check whether process exited prematurely or was stopped
+                let process_outcome = {
+                    let mut map = managed_ref.lock().unwrap();
+                    match map.get_mut(&app_id_watch) {
+                        None => Some(None), // Stopped externally via stop_app_internal
+                        Some(child) => match child.try_wait() {
+                            Ok(Some(status)) => Some(Some(status.code().unwrap_or(1))),
+                            Ok(None) => None,
+                            Err(_) => Some(Some(1)),
+                        },
+                    }
+                };
+
+                if let Some(outcome) = process_outcome {
+                    std::thread::sleep(Duration::from_millis(150));
+                    match outcome {
+                        None => {
+                            complete_dev_boot_stream(
+                                &app_handle_owned,
+                                &db_watch,
+                                &boot_completed_watch,
+                                &boot_lines_watch,
+                                &session_id,
+                                &title,
+                                &app_id_watch,
+                                &source_watch,
+                                Some(format!(
+                                    "[DEV:{}] [INFO] Boot stream ended (server stopped during startup)",
+                                    app_id_watch
+                                )),
+                                0,
+                            );
+                        }
+                        Some(code) => {
+                            complete_dev_boot_stream(
+                                &app_handle_owned,
+                                &db_watch,
+                                &boot_completed_watch,
+                                &boot_lines_watch,
+                                &session_id,
+                                &title,
+                                &app_id_watch,
+                                &source_watch,
+                                Some(format!(
+                                    "[DEV:{}] [FAIL] Dev server exited during startup (exit code: {})",
+                                    app_id_watch, code
+                                )),
+                                code,
+                            );
+                        }
+                    }
+                    return;
+                }
+
+                // 2. Check if port started listening (covers servers that don't print a Next.js banner)
+                if let Some(p) = port {
+                    if DevSupervisor::is_port_listening(p) {
+                        std::thread::sleep(Duration::from_millis(200));
+                        complete_dev_boot_stream(
+                            &app_handle_owned,
+                            &db_watch,
+                            &boot_completed_watch,
+                            &boot_lines_watch,
+                            &session_id,
+                            &title,
+                            &app_id_watch,
+                            &source_watch,
+                            Some(format!(
+                                "[DEV:{}] [PASS] Server started and listening on http://localhost:{} (steady-state output discarded)",
+                                app_id_watch, p
+                            )),
+                            0,
+                        );
+                        return;
+                    }
+                }
+            }
+
+            complete_dev_boot_stream(
+                &app_handle_owned,
+                &db_watch,
+                &boot_completed_watch,
+                &boot_lines_watch,
+                &session_id,
+                &title,
+                &app_id_watch,
+                &source_watch,
+                Some(format!(
+                    "[DEV:{}] [WARN] Startup stream window elapsed (60s); steady-state output detached",
+                    app_id_watch
+                )),
+                0,
+            );
+        });
 
         Ok(pid)
     }
 
-    /// Stop a dev server by app_id and port
+    /// Stop a dev server by app_id and port, emitting concise stop confirmation to the Dev stream
     pub fn stop_app_internal(
         &self,
+        app_handle: Option<&tauri::AppHandle>,
         db: &Arc<Mutex<crate::db::SreDatabase>>,
         app_id: &str,
         port: Option<u16>,
+        source: &str,
     ) -> Result<bool, String> {
-        let mut map = self.managed_processes.lock().unwrap();
-        let mut stopped = false;
+        let session_id = format!(
+            "dev-stop-{}-{}",
+            app_id.to_lowercase(),
+            chrono::Utc::now().timestamp_millis()
+        );
+        let port_suffix = port.map(|p| format!(" (:{})", p)).unwrap_or_default();
+        let title = format!("Dev Server Stop: {}{}", app_id, port_suffix);
+        let app_handle_owned = app_handle.cloned();
 
-        if let Some(mut child) = map.remove(app_id) {
-            let pid = child.id();
-            DevSupervisor::kill_process_tree(pid);
-            let _ = child.kill();
-            stopped = true;
+        let line1 = format!("[DEV:{}] Stopping dev server{}...", app_id, port_suffix);
+        emit_dev_stream_start(&app_handle_owned, &session_id, &title, app_id, port, source);
+        emit_dev_stream_line(&app_handle_owned, &session_id, app_id, &line1);
+
+        let mut stopped = false;
+        {
+            let mut map = self.managed_processes.lock().unwrap();
+            if let Some(mut child) = map.remove(app_id) {
+                let pid = child.id();
+                DevSupervisor::kill_process_tree(pid);
+                let _ = child.kill();
+                stopped = true;
+            }
         }
 
         if let Some(p) = port {
             DevSupervisor::kill_by_port(p);
             stopped = true;
         }
+
+        let line2 = format!("[DEV:{}] [PASS] Dev server stopped cleanly", app_id);
+        emit_dev_stream_line(&app_handle_owned, &session_id, app_id, &line2);
 
         if let Ok(guard) = db.lock() {
             let _ = guard.log_action(
@@ -322,7 +742,18 @@ impl DevSupervisor {
                 &format!("Stopped dev server for {}", app_id),
                 Some(&format!("port={:?}", port)),
             );
+            let _ = guard.save_console_session(
+                &session_id,
+                &title,
+                &[line1, line2],
+                false,
+                Some(0),
+                Some("local-dev"),
+                Some(source),
+            );
         }
+
+        emit_dev_stream_end(&app_handle_owned, &session_id, app_id, 0);
 
         Ok(stopped)
     }
@@ -404,6 +835,7 @@ pub async fn get_dev_servers_status(
 
 #[tauri::command]
 pub async fn start_dev_server(
+    app: tauri::AppHandle,
     supervisor: tauri::State<'_, Arc<DevSupervisor>>,
     db: tauri::State<'_, Arc<Mutex<crate::db::SreDatabase>>>,
     app_id: String,
@@ -411,86 +843,42 @@ pub async fn start_dev_server(
     dev_command: Option<String>,
     port: Option<u16>,
 ) -> Result<u32, String> {
-    let mut map = supervisor.managed_processes.lock().unwrap();
-
-    // Check if already managed and still alive
-    if let Some(child) = map.get_mut(&app_id) {
-        if let Ok(None) = child.try_wait() {
-            let pid = child.id();
-            if let Ok(guard) = db.lock() {
-                let _ = guard.log_action("DEV_SUPERVISOR", "INFO", &format!("Dev server {} already running", app_id), Some(&format!("pid={}", pid)));
-            }
-            return Ok(pid);
-        }
-    }
-
-    let raw_cmd = dev_command.unwrap_or_else(|| "npm run dev".to_string());
-    if raw_cmd.trim().is_empty() {
-        return Err("Empty dev command".into());
-    }
-
-    // Ensure specific port is passed to npm/next if port is provided and command is npm run dev
-    let mut cmd_str = raw_cmd.clone();
-    if let Some(p) = port {
-        if cmd_str == "npm run dev" || cmd_str == "npm run dev --" {
-            cmd_str = format!("npm run dev -- -p {}", p);
-        }
-    }
-
-    #[cfg(windows)]
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-
-    // Use cmd /c with npm.cmd if invoking npm directly
-    let mut cmd = Command::new("cmd");
-    cmd.current_dir(&workspace_path)
-        .args(["/c", &cmd_str]);
-
-    // Explicitly set PORT environment variable for Next.js and Node servers
-    if let Some(p) = port {
-        cmd.env("PORT", p.to_string());
-    }
-
-    #[cfg(windows)]
-    cmd.creation_flags(CREATE_NO_WINDOW);
-
-    let child = cmd.spawn().map_err(|e| format!("Failed to spawn {}: {}", cmd_str, e))?;
-    let pid = child.id();
-    map.insert(app_id.clone(), child);
-
-    if let Ok(guard) = db.lock() {
-        let _ = guard.log_action("DEV_SUPERVISOR", "INFO", &format!("Started dev server for {}", app_id), Some(&format!("pid={}, cmd={}, port={:?}, path={}", pid, cmd_str, port, workspace_path)));
-    }
-
-    Ok(pid)
+    supervisor.start_app_internal(
+        Some(&app),
+        &db,
+        &app_id,
+        &workspace_path,
+        dev_command.as_deref(),
+        port,
+        "ui",
+    )
 }
 
 #[tauri::command]
 pub async fn stop_dev_server(
+    app: tauri::AppHandle,
     supervisor: tauri::State<'_, Arc<DevSupervisor>>,
     db: tauri::State<'_, Arc<Mutex<crate::db::SreDatabase>>>,
     app_id: String,
     port: Option<u16>,
 ) -> Result<bool, String> {
-    let mut map = supervisor.managed_processes.lock().unwrap();
-    let mut stopped = false;
+    supervisor.stop_app_internal(Some(&app), &db, &app_id, port, "ui")
+}
 
-    if let Some(mut child) = map.remove(&app_id) {
-        let pid = child.id();
-        DevSupervisor::kill_process_tree(pid);
-        let _ = child.kill();
-        stopped = true;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_dev_server_ready_line_handles_ansi_and_banners() {
+        assert!(is_dev_server_ready_line(
+            "\x1b[32m✓\x1b[39m Ready in 1420ms"
+        ));
+        assert!(is_dev_server_ready_line(
+            "  - Local:        \x1b[36mhttp://localhost:3002/biomed\x1b[39m"
+        ));
+        assert!(is_dev_server_ready_line("started server on 0.0.0.0:3000"));
+        assert!(!is_dev_server_ready_line(" ○ Compiling /page ..."));
+        assert!(!is_dev_server_ready_line("GET /biomed/api/health 200 in 18ms"));
     }
-
-    // Always check and terminate listening process on that port as well (covers prior runs & orphaned trees)
-    if let Some(p) = port {
-        DevSupervisor::kill_by_port(p);
-        stopped = true;
-    }
-
-    if let Ok(guard) = db.lock() {
-        let _ = guard.log_action("DEV_SUPERVISOR", "INFO", &format!("Stopped dev server for {}", app_id), Some(&format!("port={:?}", port)));
-    }
-
-    Ok(stopped)
 }

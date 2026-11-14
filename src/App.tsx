@@ -29,8 +29,11 @@ import {
   SslFleetSummary,
   McpBridgeStatus,
   SmokeTestRun,
+  NavSectionId,
+  WorkStreamSource,
   isAppDeployCandidate,
 } from './lib/types';
+import { inferPageScopeFromJob } from './lib/stream-utils';
 import { buildSslCertCommand, buildCloudflareTunnelCommand, buildRemoteSshCommand } from './lib/script-adapters';
 
 const DEFAULT_APPLIANCES = [
@@ -85,6 +88,8 @@ export const App: React.FC = () => {
             exit_code: number | null;
             created_at?: string | null;
             updated_at?: string | null;
+            page_scope?: string | null;
+            source?: string | null;
           }>
         >('get_saved_console_sessions');
 
@@ -97,6 +102,8 @@ export const App: React.FC = () => {
             exitCode: s.exit_code ?? undefined,
             createdAt: s.created_at ?? undefined,
             finishedAt: s.updated_at ?? undefined,
+            pageScope: inferPageScopeFromJob(s.id, s.page_scope, s.title),
+            source: (s.source as WorkStreamSource) || 'ui',
           }));
           setTerminalTabs(loadedTabs);
           setActiveTerminalTabId(loadedTabs[0].id);
@@ -196,17 +203,34 @@ export const App: React.FC = () => {
   }, []);
 
   const saveTabToDb = useCallback(
-    (tab: { id: string; title: string; lines: string[]; isRunning: boolean; exitCode?: number }) => {
+    (tab: {
+      id: string;
+      title: string;
+      lines: string[];
+      isRunning: boolean;
+      exitCode?: number;
+      pageScope?: NavSectionId;
+      source?: WorkStreamSource;
+    }) => {
       invoke('save_console_session', {
         id: tab.id,
         title: tab.title,
         lines: tab.lines,
         isRunning: tab.isRunning,
         exitCode: tab.exitCode ?? null,
+        pageScope: tab.pageScope ?? inferPageScopeFromJob(tab.id, undefined, tab.title),
+        source: tab.source ?? 'ui',
       }).catch((e) => console.warn('Failed to save console session to DB:', e));
     },
     []
   );
+
+  const handleOpenInBottomConsole = useCallback((tabId?: string) => {
+    if (tabId) {
+      setActiveTerminalTabId(tabId);
+    }
+    setIsDrawerOpen(true);
+  }, []);
 
   // Keep ref to current apps to update granular sub-properties without full component tree thrashing
   const appsRef = useRef<DiscoveredApp[]>([]);
@@ -312,14 +336,47 @@ export const App: React.FC = () => {
   }, []);
 
   // Full Initial App Discovery & Telemetry Probe
-  const syncFullTelemetry = useCallback(async (isUserInitiated = false, includeWshSnapshot = true) => {
-    if (isUserInitiated) {
+  const syncFullTelemetry = useCallback(async (
+    isUserInitiated = false,
+    includeWshSnapshot = true,
+    traceScope: NavSectionId = 'hud'
+  ) => {
+    const syncJobId = isUserInitiated ? `${traceScope}-sync-${Date.now()}` : null;
+    if (isUserInitiated && syncJobId) {
       setIsManualSyncing(true);
+      const traceTitle =
+        traceScope === 'settings'
+          ? 'Workspace Discovery & Telemetry Sync'
+          : 'Full Suite Telemetry Sync';
+      const initialTab: TerminalTab = {
+        id: syncJobId,
+        title: traceTitle,
+        lines: [
+          `[PanoramaSRE] Starting manual telemetry synchronization (${traceScope})...`,
+          '[INFO] Probing network posture and discovering PanoramaDrSuite manifests...',
+        ],
+        isRunning: true,
+        createdAt: new Date().toISOString(),
+        pageScope: traceScope,
+        source: 'ui',
+        abortable: false,
+      };
+      setTerminalTabs((prev) => [...prev, initialTab]);
+      saveTabToDb(initialTab);
     }
+
+    const pushSyncTrace = (line: string) => {
+      if (!syncJobId) return;
+      setTerminalTabs((prev) =>
+        prev.map((t) => (t.id === syncJobId ? { ...t, lines: [...t.lines, line] } : t))
+      );
+    };
+
     try {
       // 1. Posture check
       const posture = await invoke<NetworkPosture>('detect_network_posture', {});
       setNetworkPosture(posture);
+      pushSyncTrace(`[INFO] Network posture resolved: ${posture}`);
 
       // 2. Discover apps via panorama.app.json
       const rawDiscovered = await invoke<Array<{
@@ -431,6 +488,10 @@ export const App: React.FC = () => {
       }
 
       setApps(enrichedApps);
+      const healthyCount = enrichedApps.filter((a) => a.health?.status === 'healthy').length;
+      pushSyncTrace(
+        `[INFO] Discovered ${enrichedApps.length} suite apps (${healthyCount}/${enrichedApps.length} production healthy).`
+      );
 
       // 5. Probe Home Lab Appliances
       await refreshAppliances();
@@ -444,8 +505,10 @@ export const App: React.FC = () => {
           });
           setWshSnapshot(snap);
           setLastSecurityAuditTime(new Date().toLocaleTimeString());
+          pushSyncTrace('[INFO] WSH host firewall, Docker, and CGNAT snapshot updated.');
         } catch (snapErr) {
           console.warn('[PanoramaSRE] WSH snapshot warning:', snapErr);
+          pushSyncTrace(`[WARN] WSH snapshot partial warning: ${snapErr}`);
         }
       }
 
@@ -455,15 +518,52 @@ export const App: React.FC = () => {
       // 8. Fetch 5-Domain SSL Dual-Probe Matrix
       await refreshSslStatus();
 
+      if (syncJobId) {
+        const finishedAt = new Date().toISOString();
+        const passLine = `[PASS] Telemetry sync complete (${enrichedApps.length} apps, posture: ${posture}).`;
+        setTerminalTabs((prev) =>
+          prev.map((t) => {
+            if (t.id !== syncJobId) return t;
+            const updated: TerminalTab = {
+              ...t,
+              lines: [...t.lines, passLine],
+              isRunning: false,
+              exitCode: 0,
+              finishedAt,
+            };
+            saveTabToDb(updated);
+            return updated;
+          })
+        );
+      }
+
       setLastSyncTime(new Date().toLocaleTimeString());
     } catch (err) {
       console.error('[PanoramaSRE] Full sync error:', err);
+      if (syncJobId) {
+        const finishedAt = new Date().toISOString();
+        const errLine = `[ERROR] Telemetry sync failed: ${err instanceof Error ? err.message : String(err)}`;
+        setTerminalTabs((prev) =>
+          prev.map((t) => {
+            if (t.id !== syncJobId) return t;
+            const updated: TerminalTab = {
+              ...t,
+              lines: [...t.lines, errLine],
+              isRunning: false,
+              exitCode: 1,
+              finishedAt,
+            };
+            saveTabToDb(updated);
+            return updated;
+          })
+        );
+      }
     } finally {
       if (isUserInitiated) {
         setIsManualSyncing(false);
       }
     }
-  }, [refreshAppliances, refreshBackupLedger, refreshSslStatus]);
+  }, [refreshAppliances, refreshBackupLedger, refreshSslStatus, saveTabToDb]);
 
   // Initial sync on mount
   useEffect(() => {
@@ -540,6 +640,102 @@ export const App: React.FC = () => {
       if (unlistenAlert) unlistenAlert();
     };
   }, [showActionFeedback, refreshDevServers, refreshMcpStatus, syncFullTelemetry]);
+
+  // Listen for Local Dev Server boot-until-ready stream events (UI, MCP, & supervisor)
+  useEffect(() => {
+    let unlistenStart: (() => void) | undefined;
+    let unlistenLine: (() => void) | undefined;
+    let unlistenEnd: (() => void) | undefined;
+
+    listen<{
+      id: string;
+      title: string;
+      appId: string;
+      port?: number;
+      source?: string;
+    }>('sre://dev-stream-start', (event) => {
+      const { id, title, appId, source } = event.payload || {};
+      if (!id) return;
+      const mappedSource: WorkStreamSource =
+        source === 'mcp' ? 'mcp' : source === 'ui' ? 'ui' : 'supervisor';
+      const newTab: TerminalTab = {
+        id,
+        title: title || `Dev Server Boot: ${appId}`,
+        lines: [],
+        isRunning: true,
+        createdAt: new Date().toISOString(),
+        pageScope: 'local-dev',
+        source: mappedSource,
+        appSlug: appId,
+        abortable: false,
+      };
+      setTerminalTabs((prev) => {
+        const existingIdx = prev.findIndex((t) => t.id === id);
+        if (existingIdx !== -1) {
+          const next = [...prev];
+          next[existingIdx] = { ...next[existingIdx], ...newTab, lines: next[existingIdx].lines };
+          return next;
+        }
+        return [...prev, newTab];
+      });
+      setActiveTerminalTabId(id);
+    }).then((unsub) => {
+      unlistenStart = unsub;
+    });
+
+    listen<{ id: string; appId: string; line: string }>('sre://dev-stream-line', (event) => {
+      const { id, appId, line } = event.payload || {};
+      if (!id || typeof line !== 'string') return;
+      setTerminalTabs((prev) => {
+        const exists = prev.some((t) => t.id === id);
+        if (!exists) {
+          return [
+            ...prev,
+            {
+              id,
+              title: `Dev Server Boot: ${appId || 'app'}`,
+              lines: [line],
+              isRunning: true,
+              createdAt: new Date().toISOString(),
+              pageScope: 'local-dev',
+              source: 'supervisor',
+              appSlug: appId,
+              abortable: false,
+            },
+          ];
+        }
+        return prev.map((t) => (t.id === id ? { ...t, lines: [...t.lines, line] } : t));
+      });
+    }).then((unsub) => {
+      unlistenLine = unsub;
+    });
+
+    listen<{ id: string; appId: string; exitCode: number }>('sre://dev-stream-end', (event) => {
+      const { id, exitCode } = event.payload || {};
+      if (!id) return;
+      const code = typeof exitCode === 'number' ? exitCode : 0;
+      const finishedAt = new Date().toISOString();
+      setTerminalTabs((prev) =>
+        prev.map((t) => {
+          if (t.id === id) {
+            const updated: TerminalTab = { ...t, isRunning: false, exitCode: code, finishedAt };
+            saveTabToDb(updated);
+            return updated;
+          }
+          return t;
+        })
+      );
+      refreshDevServers();
+    }).then((unsub) => {
+      unlistenEnd = unsub;
+    });
+
+    return () => {
+      if (unlistenStart) unlistenStart();
+      if (unlistenLine) unlistenLine();
+      if (unlistenEnd) unlistenEnd();
+    };
+  }, [refreshDevServers, saveTabToDb]);
 
   // Periodic WSH Security Hardening & Penetration Audit Timer
   useEffect(() => {
@@ -690,6 +886,10 @@ export const App: React.FC = () => {
       lines: [`[PanoramaSRE] Pulling remote SQLite backup for ${app.manifest.displayName}...`],
       isRunning: true,
       createdAt: new Date().toISOString(),
+      pageScope: 'backups',
+      source: 'ui',
+      appSlug: app.manifest.slug,
+      abortable: true,
     };
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
@@ -732,6 +932,10 @@ export const App: React.FC = () => {
       ],
       isRunning: true,
       createdAt: new Date().toISOString(),
+      pageScope: 'backups',
+      source: 'ui',
+      appSlug: app.manifest.slug,
+      abortable: true,
     };
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
@@ -806,6 +1010,10 @@ export const App: React.FC = () => {
       ],
       isRunning: true,
       createdAt: new Date().toISOString(),
+      pageScope: 'backups',
+      source: 'ui',
+      appSlug: app.manifest.slug,
+      abortable: true,
     };
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
@@ -873,6 +1081,9 @@ export const App: React.FC = () => {
       lines: [`[PanoramaSRE] Invoking ${cmdSpec.command} ${cmdSpec.args.join(' ')}...`],
       isRunning: true,
       createdAt: new Date().toISOString(),
+      pageScope: 'edge',
+      source: 'ui',
+      abortable: true,
     };
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
@@ -915,6 +1126,9 @@ export const App: React.FC = () => {
       lines: [`[PanoramaSRE] Invoking deploy-cloudflare-tunnel.ps1 -${action}...`],
       isRunning: true,
       createdAt: new Date().toISOString(),
+      pageScope: 'topology',
+      source: 'ui',
+      abortable: true,
     };
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
@@ -957,6 +1171,10 @@ export const App: React.FC = () => {
       lines: [`[PanoramaSRE] Initiating release pipeline for ${app.manifest.displayName}...`],
       isRunning: true,
       createdAt: new Date().toISOString(),
+      pageScope: 'releases',
+      source: 'ui',
+      appSlug: app.manifest.slug,
+      abortable: true,
     };
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
@@ -1175,6 +1393,9 @@ export const App: React.FC = () => {
       ],
       isRunning: true,
       createdAt: new Date().toISOString(),
+      pageScope: 'dietpi',
+      source: 'ui',
+      abortable: true,
     };
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
@@ -1301,7 +1522,7 @@ export const App: React.FC = () => {
     refreshWshTelemetry,
   ]);
 
-  const handleTriggerFullGfsBackup = useCallback(() => {
+  const handleTriggerFullGfsBackup = useCallback((originScope: NavSectionId = 'backups') => {
     const jobId = `gfs-backup-${Date.now()}`;
     const newTab: TerminalTab = {
       id: jobId,
@@ -1309,6 +1530,9 @@ export const App: React.FC = () => {
       lines: ['[PanoramaSRE] Triggering BackupManager.ps1 full backup...'],
       isRunning: true,
       createdAt: new Date().toISOString(),
+      pageScope: originScope,
+      source: 'ui',
+      abortable: true,
     };
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
@@ -1340,7 +1564,7 @@ export const App: React.FC = () => {
     });
   }, [appendTerminalLine, finalizeTerminalJob, failTerminalJob, refreshBackupLedger, saveTabToDb]);
 
-  const handleRunPenetrationAudit = useCallback(() => {
+  const handleRunPenetrationAudit = useCallback((originScope: NavSectionId = 'topology') => {
     const jobId = `audit-penetration-${Date.now()}`;
     const actionLabel = 'WSH Network Hardening Penetration Audit (SEC-01..08)';
     const newTab: TerminalTab = {
@@ -1352,6 +1576,9 @@ export const App: React.FC = () => {
       ],
       isRunning: true,
       createdAt: new Date().toISOString(),
+      pageScope: originScope,
+      source: 'ui',
+      abortable: true,
     };
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
@@ -1384,7 +1611,7 @@ export const App: React.FC = () => {
     });
   }, [appendTerminalLine, finalizeTerminalJob, failTerminalJob, refreshWshTelemetry, saveTabToDb]);
 
-  const handleReapplyHardening = useCallback(() => {
+  const handleReapplyHardening = useCallback((originScope: NavSectionId = 'topology') => {
     const jobId = `reapply-hardening-${Date.now()}`;
     const actionLabel = 'Re-Apply Host Firewall & Network Hardening';
     const newTab: TerminalTab = {
@@ -1396,6 +1623,9 @@ export const App: React.FC = () => {
       ],
       isRunning: true,
       createdAt: new Date().toISOString(),
+      pageScope: originScope,
+      source: 'ui',
+      abortable: true,
     };
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
@@ -1550,6 +1780,9 @@ export const App: React.FC = () => {
         lines: [`[PanoramaSRE] Starting Production Smoke Suite (trigger=${triggeredBy})...`],
         isRunning: true,
         createdAt: new Date().toISOString(),
+        pageScope: 'smoke',
+        source: triggeredBy.startsWith('sre-scheduled') ? 'scheduled' : 'ui',
+        abortable: true,
       };
       setTerminalTabs((prev) => [...prev, newTab]);
       setActiveTerminalTabId(jobId);
@@ -1593,7 +1826,15 @@ export const App: React.FC = () => {
         },
       });
     },
-    [getWorkspaceRoot, isSmokeRunning, refreshSmokeHistory]
+    [
+      appendTerminalLine,
+      failTerminalJob,
+      finalizeTerminalJob,
+      getWorkspaceRoot,
+      isSmokeRunning,
+      refreshSmokeHistory,
+      saveTabToDb,
+    ]
   );
 
   const handleRegisterSmokeSchedule = useCallback(() => {
@@ -1605,10 +1846,12 @@ export const App: React.FC = () => {
       lines: ['[PanoramaSRE] Registering 4x daily smoke test task (08:00, 13:00, 17:00, 22:00)...'],
       isRunning: true,
       createdAt: new Date().toISOString(),
+      pageScope: 'smoke',
+      source: 'ui',
+      abortable: true,
     };
     setTerminalTabs((prev) => [...prev, newTab]);
     setActiveTerminalTabId(jobId);
-    setIsDrawerOpen(true);
     saveTabToDb(newTab);
 
     runStreamJob({
@@ -1622,7 +1865,7 @@ export const App: React.FC = () => {
       onComplete: (exitCode) => finalizeTerminalJob(jobId, exitCode),
       onError: (err) => failTerminalJob(jobId, `Failed to register schedule: ${err}`),
     });
-  }, [getWorkspaceRoot]);
+  }, [appendTerminalLine, failTerminalJob, finalizeTerminalJob, getWorkspaceRoot, saveTabToDb]);
 
   useEffect(() => {
     if (apps.length > 0) {
@@ -1671,6 +1914,9 @@ export const App: React.FC = () => {
         lines: [`[PanoramaSRE] AI Agent triggered Production Smoke Suite (${triggeredBy})...`],
         isRunning: true,
         createdAt: new Date().toISOString(),
+        pageScope: 'smoke',
+        source: 'mcp',
+        abortable: false,
       };
       setTerminalTabs((prev) => [...prev, newTab]);
       setActiveTerminalTabId(jobId);
@@ -1722,6 +1968,124 @@ export const App: React.FC = () => {
     };
   }, [appendTerminalLine, finalizeTerminalJob, refreshMcpStatus, refreshSmokeHistory, saveTabToDb, showActionFeedback]);
 
+  const runManualTraceStream = useCallback(
+    async (
+      pageScope: NavSectionId,
+      idPrefix: string,
+      title: string,
+      initialLines: string[],
+      task: (appendLine: (line: string) => void) => Promise<void>
+    ) => {
+      const jobId = `${idPrefix}-${Date.now()}`;
+      const newTab: TerminalTab = {
+        id: jobId,
+        title,
+        lines: initialLines,
+        isRunning: true,
+        createdAt: new Date().toISOString(),
+        pageScope,
+        source: 'ui',
+        abortable: false,
+      };
+      setTerminalTabs((prev) => [...prev, newTab]);
+      saveTabToDb(newTab);
+
+      try {
+        await task((line) => appendTerminalLine(jobId, line));
+        finalizeTerminalJob(jobId, 0);
+      } catch (err) {
+        failTerminalJob(jobId, `${title} error: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    [appendTerminalLine, failTerminalJob, finalizeTerminalJob, saveTabToDb]
+  );
+
+  const handleManualTopologyRefresh = useCallback(() => {
+    void runManualTraceStream(
+      'topology',
+      'topology-refresh',
+      'Refresh WSH Network & Firewall Snapshot',
+      ['[PanoramaSRE] Probing WSH host network bindings, iptables, and container isolation...'],
+      async (append) => {
+        await refreshWshTelemetry(true);
+        append('[PASS] WSH network, Docker CGNAT bridges, and firewall snapshot refreshed.');
+      }
+    );
+  }, [refreshWshTelemetry, runManualTraceStream]);
+
+  const handleManualDietPiRefresh = useCallback(() => {
+    void runManualTraceStream(
+      'dietpi',
+      'dietpi-refresh',
+      'Refresh DietPi Host & APT Snapshot',
+      ['[PanoramaSRE] Querying DietPi host telemetry, services, and upgradable APT packages...'],
+      async (append) => {
+        await refreshWshTelemetry(true);
+        append('[PASS] DietPi host health, systemd units, and package list refreshed.');
+      }
+    );
+  }, [refreshWshTelemetry, runManualTraceStream]);
+
+  const handleManualSslRefresh = useCallback(() => {
+    void runManualTraceStream(
+      'edge',
+      'ssl-probe',
+      'Re-probe 7-Domain SSL Fleet',
+      ['[PanoramaSRE] Probing Edge & Internal TLS endpoints across PanoramaDrSuite fleet...'],
+      async (append) => {
+        await refreshSslStatus();
+        append('[PASS] SSL fleet dual-probe verification completed.');
+      }
+    );
+  }, [refreshSslStatus, runManualTraceStream]);
+
+  const handleManualBackupRefresh = useCallback(() => {
+    void runManualTraceStream(
+      'backups',
+      'backups-refresh',
+      'Refresh GFS Backup Ledger & Archives',
+      ['[PanoramaSRE] Scanning suite SQLite backup ledger and local hydration archives...'],
+      async (append) => {
+        await refreshBackupLedger();
+        append('[PASS] GFS backup ledger and archive telemetry updated.');
+      }
+    );
+  }, [refreshBackupLedger, runManualTraceStream]);
+
+  const handleManualSmokeRefresh = useCallback(() => {
+    void runManualTraceStream(
+      'smoke',
+      'smoke-refresh',
+      'Reload Smoke Test History',
+      ['[PanoramaSRE] Reloading smoke test run ledger from SQLite & suite results...'],
+      async (append) => {
+        await refreshSmokeHistory();
+        append('[PASS] Smoke test run history refreshed.');
+      }
+    );
+  }, [refreshSmokeHistory, runManualTraceStream]);
+
+  const handleEmitSettingsStream = useCallback(
+    (title: string, lines: string[], exitCode = 0) => {
+      const nowIso = new Date().toISOString();
+      const tab: TerminalTab = {
+        id: `settings-op-${Date.now()}`,
+        title,
+        lines,
+        isRunning: false,
+        exitCode,
+        createdAt: nowIso,
+        finishedAt: nowIso,
+        pageScope: 'settings',
+        source: 'ui',
+        abortable: false,
+      };
+      setTerminalTabs((prev) => [...prev, tab]);
+      saveTabToDb(tab);
+    },
+    [saveTabToDb]
+  );
+
   return (
     <div className="flex flex-col h-screen w-screen bg-slate-50 dark:bg-[#050b14] text-slate-900 dark:text-slate-100 overflow-hidden font-sans">
       {/* Upper Area: Sidebar Navigation + Main Application Content */}
@@ -1747,7 +2111,7 @@ export const App: React.FC = () => {
             lastSecurityAuditTime={lastSecurityAuditTime}
             securityAuditInterval={securityAuditInterval}
             isSyncing={isManualSyncing}
-            onRefresh={() => syncFullTelemetry(true)}
+            onRefresh={() => syncFullTelemetry(true, true, activeTab)}
             backupFailureCount={backupFailureCount}
             onNavigateToBackups={() => setActiveTab('backups')}
             securityViolationCount={securityViolationCount}
@@ -1763,20 +2127,25 @@ export const App: React.FC = () => {
               appliances={appliances}
               sslFleet={sslFleet}
               backupLedger={backupLedger}
+              terminalTabs={terminalTabs}
               isLoading={apps.length === 0}
               onNavigateToBackups={() => setActiveTab('backups')}
-              onTriggerFullGfsBackup={handleTriggerFullGfsBackup}
+              onTriggerFullGfsBackup={() => handleTriggerFullGfsBackup('hud')}
               securityViolationCount={securityViolationCount}
               failingInvariants={failingInvariants}
-              onReapplyHardening={handleReapplyHardening}
-              onRunPenetrationAudit={handleRunPenetrationAudit}
+              onReapplyHardening={() => handleReapplyHardening('hud')}
+              onRunPenetrationAudit={() => handleRunPenetrationAudit('hud')}
               onNavigateToTopology={() => setActiveTab('topology')}
+              onOpenInBottomConsole={handleOpenInBottomConsole}
+              onAbortJob={handleAbortJob}
+              onClearTab={handleClearTab}
             />
           )}
 
           {activeTab === 'local-dev' && (
             <LocalDevView
               apps={apps}
+              terminalTabs={terminalTabs}
               mcpStatus={mcpStatus}
               onStart={handleStartDevServer}
               onStartAuthAndApp={handleStartAuthAndApp}
@@ -1784,6 +2153,9 @@ export const App: React.FC = () => {
               onRestart={handleRestartDevServer}
               onStartAll={handleStartAllDevServers}
               onStopAll={handleStopAllDevServers}
+              onOpenInBottomConsole={handleOpenInBottomConsole}
+              onAbortJob={handleAbortJob}
+              onClearTab={handleClearTab}
               isActionPending={actionFeedback?.type === 'pending'}
               actionMessage={actionFeedback?.message}
             />
@@ -1793,10 +2165,14 @@ export const App: React.FC = () => {
             <TopologyStacksView
               snapshot={wshSnapshot}
               apps={apps}
+              terminalTabs={terminalTabs}
               isLoading={isManualSyncing}
-              onRefresh={() => refreshWshTelemetry(true)}
-              onRunPenetrationAudit={handleRunPenetrationAudit}
-              onReapplyHardening={handleReapplyHardening}
+              onRefresh={handleManualTopologyRefresh}
+              onRunPenetrationAudit={() => handleRunPenetrationAudit('topology')}
+              onReapplyHardening={() => handleReapplyHardening('topology')}
+              onOpenInBottomConsole={handleOpenInBottomConsole}
+              onAbortJob={handleAbortJob}
+              onClearTab={handleClearTab}
               onRunAuditCommand={(actionLabel, cmd, args) => {
                 const jobId = `audit-${Date.now()}`;
                 const newTab: TerminalTab = {
@@ -1805,6 +2181,9 @@ export const App: React.FC = () => {
                   lines: [`[PanoramaSRE] Executing ${actionLabel}...`],
                   isRunning: true,
                   createdAt: new Date().toISOString(),
+                  pageScope: 'topology',
+                  source: 'ui',
+                  abortable: true,
                 };
                 setTerminalTabs((prev) => [...prev, newTab]);
                 setActiveTerminalTabId(jobId);
@@ -1835,10 +2214,14 @@ export const App: React.FC = () => {
           {activeTab === 'dietpi' && (
             <DietPiHostView
               snapshot={wshSnapshot}
+              terminalTabs={terminalTabs}
               isLoading={isLoadingWsh}
-              onRefresh={() => refreshWshTelemetry(true)}
+              onRefresh={handleManualDietPiRefresh}
               onTriggerReboot={handleRebootWshWithVerification}
               isRebooting={isHostRebooting}
+              onOpenInBottomConsole={handleOpenInBottomConsole}
+              onAbortJob={handleAbortJob}
+              onClearTab={handleClearTab}
               onTriggerAction={(actionLabel, cmd, args) => {
                 const jobId = `action-${Date.now()}`;
                 const newTab: TerminalTab = {
@@ -1847,6 +2230,9 @@ export const App: React.FC = () => {
                   lines: [`[PanoramaSRE] Executing ${actionLabel}...`],
                   isRunning: true,
                   createdAt: new Date().toISOString(),
+                  pageScope: 'dietpi',
+                  source: 'ui',
+                  abortable: true,
                 };
                 setTerminalTabs((prev) => [...prev, newTab]);
                 setActiveTerminalTabId(jobId);
@@ -1915,10 +2301,9 @@ export const App: React.FC = () => {
                   return next;
                 })
               }
-              onOpenInConsoleDrawer={(jobId) => {
-                setActiveTerminalTabId(jobId);
-                setIsDrawerOpen(true);
-              }}
+              onOpenInBottomConsole={handleOpenInBottomConsole}
+              onOpenInConsoleDrawer={(jobId) => handleOpenInBottomConsole(jobId)}
+              onAbortJob={handleAbortJob}
               onCloseTab={handleCloseTab}
               onClearTab={handleClearTab}
               onTriggerDeploy={executeAppDeploy}
@@ -1935,6 +2320,10 @@ export const App: React.FC = () => {
                   lines: [`[PanoramaSRE] Swapping container to image tag ${tag}...`],
                   isRunning: true,
                   createdAt: new Date().toISOString(),
+                  pageScope: 'releases',
+                  source: 'ui',
+                  appSlug: app.manifest.slug,
+                  abortable: true,
                 };
                 setTerminalTabs((prev) => [...prev, newTab]);
                 setActiveTerminalTabId(jobId);
@@ -1966,12 +2355,16 @@ export const App: React.FC = () => {
             <BackupsRecoveryView
               apps={apps}
               ledger={backupLedger}
+              terminalTabs={terminalTabs}
               isLoading={isManualSyncing}
-              onRefresh={refreshBackupLedger}
-              onTriggerFullGfsBackup={handleTriggerFullGfsBackup}
+              onRefresh={handleManualBackupRefresh}
+              onTriggerFullGfsBackup={() => handleTriggerFullGfsBackup('backups')}
               onTriggerAppBackup={handleTriggerAppBackup}
               onApplyLocalBackup={handleApplyLocalBackup}
               onRestoreRemoteBackup={handleRestoreRemoteBackup}
+              onOpenInBottomConsole={handleOpenInBottomConsole}
+              onAbortJob={handleAbortJob}
+              onClearTab={handleClearTab}
             />
           )}
 
@@ -1980,11 +2373,15 @@ export const App: React.FC = () => {
               runs={smokeRuns}
               isRunning={isSmokeRunning}
               streamLines={terminalTabs.find((t) => t.id === activeSmokeJobId)?.lines || []}
+              terminalTabs={terminalTabs}
               onRunNow={(force) =>
                 handleRunSmokeTests(force ? 'sre-manual:force-sms' : 'sre-manual', Boolean(force))
               }
-              onRefreshHistory={refreshSmokeHistory}
+              onRefreshHistory={handleManualSmokeRefresh}
               onRegisterOsSchedule={handleRegisterSmokeSchedule}
+              onOpenInBottomConsole={handleOpenInBottomConsole}
+              onAbortJob={handleAbortJob}
+              onClearTab={handleClearTab}
               lastError={smokeError}
             />
           )}
@@ -1995,18 +2392,24 @@ export const App: React.FC = () => {
               sslFleet={sslFleet}
               terminalTabs={terminalTabs}
               isLoadingSsl={isLoadingSsl}
-              onRefreshSsl={refreshSslStatus}
+              onRefreshSsl={handleManualSslRefresh}
               onTriggerRenewal={handleTriggerSslRenewal}
-              onCloseTab={handleCloseTab}
+              onOpenInBottomConsole={handleOpenInBottomConsole}
+              onAbortJob={handleAbortJob}
               onClearTab={handleClearTab}
             />
           )}
 
           {activeTab === 'settings' && (
             <SettingsView
-              onWorkspaceChanged={() => syncFullTelemetry(true)}
+              terminalTabs={terminalTabs}
+              onWorkspaceChanged={() => syncFullTelemetry(true, true, 'settings')}
               securityAuditInterval={securityAuditInterval}
               onSecurityAuditIntervalChanged={(val) => setSecurityAuditInterval(val)}
+              onOpenInBottomConsole={handleOpenInBottomConsole}
+              onAbortJob={handleAbortJob}
+              onClearTab={handleClearTab}
+              onEmitSettingsStream={handleEmitSettingsStream}
             />
           )}
 

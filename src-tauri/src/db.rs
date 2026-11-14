@@ -14,6 +14,19 @@ pub struct SystemLogEntry {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsoleSessionRecord {
+    pub id: String,
+    pub title: String,
+    pub lines: Vec<String>,
+    pub is_running: bool,
+    pub exit_code: Option<i32>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub page_scope: Option<String>,
+    pub source: Option<String>,
+}
+
 pub struct SreDatabase {
     conn: Connection,
     log_file_path: PathBuf,
@@ -81,6 +94,8 @@ impl SreDatabase {
                 lines_json TEXT NOT NULL,
                 is_running INTEGER NOT NULL DEFAULT 0,
                 exit_code INTEGER,
+                page_scope TEXT,
+                source TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
@@ -92,10 +107,32 @@ impl SreDatabase {
             );"
         )?;
 
+        // Idempotent column migration for existing console_sessions tables
+        let existing_cols = self.get_table_columns("console_sessions")?;
+        if !existing_cols.iter().any(|c| c == "page_scope") {
+            self.conn.execute("ALTER TABLE console_sessions ADD COLUMN page_scope TEXT", [])?;
+        }
+        if !existing_cols.iter().any(|c| c == "source") {
+            self.conn.execute("ALTER TABLE console_sessions ADD COLUMN source TEXT", [])?;
+        }
+
+        // Reconcile any stale running flags left over from prior terminated app runs
+        self.conn.execute("UPDATE console_sessions SET is_running = 0 WHERE is_running = 1", [])?;
+
         // Auto-purge console sessions and system logs older than 28 days
         self.purge_old_entries(28).ok();
 
         Ok(())
+    }
+
+    fn get_table_columns(&self, table_name: &str) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(&format!("PRAGMA table_info({})", table_name))?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+        let mut cols = Vec::new();
+        for r in rows {
+            cols.push(r?);
+        }
+        Ok(cols)
     }
 
     pub fn purge_old_entries(&self, days: i64) -> Result<()> {
@@ -111,28 +148,41 @@ impl SreDatabase {
         Ok(())
     }
 
-    pub fn save_console_session(&self, id: &str, title: &str, lines: &[String], is_running: bool, exit_code: Option<i32>) -> Result<()> {
+    pub fn save_console_session(
+        &self,
+        id: &str,
+        title: &str,
+        lines: &[String],
+        is_running: bool,
+        exit_code: Option<i32>,
+        page_scope: Option<&str>,
+        source: Option<&str>,
+    ) -> Result<()> {
         let lines_json = serde_json::to_string(lines).unwrap_or_else(|_| "[]".to_string());
         self.conn.execute(
-            "INSERT INTO console_sessions (id, title, lines_json, is_running, exit_code, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP)
+            "INSERT INTO console_sessions (id, title, lines_json, is_running, exit_code, page_scope, source, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP)
              ON CONFLICT(id) DO UPDATE SET
                 title = excluded.title,
                 lines_json = excluded.lines_json,
                 is_running = excluded.is_running,
                 exit_code = excluded.exit_code,
+                page_scope = COALESCE(excluded.page_scope, console_sessions.page_scope),
+                source = COALESCE(excluded.source, console_sessions.source),
                 updated_at = CURRENT_TIMESTAMP",
-            params![id, title, lines_json, if is_running { 1 } else { 0 }, exit_code],
+            params![id, title, lines_json, if is_running { 1 } else { 0 }, exit_code, page_scope, source],
         )?;
         Ok(())
     }
 
-    pub fn get_saved_console_sessions(&self) -> Result<Vec<(String, String, Vec<String>, bool, Option<i32>, Option<String>, Option<String>)>> {
+    pub fn get_saved_console_sessions(&self) -> Result<Vec<ConsoleSessionRecord>> {
         // Auto-purge > 28 days first
         let _ = self.purge_old_entries(28);
 
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, lines_json, is_running, exit_code, created_at, updated_at FROM console_sessions ORDER BY datetime(COALESCE(updated_at, created_at)) DESC"
+            "SELECT id, title, lines_json, is_running, exit_code, created_at, updated_at, page_scope, source
+             FROM console_sessions
+             ORDER BY datetime(COALESCE(updated_at, created_at)) DESC"
         )?;
         let rows = stmt.query_map([], |row| {
             let id: String = row.get(0)?;
@@ -142,8 +192,20 @@ impl SreDatabase {
             let exit_code: Option<i32> = row.get(4)?;
             let created_at: Option<String> = row.get(5)?;
             let updated_at: Option<String> = row.get(6)?;
+            let page_scope: Option<String> = row.get(7)?;
+            let source: Option<String> = row.get(8)?;
             let lines: Vec<String> = serde_json::from_str(&lines_raw).unwrap_or_default();
-            Ok((id, title, lines, is_running_int == 1, exit_code, created_at, updated_at))
+            Ok(ConsoleSessionRecord {
+                id,
+                title,
+                lines,
+                is_running: is_running_int == 1,
+                exit_code,
+                created_at,
+                updated_at,
+                page_scope,
+                source,
+            })
         })?;
 
         let mut res = Vec::new();
@@ -235,5 +297,63 @@ impl SreDatabase {
             params![key, value],
         )?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_console_session_scope_persistence_and_reconciliation() {
+        let db = SreDatabase::new(":memory:").expect("init memory db");
+
+        db.save_console_session(
+            "deploy-auth-1",
+            "Deploy: PanoramaAuth",
+            &["line 1".to_string(), "line 2".to_string()],
+            true,
+            None,
+            Some("releases"),
+            Some("ui"),
+        )
+        .expect("save session");
+
+        // Second save passing None for page_scope/source must preserve existing metadata
+        db.save_console_session(
+            "deploy-auth-1",
+            "Deploy: PanoramaAuth",
+            &["line 1".to_string(), "line 2".to_string(), "done".to_string()],
+            false,
+            Some(0),
+            None,
+            None,
+        )
+        .expect("update session");
+
+        let rows = db.get_saved_console_sessions().expect("read sessions");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "deploy-auth-1");
+        assert_eq!(rows[0].page_scope.as_deref(), Some("releases"));
+        assert_eq!(rows[0].source.as_deref(), Some("ui"));
+        assert!(!rows[0].is_running);
+        assert_eq!(rows[0].exit_code, Some(0));
+        assert_eq!(rows[0].lines.len(), 3);
+
+        // Simulate stale running session and verify init_tables clears is_running
+        db.save_console_session(
+            "smoke-stale-2",
+            "Stale Smoke",
+            &["running...".to_string()],
+            true,
+            None,
+            Some("smoke"),
+            Some("mcp"),
+        )
+        .expect("save stale");
+        db.init_tables().expect("re-run init_tables idempotently");
+        let after = db.get_saved_console_sessions().expect("read after restart");
+        let stale = after.iter().find(|r| r.id == "smoke-stale-2").unwrap();
+        assert!(!stale.is_running);
     }
 }

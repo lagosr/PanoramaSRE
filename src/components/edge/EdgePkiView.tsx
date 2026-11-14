@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import { WshSnapshot, SslFleetSummary } from '../../lib/types';
+import React, { useState } from 'react';
+import { WshSnapshot, SslFleetSummary, TerminalTab } from '../../lib/types';
 import { SslDualProbeTable } from './SslDualProbeTable';
 import { ConfirmDangerModal } from '../ui/ConfirmDangerModal';
 import { SslProgressInline } from './SslProgressInline';
-import { TerminalTab } from '../layout/SreTerminalDrawer';
+import { WorkStreamContainer } from '../ui/WorkStreamContainer';
 import {
   ShieldCheck,
   KeyRound,
@@ -32,7 +32,8 @@ interface EdgePkiViewProps {
     deployTargets?: string[];
     targetDevice?: string;
   }) => void;
-  onCloseTab?: (id: string) => void;
+  onOpenInBottomConsole?: (tabId?: string) => void;
+  onAbortJob?: (id: string) => void;
   onClearTab?: (id: string) => void;
 }
 
@@ -42,54 +43,16 @@ export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
   isLoadingSsl = false,
   onRefreshSsl,
   onTriggerRenewal,
-  onCloseTab,
+  onOpenInBottomConsole,
+  onAbortJob,
   onClearTab,
 }) => {
   const [isForceModalOpen, setIsForceModalOpen] = useState(false);
-  const [trackedJobId, setTrackedJobId] = useState<string | null>(null);
 
-  // Detect active SSL renewal/deploy background job
+  // Detect active SSL renewal/deploy background job for DualProbeTable badge highlighting
   const activeSslJob = terminalTabs.find(
     (t) => t.id.startsWith('ssl-renew-') && t.isRunning
   );
-
-  // When a new job starts running, track it so it remains visible until dismissed
-  useEffect(() => {
-    if (activeSslJob) {
-      setTrackedJobId(activeSslJob.id);
-    }
-  }, [activeSslJob?.id]);
-
-  // Sort SSL jobs newest first by finished/created timestamp or ID
-  const sslJobs = terminalTabs
-    .filter((t) => t.id.startsWith('ssl-renew-'))
-    .sort((a, b) => {
-      const timeA = a.finishedAt || a.createdAt || a.id;
-      const timeB = b.finishedAt || b.createdAt || b.id;
-      return timeB.localeCompare(timeA);
-    });
-
-  // Only display an active running job, or a job explicitly initiated during this session
-  const latestSslJob = activeSslJob || (trackedJobId ? sslJobs.find((t) => t.id === trackedJobId) : null);
-
-  const handleDismissJob = (jobId?: string) => {
-    setTrackedJobId(null);
-    if (jobId && onCloseTab) {
-      onCloseTab(jobId);
-    }
-  };
-
-  const handleClearJob = (jobId?: string) => {
-    setTrackedJobId(null);
-    if (jobId) {
-      if (onClearTab) {
-        onClearTab(jobId);
-      }
-      if (onCloseTab) {
-        onCloseTab(jobId);
-      }
-    }
-  };
 
   const totalDomains = sslFleet?.total_domains ?? 7;
   const healthyCount = sslFleet?.healthy_count ?? 0;
@@ -326,12 +289,21 @@ export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
         />
       </div>
 
-      {/* Inline Live SSL Renewal & Deployment Progress Area (Deployment Output Section) */}
-      <SslProgressInline
-        activeJob={latestSslJob || undefined}
-        onRefreshSsl={onRefreshSsl}
-        onDismiss={latestSslJob ? () => handleDismissJob(latestSslJob.id) : undefined}
-        onClear={latestSslJob ? () => handleClearJob(latestSslJob.id) : undefined}
+      {/* Position 4: Standardized PKI & SSL Work Stream Container */}
+      <WorkStreamContainer
+        pageScope="edge"
+        tabs={terminalTabs}
+        title="PKI Certificate Issuance & Fleet Deployment Stream"
+        description="Streams 4-stage ACME DNS-01 renewals, SSH/SMB staging, service reloads, and fleet dual-probe runs."
+        emptyHint="Run Re-probe Fleet, Renew Due, Force Renew All, or a device action above to stream live PKI progress here."
+        progressSlot={(activeTab) =>
+          activeTab && activeTab.id.startsWith('ssl-renew-') ? (
+            <SslProgressInline activeJob={activeTab} />
+          ) : null
+        }
+        onOpenInBottomConsole={onOpenInBottomConsole}
+        onAbortJob={onAbortJob}
+        onClearTab={onClearTab}
       />
 
       {/* Confirmation Modal for Force Renew All */}

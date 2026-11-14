@@ -11,17 +11,9 @@ import {
   Settings as SettingsIcon
 } from 'lucide-react';
 import { APP_VERSION_INFO } from '../../lib/version';
+import { NavSectionId } from '../../lib/types';
 
-export type NavItem = 
-  | 'hud'
-  | 'local-dev'
-  | 'releases'
-  | 'topology'
-  | 'dietpi'
-  | 'edge'
-  | 'backups'
-  | 'smoke'
-  | 'settings';
+export type NavItem = NavSectionId;
 
 interface SidebarRailProps {
   activeTab: NavItem;

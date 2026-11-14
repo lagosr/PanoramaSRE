@@ -16,20 +16,22 @@ import {
   Copy,
   Check,
   Search,
-  ListFilter
+  ListFilter,
+  Pin,
+  ArrowDownToLine
 } from 'lucide-react';
-import { formatConsoleLine } from './ConsoleColorizer';
-import { parseUtcDate, formatLocalDateTime } from '../../lib/formatters';
+import { formatConsoleLine, stripAnsiCodes } from './ConsoleColorizer';
+import { TerminalTab } from '../../lib/types';
+import {
+  getTabCategory,
+  getTabFinishedDetails,
+  PAGE_SCOPE_BADGE_LABELS,
+  inferPageScopeFromJob,
+} from '../../lib/stream-utils';
+import { useSmartAutoScroll } from '../../hooks/useSmartAutoScroll';
 
-export interface TerminalTab {
-  id: string;
-  title: string;
-  lines: string[];
-  isRunning: boolean;
-  exitCode?: number;
-  createdAt?: string;
-  finishedAt?: string;
-}
+export type { TerminalTab };
+export { getTabFinishedDetails };
 
 export interface SystemEventItem {
   id: string;
@@ -59,76 +61,6 @@ interface SreEventsConsolePanelProps {
   onToggleDrawer: () => void;
 }
 
-// Category extraction helper
-function getTabCategory(title: string): string {
-  const lower = title.toLowerCase();
-  if (lower.includes('deploy')) return 'Deployments';
-  if (lower.includes('tunnel') || lower.includes('cloudflare')) return 'Cloudflare Tunnel';
-  if (lower.includes('snapshot') || lower.includes('backup') || lower.includes('restore') || lower.includes('apply')) return 'Database / DR';
-  if (lower.includes('rollback')) return 'Rollbacks';
-  if (lower.includes('build') || lower.includes('test')) return 'Build & Test';
-  return 'Operations';
-}
-
-// Finished time and timestamp extractor
-export function getTabFinishedDetails(tab: TerminalTab): { label: string; timestampMs: number } {
-  if (tab.isRunning) {
-    return {
-      label: 'Running now',
-      timestampMs: Date.now() + 1000000000, // Always pin running streams to the top
-    };
-  }
-
-  // 1. Explicit finishedAt timestamp
-  let dateObj = parseUtcDate(tab.finishedAt);
-
-  // 2. Scan tail of console lines for ISO or standard timestamps
-  if (!dateObj && tab.lines && tab.lines.length > 0) {
-    for (let i = tab.lines.length - 1; i >= Math.max(0, tab.lines.length - 15); i--) {
-      const line = tab.lines[i];
-      const matchIso = line.match(/(?:completed at|finished at|timestamp)[\s:=]+([0-9]{4}-[0-9]{2}-[0-9]{2}[T\s][0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:?[0-9]{2})?)/i);
-      if (matchIso && matchIso[1]) {
-        dateObj = parseUtcDate(matchIso[1]);
-        if (dateObj) break;
-      }
-      const matchStandard = line.match(/\b([0-9]{4}-[0-9]{2}-[0-9]{2}[\sT][0-9]{2}:[0-9]{2}:[0-9]{2})\b/);
-      if (matchStandard && matchStandard[1]) {
-        dateObj = parseUtcDate(matchStandard[1]);
-        if (dateObj) break;
-      }
-    }
-  }
-
-  // 3. Fallback to createdAt
-  if (!dateObj && tab.createdAt) {
-    dateObj = parseUtcDate(tab.createdAt);
-  }
-
-  // 4. Fallback: try parsing timestamp from tab ID (e.g. 1793674549831)
-  if (!dateObj) {
-    const numMatch = tab.id.match(/(\d{10,13})/);
-    if (numMatch) {
-      const ms = parseInt(numMatch[1], 10);
-      const testDate = new Date(ms < 10000000000 ? ms * 1000 : ms);
-      if (!isNaN(testDate.getTime())) {
-        dateObj = testDate;
-      }
-    }
-  }
-
-  if (dateObj) {
-    return {
-      label: formatLocalDateTime(dateObj),
-      timestampMs: dateObj.getTime(),
-    };
-  }
-
-  return {
-    label: 'Completed',
-    timestampMs: 0,
-  };
-}
-
 export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
   isOpen,
   onClose,
@@ -149,15 +81,27 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
   const [isExpanded, setIsExpanded] = useState(false);
   const [activeMainSection, setActiveMainSection] = useState<'console' | 'events'>('console');
   const [copiedState, setCopiedState] = useState(false);
+  const [eventsCopiedState, setEventsCopiedState] = useState(false);
   const [isPickerOpen, setIsPickerOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'running' | 'success' | 'failed'>('all');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   
-  const scrollRef = useRef<HTMLDivElement>(null);
   const pickerDropdownRef = useRef<HTMLDivElement>(null);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
+
+  const {
+    containerRef: scrollRef,
+    isPinned,
+    unseenCount,
+    handleScroll: handleConsoleScroll,
+    pinToBottom,
+  } = useSmartAutoScroll({
+    lineCount: activeTab?.lines.length ?? 0,
+    isActive: isOpen && activeMainSection === 'console',
+    sessionKey: activeTab?.id,
+  });
 
   // Close picker dropdown on click outside
   useEffect(() => {
@@ -171,13 +115,6 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
   }, [isPickerOpen]);
-
-  // Auto-scroll to bottom on new lines in console
-  useEffect(() => {
-    if (activeMainSection === 'console' && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [activeTab?.lines.length, activeMainSection]);
 
   // Derived categories from existing tabs
   const availableCategories = useMemo(() => {
@@ -390,13 +327,45 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
           )}
 
           {activeMainSection === 'events' && eventsHistory.length > 0 && (
-            <button
-              onClick={onClearEvents}
-              className="flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-mono text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-800 border border-slate-300 dark:border-slate-700/60 transition-colors"
-              title="Clear event history log"
-            >
-              <span>Clear Events</span>
-            </button>
+            <div className="flex items-center space-x-1.5">
+              <button
+                type="button"
+                onClick={async () => {
+                  const text = eventsHistory
+                    .map((ev) => `[${ev.timestamp}] [${ev.type.toUpperCase()}] ${stripAnsiCodes(ev.message)}`)
+                    .join('\n');
+                  try {
+                    await navigator.clipboard.writeText(text);
+                    setEventsCopiedState(true);
+                    setTimeout(() => setEventsCopiedState(false), 2000);
+                  } catch (err) {
+                    console.warn('Failed to copy events:', err);
+                  }
+                }}
+                className="flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-mono bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 border border-slate-300 dark:border-slate-700 transition-colors shadow-xs whitespace-nowrap flex-shrink-0"
+                title="Copy events ledger to clipboard"
+              >
+                {eventsCopiedState ? (
+                  <>
+                    <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                    <span className="text-emerald-700 dark:text-emerald-400 font-semibold">Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3 h-3 text-slate-500 dark:text-slate-400" />
+                    <span>Copy Events</span>
+                  </>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={onClearEvents}
+                className="flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-mono text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-800 border border-slate-300 dark:border-slate-700/60 transition-colors whitespace-nowrap flex-shrink-0"
+                title="Clear event history log"
+              >
+                <span>Clear Events</span>
+              </button>
+            </div>
           )}
 
           <button
@@ -551,10 +520,20 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
                               <TerminalIcon className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 shrink-0" />
                             )}
                             <div className="min-w-0">
-                              <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate">
-                                {tab.title}
-                              </p>
-                              <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500 font-mono">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <span className="px-1.5 py-0.2 rounded text-[9px] font-mono font-bold uppercase bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-300 dark:border-slate-700 shrink-0">
+                                  {PAGE_SCOPE_BADGE_LABELS[inferPageScopeFromJob(tab.id, tab.pageScope, tab.title)]}
+                                </span>
+                                {tab.source && tab.source !== 'ui' && (
+                                  <span className="px-1.5 py-0.2 rounded text-[9px] font-mono font-bold uppercase bg-cyan-500/15 text-cyan-700 dark:text-cyan-300 border border-cyan-500/30 shrink-0">
+                                    {tab.source}
+                                  </span>
+                                )}
+                                <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate">
+                                  {tab.title}
+                                </p>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500 font-mono mt-0.5">
                                 <span className="text-slate-600 dark:text-slate-400">{category}</span>
                                 <span>•</span>
                                 <span>{tab.lines.length} lines</span>
@@ -607,6 +586,8 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
           <div className="flex items-center space-x-1 overflow-x-auto min-w-0 flex-1 custom-scrollbar">
             {tabs.slice(-3).map((tab) => {
               const isActive = tab.id === activeTabId;
+              const scopeBadge =
+                PAGE_SCOPE_BADGE_LABELS[inferPageScopeFromJob(tab.id, tab.pageScope, tab.title)];
               return (
                 <div
                   key={tab.id}
@@ -619,6 +600,9 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
                   title={tab.title}
                 >
                   {tab.isRunning && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400 animate-ping" />}
+                  <span className="text-[9px] font-mono font-bold uppercase text-slate-500 dark:text-slate-400">
+                    {scopeBadge}
+                  </span>
                   <span className="truncate max-w-[130px]">{tab.title}</span>
                   <button
                     type="button"
@@ -636,21 +620,49 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
             })}
           </div>
 
-          {/* Tab Actions: Copy, Abort, Clear */}
+          {/* Tab Actions: Pin, Copy, Abort, Clear */}
           <div className="flex items-center space-x-1.5 shrink-0 pl-2">
+            <button
+              type="button"
+              onClick={pinToBottom}
+              className={`flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-mono border transition-colors shadow-xs whitespace-nowrap flex-shrink-0 ${
+                isPinned
+                  ? 'bg-emerald-500/15 border-emerald-500/35 text-emerald-700 dark:text-emerald-300'
+                  : 'bg-amber-500/15 border-amber-500/40 text-amber-800 dark:text-amber-300 hover:bg-amber-500/25'
+              }`}
+              title={
+                isPinned
+                  ? 'Auto-scroll pinned to newest output lines'
+                  : 'Scroll paused — click to re-pin to bottom'
+              }
+            >
+              {isPinned ? (
+                <>
+                  <Pin className="w-3 h-3 shrink-0" />
+                  <span>Pinned</span>
+                </>
+              ) : (
+                <>
+                  <ArrowDownToLine className="w-3 h-3 shrink-0" />
+                  <span>Pin{unseenCount > 0 ? ` (${unseenCount})` : ''}</span>
+                </>
+              )}
+            </button>
+
             {activeTab && activeTab.lines.length > 0 && (
               <button
+                type="button"
                 onClick={async () => {
                   try {
-                    await navigator.clipboard.writeText(activeTab.lines.join('\n'));
+                    await navigator.clipboard.writeText(stripAnsiCodes(activeTab.lines.join('\n')));
                     setCopiedState(true);
                     setTimeout(() => setCopiedState(false), 2000);
                   } catch (err) {
                     console.warn('Failed to copy console lines:', err);
                   }
                 }}
-                className="flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-mono bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 border border-slate-300 dark:border-slate-700 transition-colors shadow-xs"
-                title="Copy all output from current tab to clipboard"
+                className="flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-mono bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 border border-slate-300 dark:border-slate-700 transition-colors shadow-xs whitespace-nowrap flex-shrink-0"
+                title="Copy ANSI-stripped output from current tab to clipboard"
               >
                 {copiedState ? (
                   <>
@@ -666,10 +678,11 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
               </button>
             )}
 
-            {activeTab?.isRunning && (
+            {activeTab?.isRunning && activeTab.abortable !== false && (
               <button
+                type="button"
                 onClick={() => onAbortJob(activeTab.id)}
-                className="flex items-center space-x-1 px-2 py-0.5 rounded bg-rose-500/15 dark:bg-red-500/20 text-rose-700 dark:text-red-400 hover:bg-rose-500/25 dark:hover:bg-red-500/30 text-[11px] font-mono transition-colors font-medium"
+                className="flex items-center space-x-1 px-2 py-0.5 rounded bg-rose-500/15 dark:bg-red-500/20 text-rose-700 dark:text-red-400 hover:bg-rose-500/25 dark:hover:bg-red-500/30 text-[11px] font-mono transition-colors font-medium whitespace-nowrap flex-shrink-0"
                 title="Abort Running Process"
               >
                 <StopCircle className="w-3 h-3" />
@@ -679,8 +692,9 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
 
             {activeTab && (
               <button
+                type="button"
                 onClick={() => onClearTab(activeTab.id)}
-                className="p-1 rounded hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 transition-colors"
+                className="p-1 rounded hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 transition-colors shrink-0"
                 title="Clear current tab"
               >
                 <Trash2 className="w-3 h-3" />
@@ -692,18 +706,37 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
 
       {/* Main Body Viewport */}
       {activeMainSection === 'console' ? (
-        <div
-          ref={scrollRef}
-          className="flex-1 p-4 font-mono text-xs overflow-y-auto space-y-0.5 selection:bg-emerald-500/20 dark:selection:bg-emerald-500/30 selection:text-emerald-900 dark:selection:text-emerald-200 select-text bg-slate-50 dark:bg-[#050b14]"
-        >
-          {activeTab && activeTab.lines.length > 0 ? (
-            activeTab.lines.map((line, idx) => (
-              <div key={idx} className="whitespace-pre-wrap break-all leading-relaxed">
-                {formatConsoleLine(line)}
-              </div>
-            ))
-          ) : (
-            <div className="text-slate-500 dark:text-slate-600 italic">No output in stream.</div>
+        <div className="relative flex-1 flex flex-col min-h-0 bg-slate-50 dark:bg-[#050b14]">
+          <div
+            ref={scrollRef}
+            onScroll={handleConsoleScroll}
+            className="flex-1 p-4 font-mono text-xs overflow-y-auto space-y-0.5 selection:bg-emerald-500/20 dark:selection:bg-emerald-500/30 selection:text-emerald-900 dark:selection:text-emerald-200 select-text bg-slate-50 dark:bg-[#050b14]"
+          >
+            {activeTab && activeTab.lines.length > 0 ? (
+              activeTab.lines.map((line, idx) => (
+                <div key={idx} className="whitespace-pre-wrap break-all leading-relaxed">
+                  {formatConsoleLine(line)}
+                </div>
+              ))
+            ) : (
+              <div className="text-slate-500 dark:text-slate-600 italic">No output in stream.</div>
+            )}
+          </div>
+
+          {!isPinned && activeTab && activeTab.lines.length > 0 && (
+            <button
+              type="button"
+              onClick={pinToBottom}
+              className="absolute bottom-3 right-4 z-10 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg border border-emerald-400/50 transition-all whitespace-nowrap flex-shrink-0"
+            >
+              <ArrowDownToLine className="w-3.5 h-3.5 shrink-0" />
+              <span>Pin to Bottom</span>
+              {unseenCount > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full bg-white/20 text-[10px] font-mono">
+                  {unseenCount} new
+                </span>
+              )}
+            </button>
           )}
         </div>
       ) : (

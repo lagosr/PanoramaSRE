@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { getTabFinishedDetails, TerminalTab } from '../../components/layout/SreEventsConsolePanel';
-import { formatConsoleLine } from '../../components/layout/ConsoleColorizer';
+import { formatConsoleLine, stripAnsiCodes } from '../../components/layout/ConsoleColorizer';
+import { renderToStaticMarkup } from 'react-dom/server';
 import React from 'react';
 
 describe('Console Stream Finished Details & Ordering', () => {
@@ -119,5 +120,26 @@ describe('Console Stream Finished Details & Ordering', () => {
     expect(passSummary.props.className).not.toContain('text-rose-600');
     expect(failCheck.props.className).toContain('text-rose-600');
     expect(failSummary.props.className).toContain('text-rose-600');
+  });
+
+  it('strips ANSI CSI/SGR/OSC sequences cleanly via stripAnsiCodes', () => {
+    const raw = '\x1b[32m[PASS]\x1b[0m Build \x1b[1;36mv1.2.3\x1b[0m finished with \x1b[33m0 warnings\x1b[0m\r';
+    expect(stripAnsiCodes(raw)).toBe('[PASS] Build v1.2.3 finished with 0 warnings');
+    expect(stripAnsiCodes('')).toBe('');
+  });
+
+  it('renders ANSI SGR colors cleanly without raw escape leaks and suppresses 0-count false positives', () => {
+    const ansiLine = '\x1b[36m[INFO]\x1b[0m \x1b[32mReady in 420ms\x1b[0m at \x1b[4mhttp://127.0.0.1:3002\x1b[0m';
+    const html = renderToStaticMarkup(React.createElement(React.Fragment, null, formatConsoleLine(ansiLine)));
+    expect(html).not.toContain('\x1b');
+    expect(html.replace(/<[^>]+>/g, '')).toBe('[INFO] Ready in 420ms at http://127.0.0.1:3002');
+    expect(html).toContain('text-emerald-700');
+    expect(html).toContain('text-sky-700');
+
+    const zeroCounts = renderToStaticMarkup(
+      React.createElement(React.Fragment, null, formatConsoleLine('Typecheck finished: 0 errors, 0 warnings, 0 failed'))
+    );
+    expect(zeroCounts).not.toContain('text-rose-600');
+    expect(zeroCounts).not.toContain('text-amber-700');
   });
 });

@@ -1,17 +1,23 @@
-import { DiscoveredApp, McpBridgeStatus } from '../../lib/types';
+import { useState } from 'react';
+import { DiscoveredApp, McpBridgeStatus, TerminalTab } from '../../lib/types';
 import { DevServerCard } from './DevServerCard';
 import { McpBridgeBanner } from './McpBridgeBanner';
+import { WorkStreamContainer } from '../ui/WorkStreamContainer';
 import { Play, Square, Loader2 } from 'lucide-react';
 
 interface LocalDevViewProps {
   apps: DiscoveredApp[];
   mcpStatus?: McpBridgeStatus | null;
+  terminalTabs?: TerminalTab[];
   onStart: (appId: string, workspacePath: string, devCommand: string, port?: number) => void;
   onStartAuthAndApp: (appId: string, workspacePath: string, devCommand: string, port?: number) => void;
   onStop: (appId: string, port?: number) => void;
   onRestart: (appId: string, workspacePath: string, devCommand: string, port?: number) => void;
   onStartAll: () => void;
   onStopAll: () => void;
+  onOpenInBottomConsole?: (tabId?: string) => void;
+  onAbortJob?: (id: string) => void;
+  onClearTab?: (id: string) => void;
   isActionPending?: boolean;
   actionMessage?: string | null;
 }
@@ -19,15 +25,20 @@ interface LocalDevViewProps {
 export function LocalDevView({
   apps,
   mcpStatus,
+  terminalTabs = [],
   onStart,
   onStartAuthAndApp,
   onStop,
   onRestart,
   onStartAll,
   onStopAll,
+  onOpenInBottomConsole,
+  onAbortJob,
+  onClearTab,
   isActionPending = false,
   actionMessage = null,
 }: LocalDevViewProps) {
+  const [appSlugFilter, setAppSlugFilter] = useState<string>('all');
   const runningCount = apps.filter(
     (a) => a.devServer?.status === 'RUNNING_MANAGED' || a.devServer?.status === 'RUNNING_EXTERNAL'
   ).length;
@@ -110,6 +121,51 @@ export function LocalDevView({
           />
         ))}
       </div>
+
+      {/* Position 4: Boot-Until-Ready Local Dev Stream Container */}
+      <WorkStreamContainer
+        pageScope="local-dev"
+        tabs={terminalTabs}
+        appSlugFilter={appSlugFilter}
+        title="Local Dev Startup & Stop Work Stream"
+        description="Captures boot stdout/stderr until the Next.js server reports Ready/listening (steady-state runtime logs discarded thereafter)."
+        emptyHint="Start, restart, or stop any managed dev server (via UI or MCP) to inspect startup diagnostics here."
+        headerExtra={
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setAppSlugFilter('all')}
+              className={`px-2.5 py-1 rounded-md text-[11px] font-mono font-semibold border transition-colors whitespace-nowrap flex-shrink-0 ${
+                appSlugFilter === 'all'
+                  ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/35'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-700'
+              }`}
+            >
+              All Apps
+            </button>
+            {apps.map((app) => {
+              const selected = appSlugFilter === app.manifest.appId;
+              return (
+                <button
+                  key={app.manifest.appId}
+                  type="button"
+                  onClick={() => setAppSlugFilter(app.manifest.appId)}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-mono font-semibold border transition-colors whitespace-nowrap flex-shrink-0 ${
+                    selected
+                      ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/35'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-700'
+                  }`}
+                >
+                  {app.manifest.displayName}
+                </button>
+              );
+            })}
+          </div>
+        }
+        onOpenInBottomConsole={onOpenInBottomConsole}
+        onAbortJob={onAbortJob}
+        onClearTab={onClearTab}
+      />
     </div>
   );
 }

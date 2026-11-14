@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
-import { DiscoveredApp } from '../../lib/types';
+import { useState, useEffect } from 'react';
+import { DiscoveredApp, TerminalTab } from '../../lib/types';
 import { 
   GitBranch, 
   Rocket, 
@@ -22,19 +22,13 @@ import {
   Eye,
   XCircle,
   Terminal,
-  Copy,
-  ChevronDown,
-  ChevronUp,
-  Trash2,
-  X
 } from 'lucide-react';
 import { BatchDeployModal, BatchDeployOptions } from './BatchDeployModal';
 import { CustomSelect } from '../ui/CustomSelect';
 import { formatLocalDateTime, formatRelativeTime } from '../../lib/formatters';
-import { TerminalTab } from '../layout/SreTerminalDrawer';
 import { ReleaseCompositionDrawer } from '../hud/ReleaseCompositionDrawer';
 import { BlastRadiusBadge } from '../ui/BlastRadiusBadge';
-import { formatConsoleLine } from '../layout/ConsoleColorizer';
+import { WorkStreamContainer } from '../ui/WorkStreamContainer';
 import {
   resolveActiveBuildTelemetry,
   evaluateBuildHealthBadge,
@@ -49,7 +43,9 @@ interface ReleasePipelineViewProps {
   trackedDeployJobIds?: Record<string, string>;
   onTrackDeployJob?: (slug: string, jobId: string) => void;
   onDismissDeployJob?: (slug: string) => void;
+  onOpenInBottomConsole?: (jobId?: string) => void;
   onOpenInConsoleDrawer?: (jobId: string) => void;
+  onAbortJob?: (jobId: string) => void;
   onCloseTab?: (id: string) => void;
   onClearTab?: (id: string) => void;
   onTriggerDeploy: (app: DiscoveredApp, bump: string, allowDirty: boolean) => void;
@@ -67,8 +63,9 @@ export function ReleasePipelineView({
   trackedDeployJobIds,
   onTrackDeployJob,
   onDismissDeployJob,
+  onOpenInBottomConsole,
   onOpenInConsoleDrawer,
-  onCloseTab,
+  onAbortJob,
   onClearTab,
   onTriggerDeploy,
   onTriggerDeployAll,
@@ -83,12 +80,7 @@ export function ReleasePipelineView({
   const [rollbackTag, setRollbackTag] = useState<string>('');
   const [showDeployAllModal, setShowDeployAllModal] = useState<boolean>(false);
   const [inspectApp, setInspectApp] = useState<DiscoveredApp | null>(null);
-
-  const [copied, setCopied] = useState<boolean>(false);
-  const [isStreamCollapsed, setIsStreamCollapsed] = useState<boolean>(false);
-  const [showLogTerminal, setShowLogTerminal] = useState<boolean>(true);
-  const terminalScrollRef = useRef<HTMLDivElement>(null);
-  const isStickToBottomRef = useRef<boolean>(true);
+  const [streamExpandRequest, setStreamExpandRequest] = useState<{ tabId?: string; nonce: number } | null>(null);
 
   // Helper to detect if an app has an active running deployment/rollback job
   const getAppDeployJob = (slug: string) => {
@@ -309,50 +301,10 @@ export function ReleasePipelineView({
 
   const currentStageInfo = getDeploymentStage(displayedDeployJob);
 
-  // Reset stick-to-bottom when switching to a different deployment stream
-  useEffect(() => {
-    isStickToBottomRef.current = true;
-  }, [displayedDeployJob?.id]);
-
-  // Auto-scroll terminal log internally when stick-to-bottom is enabled and lines arrive or job completes
-  useEffect(() => {
-    if (!isStreamCollapsed && showLogTerminal && displayedDeployJob && isStickToBottomRef.current) {
-      const el = terminalScrollRef.current;
-      if (el) {
-        el.scrollTop = el.scrollHeight;
-      }
-    }
-  }, [
-    displayedDeployJob?.id,
-    displayedDeployJob?.lines?.length,
-    displayedDeployJob?.isRunning,
-    isStreamCollapsed,
-    showLogTerminal,
-  ]);
-
-  const handleCopyLogs = async () => {
-    if (!displayedDeployJob?.lines || displayedDeployJob.lines.length === 0) return;
-    try {
-      await navigator.clipboard.writeText(displayedDeployJob.lines.join('\n'));
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      console.error('Failed to copy deployment logs to clipboard:', err);
-    }
-  };
-
-  const handleClearDisplayedJob = () => {
-    if (!displayedDeployJob || !selectedApp) return;
-    onClearTab?.(displayedDeployJob.id);
-    onCloseTab?.(displayedDeployJob.id);
-    handleDismissJob(selectedApp.manifest.slug);
-  };
-
   const handleReopenLatestStream = (slug: string, job: TerminalTab) => {
     handleSelectApp(slug);
     handleTrackJob(slug, job.id);
-    setIsStreamCollapsed(false);
-    setShowLogTerminal(true);
+    setStreamExpandRequest({ tabId: job.id, nonce: Date.now() });
   };
 
   // Candidate rollback tags: derive from git candidates, known release info, and local head
@@ -616,281 +568,7 @@ export function ReleasePipelineView({
 
       {selectedApp && (
         <div className="space-y-6">
-          {/* Deployment Pipeline Progress & Live Stream Container */}
-          {displayedDeployJob && (
-            <div
-              className={`rounded-2xl border shadow-xl overflow-hidden transition-all animate-in fade-in duration-300 ${
-                currentStageInfo?.isFailed
-                  ? 'border-rose-500/40 bg-white dark:bg-slate-900'
-                  : currentStageInfo?.isFinished
-                  ? 'border-emerald-500/40 bg-white dark:bg-slate-900'
-                  : 'border-amber-500/40 bg-white dark:bg-slate-900'
-              }`}
-            >
-              {/* Header Bar */}
-              <div className="p-4 sm:p-5 border-b border-slate-100 dark:border-slate-800/80 bg-slate-50/80 dark:bg-slate-950/60 flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-3.5">
-                  <div
-                    className={`w-10 h-10 rounded-xl border flex items-center justify-center shrink-0 ${
-                      currentStageInfo?.isFailed
-                        ? 'bg-rose-500/15 border-rose-500/30 text-rose-500 shadow-[0_0_12px_rgba(244,63,94,0.15)]'
-                        : currentStageInfo?.isFinished
-                        ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.15)]'
-                        : 'bg-amber-500/15 border-amber-500/30 text-amber-400 shadow-[0_0_12px_rgba(245,158,11,0.15)]'
-                    }`}
-                  >
-                    {currentStageInfo?.isFailed ? (
-                      <XCircle className="w-5 h-5 text-rose-400" />
-                    ) : currentStageInfo?.isFinished ? (
-                      <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-                    ) : (
-                      <Loader2 className="w-5 h-5 animate-spin text-amber-400" />
-                    )}
-                  </div>
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h4 className="text-sm sm:text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                        <span>
-                          {displayedDeployJob.isRunning
-                            ? 'Release Pipeline in Progress'
-                            : currentStageInfo?.isFinished
-                            ? 'Release Pipeline Completed'
-                            : 'Release Pipeline Failed'}
-                        </span>
-                        <span className="text-xs font-mono font-normal text-slate-400">
-                          ({selectedApp.manifest.displayName})
-                        </span>
-                      </h4>
-                      <span
-                        className={`px-2.5 py-0.5 rounded-full text-[11px] font-mono font-bold border flex items-center gap-1.5 ${
-                          currentStageInfo?.isFailed
-                            ? 'bg-rose-500/20 text-rose-700 dark:text-rose-300 border-rose-500/40'
-                            : currentStageInfo?.isFinished
-                            ? 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border-emerald-500/40'
-                            : 'bg-amber-500/20 text-amber-800 dark:text-amber-300 border-amber-500/40 animate-pulse'
-                        }`}
-                      >
-                        {displayedDeployJob.isRunning && (
-                          <span className="w-2 h-2 rounded-full bg-amber-400" />
-                        )}
-                        {currentStageInfo?.isFailed
-                          ? `FAILED (EXIT ${displayedDeployJob.exitCode ?? 1})`
-                          : currentStageInfo?.isFinished
-                          ? 'COMPLETED (EXIT 0)'
-                          : `STAGE ${currentStageInfo?.stage || 1} OF 6`}
-                      </span>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2 mt-1">
-                      <p className="text-xs text-slate-600 dark:text-slate-300">
-                        Stage:{' '}
-                        <span className="font-semibold text-emerald-600 dark:text-emerald-400">
-                          {currentStageInfo?.label || 'Executing Pipeline'}
-                        </span>
-                      </p>
-                      {currentStageInfo?.subStep && (
-                        <span
-                          className={`px-2 py-0.5 rounded text-[10px] font-mono font-semibold border ${
-                            currentStageInfo.isFinished
-                              ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
-                              : currentStageInfo.isFailed
-                              ? 'bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/30'
-                              : 'bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-500/30'
-                          }`}
-                        >
-                          {currentStageInfo.subStep}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Action Toolbar Buttons */}
-                <div className="flex flex-wrap items-center gap-2">
-                  {/* 1. Copy Output */}
-                  <button
-                    type="button"
-                    onClick={handleCopyLogs}
-                    disabled={!displayedDeployJob.lines || displayedDeployJob.lines.length === 0}
-                    className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700/80 transition-colors flex items-center gap-1.5 shadow-xs disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap flex-shrink-0"
-                    title="Copy all captured console output to clipboard"
-                  >
-                    {copied ? (
-                      <>
-                        <Check className="w-3.5 h-3.5 text-emerald-500" />
-                        <span className="text-emerald-500">Copied!</span>
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400" />
-                        <span>Copy Output</span>
-                      </>
-                    )}
-                  </button>
-
-                  {/* 2. Hide Console / Show Console toggle */}
-                  <button
-                    type="button"
-                    onClick={() => setShowLogTerminal(!showLogTerminal)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
-                      showLogTerminal
-                        ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
-                        : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
-                    }`}
-                    title={showLogTerminal ? 'Hide Terminal Stream' : 'Show Terminal Stream'}
-                  >
-                    <Terminal className="w-3.5 h-3.5" />
-                    <span>{showLogTerminal ? 'Hide Console' : 'Show Console'}</span>
-                  </button>
-
-                  {/* 3. Bottom Console button */}
-                  {onOpenInConsoleDrawer && (
-                    <button
-                      type="button"
-                      onClick={() => onOpenInConsoleDrawer(displayedDeployJob.id)}
-                      className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700/80 transition-colors flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-                      title="Open and focus this stream in the bottom global SRE Console Drawer"
-                    >
-                      <Terminal className="w-3.5 h-3.5 text-cyan-400" />
-                      <span>Bottom Console</span>
-                    </button>
-                  )}
-
-                  {/* 4. Collapse / Expand chevron */}
-                  <button
-                    type="button"
-                    onClick={() => setIsStreamCollapsed(!isStreamCollapsed)}
-                    className="p-1.5 rounded-lg text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-colors whitespace-nowrap flex-shrink-0"
-                    title={isStreamCollapsed ? 'Expand Details' : 'Collapse Details'}
-                  >
-                    {isStreamCollapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
-                  </button>
-
-                  {/* 5. Clear Stream trash button */}
-                  {(onClearTab || onCloseTab) && (
-                    <button
-                      type="button"
-                      onClick={handleClearDisplayedJob}
-                      className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-500/10 transition-colors whitespace-nowrap flex-shrink-0"
-                      title="Clear & Remove Stream"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  )}
-
-                  {/* 6. Dismiss (X) button */}
-                  <button
-                    type="button"
-                    onClick={() => handleDismissJob(selectedApp.manifest.slug)}
-                    className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-colors whitespace-nowrap flex-shrink-0"
-                    title="Dismiss Progress Panel"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-
-              {/* Body (when !isStreamCollapsed) */}
-              {!isStreamCollapsed && (
-                <div className="p-4 sm:p-5 space-y-4">
-                  {/* 6-Stage Visual Stepper */}
-                  <div className="grid grid-cols-2 md:grid-cols-6 gap-2 text-xs font-mono">
-                    {[
-                      { num: 1, name: 'SemVer & Git', key: 'semver' },
-                      { num: 2, name: 'Docker Buildx', key: 'build' },
-                      { num: 3, name: 'SSH & SCP', key: 'scp' },
-                      { num: 4, name: 'Rolling Swap', key: 'swap' },
-                      { num: 5, name: 'Health Probe', key: 'health' },
-                      { num: 6, name: 'Manifest Sync', key: 'sync' },
-                    ].map((st) => {
-                      const currentStageNum = currentStageInfo?.stage || 1;
-                      const isDone = currentStageInfo?.isFinished || currentStageNum > st.num;
-                      const isActive = !currentStageInfo?.isFinished && !currentStageInfo?.isFailed && currentStageNum === st.num;
-                      const isFailed = currentStageInfo?.isFailed && currentStageNum === st.num;
-
-                      return (
-                        <div
-                          key={st.num}
-                          className={`p-2.5 rounded-lg border flex flex-col gap-1 transition-all ${
-                            isFailed
-                              ? 'bg-rose-500/10 border-rose-500/50 text-rose-600 dark:text-rose-300'
-                              : isActive
-                              ? 'bg-amber-500/15 border-amber-500/50 text-amber-700 dark:text-amber-300 shadow-[0_0_10px_rgba(245,158,11,0.2)]'
-                              : isDone
-                              ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-700 dark:text-emerald-400'
-                              : 'bg-slate-50 dark:bg-slate-950/40 border-slate-200 dark:border-slate-800 text-slate-500'
-                          }`}
-                        >
-                          <div className="flex items-center gap-1.5">
-                            {isFailed ? (
-                              <XCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-                            ) : isActive ? (
-                              <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400 shrink-0" />
-                            ) : isDone ? (
-                              <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                            ) : (
-                              <span className="w-3.5 h-3.5 rounded-full border border-slate-400 dark:border-slate-700 flex items-center justify-center text-[10px] shrink-0">
-                                {st.num}
-                              </span>
-                            )}
-                            <span className="truncate font-semibold">{st.name}</span>
-                          </div>
-                          {isActive && currentStageInfo?.subStep && (
-                            <span className="text-[10px] text-amber-600 dark:text-amber-400/90 truncate font-mono">
-                              {currentStageInfo.subStep}
-                            </span>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  {/* Collapsible Live Deployment Stream terminal window */}
-                  {showLogTerminal && (
-                    <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#050b14] overflow-hidden shadow-inner">
-                      <div className="px-3 py-2 bg-slate-100 dark:bg-slate-900/90 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between text-slate-700 dark:text-slate-400 text-[11px] font-mono">
-                        <span className="flex items-center gap-1.5">
-                          <Terminal className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                          <span>Live Deployment Stream</span>
-                          {displayedDeployJob.isRunning && (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-800 dark:text-amber-300 text-[10px] border border-amber-500/30">
-                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 dark:bg-amber-400 animate-ping" />
-                              LIVE
-                            </span>
-                          )}
-                        </span>
-                        <div className="flex items-center gap-3">
-                          <span className="text-[10px] text-slate-500">
-                            {displayedDeployJob.lines.length} lines captured
-                          </span>
-                        </div>
-                      </div>
-
-                      <div
-                        ref={terminalScrollRef}
-                        onScroll={(e) => {
-                          const el = e.currentTarget;
-                          isStickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 40;
-                        }}
-                        className="max-h-80 min-h-[180px] overflow-y-auto bg-slate-50 dark:bg-[#050b14] p-4 font-mono text-xs space-y-0.5 select-text"
-                      >
-                        {displayedDeployJob.lines.length > 0 ? (
-                          displayedDeployJob.lines.map((line, idx) => (
-                            <div key={idx}>{formatConsoleLine(line)}</div>
-                          ))
-                        ) : (
-                          <div className="text-slate-500 italic">
-                            Waiting for deployment output stream...
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Active Production Deployment Card */}
+          {/* Active Production Deployment Card (Position 3) */}
           <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800/80 pb-4 mb-4">
               <div className="flex items-center gap-2.5">
@@ -987,245 +665,361 @@ export function ReleasePipelineView({
             )}
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-2 space-y-6">
-              {/* Build Efficiency & Telemetry Card */}
-              <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-sm space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800/80 pb-3.5">
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm flex items-center gap-2">
-                        <Container className="w-4 h-4 text-emerald-500 dark:text-emerald-400" />
-                        <span>Build Efficiency & Telemetry</span>
-                      </h3>
-                      <span
-                        className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold border ${
-                          selectedHealthBadge.tone === 'emerald'
-                            ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
-                            : selectedHealthBadge.tone === 'amber'
-                            ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/40'
-                            : selectedHealthBadge.tone === 'rose'
-                            ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/40'
-                            : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700'
-                        }`}
-                      >
-                        {selectedHealthBadge.label}
-                      </span>
-                      <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-100 dark:bg-slate-800/90 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
-                        {selectedResolvedTelemetry.source === 'LIVE_PROD'
-                          ? 'LIVE PROD'
-                          : selectedResolvedTelemetry.source === 'LOCAL_MANIFEST'
-                          ? 'LOCAL MANIFEST'
-                          : 'TARGETS ARMED'}
+          {/* Build Efficiency & Telemetry Card (Position 4 - Full Width) */}
+          <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-sm space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800/80 pb-3.5">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm flex items-center gap-2">
+                    <Container className="w-4 h-4 text-emerald-500 dark:text-emerald-400" />
+                    <span>Build Efficiency & Telemetry</span>
+                  </h3>
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold border ${
+                      selectedHealthBadge.tone === 'emerald'
+                        ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
+                        : selectedHealthBadge.tone === 'amber'
+                        ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/40'
+                        : selectedHealthBadge.tone === 'rose'
+                        ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/40'
+                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700'
+                    }`}
+                  >
+                    {selectedHealthBadge.label}
+                  </span>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-100 dark:bg-slate-800/90 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                    {selectedResolvedTelemetry.source === 'LIVE_PROD'
+                      ? 'LIVE PROD'
+                      : selectedResolvedTelemetry.source === 'LOCAL_MANIFEST'
+                      ? 'LOCAL MANIFEST'
+                      : 'TARGETS ARMED'}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 font-mono mt-1">
+                  Profile: {selectedTelemetry?.profile || 'nextjs-standalone'} • Warm Target: ≤{selectedTelemetryTargets.targetWarmSec}s • Cold Target: ≤{selectedTelemetryTargets.targetColdSec}s • Ceiling: {selectedTelemetryTargets.maxCeilingSec}s
+                </p>
+              </div>
+            </div>
+
+            {selectedTelemetry ? (
+              <>
+                {/* 4 KPI Tiles */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono">
+                  <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
+                    <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">
+                      Total Build vs Target
+                    </span>
+                    <div className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                      {selectedTelemetry.total_duration_sec}s{' '}
+                      <span className="text-xs font-normal text-slate-400">
+                        / ≤{selectedTelemetryTargets.activeTargetSec}s
                       </span>
                     </div>
-                    <p className="text-xs text-slate-500 font-mono mt-1">
-                      Profile: {selectedTelemetry?.profile || 'nextjs-standalone'} • Warm Target: ≤{selectedTelemetryTargets.targetWarmSec}s • Cold Target: ≤{selectedTelemetryTargets.targetColdSec}s • Ceiling: {selectedTelemetryTargets.maxCeilingSec}s
-                    </p>
+                    <span className="text-[10px] text-slate-500 block mt-1 uppercase">
+                      Posture: {selectedTelemetry.cache_posture}
+                    </span>
+                  </div>
+
+                  <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
+                    <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">
+                      Baseline Delta (+{selectedTelemetryTargets.regressionThresholdPct}% Gate)
+                    </span>
+                    <div
+                      className={`text-sm font-bold ${
+                        typeof selectedTelemetry.regression_pct === 'number' &&
+                        selectedTelemetry.regression_pct > selectedTelemetryTargets.regressionThresholdPct
+                          ? 'text-amber-600 dark:text-amber-400'
+                          : 'text-slate-900 dark:text-slate-100'
+                      }`}
+                    >
+                      {typeof selectedTelemetry.regression_pct === 'number'
+                        ? `${selectedTelemetry.regression_pct > 0 ? '+' : ''}${selectedTelemetry.regression_pct}%`
+                        : 'Baseline Set'}
+                    </div>
+                    <span className="text-[10px] text-slate-500 block mt-1 truncate">
+                      {typeof selectedTelemetry.baseline_duration_sec === 'number'
+                        ? `Prev: ${selectedTelemetry.baseline_duration_sec}s (${selectedTelemetry.delta_sec && selectedTelemetry.delta_sec > 0 ? '+' : ''}${selectedTelemetry.delta_sec ?? 0}s)`
+                        : 'Initial posture reference'}
+                    </span>
+                  </div>
+
+                  <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
+                    <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">
+                      Deps Cache & ELF Gate
+                    </span>
+                    <div className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                      <span
+                        className={
+                          selectedTelemetry.deps_cache_hit
+                            ? 'text-emerald-600 dark:text-emerald-400'
+                            : 'text-amber-600 dark:text-amber-400'
+                        }
+                      >
+                        {selectedTelemetry.deps_cache_hit ? 'CACHED' : `${selectedTelemetry.deps_stage_sec}s`}
+                      </span>
+                      <span className="text-slate-400"> • </span>
+                      <span>{selectedTelemetry.elf_verified_count} ELF</span>
+                    </div>
+                    <span className="text-[10px] text-slate-500 block mt-1 truncate">
+                      aarch64 (0xb7) verified
+                    </span>
+                  </div>
+
+                  <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
+                    <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">
+                      Context & Pre-Validated Types
+                    </span>
+                    <div className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                      {selectedTelemetry.context_transfer_kb} KB
+                    </div>
+                    <span className="text-[10px] text-slate-500 block mt-1 truncate">
+                      Types: {selectedTelemetry.types_prevalidated ? `Host (${selectedTelemetry.host_typecheck_sec}s)` : 'In-Container'}
+                    </span>
                   </div>
                 </div>
 
-                {selectedTelemetry ? (
-                  <>
-                    {/* 4 KPI Tiles */}
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono">
-                      <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
-                        <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">
-                          Total Build vs Target
-                        </span>
-                        <div className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                          {selectedTelemetry.total_duration_sec}s{' '}
-                          <span className="text-xs font-normal text-slate-400">
-                            / ≤{selectedTelemetryTargets.activeTargetSec}s
-                          </span>
-                        </div>
-                        <span className="text-[10px] text-slate-500 block mt-1 uppercase">
-                          Posture: {selectedTelemetry.cache_posture}
-                        </span>
-                      </div>
+                {/* Multi-Segment Proportional Stage Progress Bar */}
+                {(() => {
+                  const hostTsc = Math.max(0, selectedTelemetry.host_typecheck_sec || 0);
+                  const depsSec = Math.max(0, selectedTelemetry.deps_stage_sec || 0);
+                  const nextSec = Math.max(0, selectedTelemetry.next_build_sec || 0);
+                  const tailSec = Math.max(
+                    0,
+                    (selectedTelemetry.arm64_natives_sec || 0) + (selectedTelemetry.export_tar_sec || 0)
+                  );
+                  const sumSec = Math.max(0.1, hostTsc + depsSec + nextSec + tailSec);
+                  const pctHost = Math.round((hostTsc / sumSec) * 100);
+                  const pctDeps = Math.round((depsSec / sumSec) * 100);
+                  const pctNext = Math.round((nextSec / sumSec) * 100);
+                  const pctTail = Math.max(0, 100 - pctHost - pctDeps - pctNext);
 
-                      <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
-                        <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">
-                          Baseline Delta (+{selectedTelemetryTargets.regressionThresholdPct}% Gate)
-                        </span>
-                        <div
-                          className={`text-sm font-bold ${
-                            typeof selectedTelemetry.regression_pct === 'number' &&
-                            selectedTelemetry.regression_pct > selectedTelemetryTargets.regressionThresholdPct
-                              ? 'text-amber-600 dark:text-amber-400'
-                              : 'text-slate-900 dark:text-slate-100'
-                          }`}
-                        >
-                          {typeof selectedTelemetry.regression_pct === 'number'
-                            ? `${selectedTelemetry.regression_pct > 0 ? '+' : ''}${selectedTelemetry.regression_pct}%`
-                            : 'Baseline Set'}
-                        </div>
-                        <span className="text-[10px] text-slate-500 block mt-1 truncate">
-                          {typeof selectedTelemetry.baseline_duration_sec === 'number'
-                            ? `Prev: ${selectedTelemetry.baseline_duration_sec}s (${selectedTelemetry.delta_sec && selectedTelemetry.delta_sec > 0 ? '+' : ''}${selectedTelemetry.delta_sec ?? 0}s)`
-                            : 'Initial posture reference'}
-                        </span>
+                  return (
+                    <div className="space-y-2">
+                      <div className="h-2.5 w-full rounded-full bg-slate-100 dark:bg-slate-950 overflow-hidden flex border border-slate-200 dark:border-slate-800">
+                        {pctHost > 0 && (
+                          <div
+                            style={{ width: `${pctHost}%` }}
+                            className="bg-cyan-500 dark:bg-cyan-400 h-full"
+                            title={`Host Typecheck (tsc): ${hostTsc}s`}
+                          />
+                        )}
+                        {pctDeps > 0 && (
+                          <div
+                            style={{ width: `${pctDeps}%` }}
+                            className="bg-amber-500 dark:bg-amber-400 h-full"
+                            title={`Dependencies (npm ci): ${depsSec}s`}
+                          />
+                        )}
+                        {pctNext > 0 && (
+                          <div
+                            style={{ width: `${pctNext}%` }}
+                            className="bg-emerald-500 dark:bg-emerald-400 h-full"
+                            title={`Next.js Build (amd64): ${nextSec}s`}
+                          />
+                        )}
+                        {pctTail > 0 && (
+                          <div
+                            style={{ width: `${pctTail}%` }}
+                            className="bg-indigo-500 dark:bg-indigo-400 h-full"
+                            title={`ARM64 Natives & Export: ${Math.round(tailSec * 10) / 10}s`}
+                          />
+                        )}
                       </div>
-
-                      <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
-                        <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">
-                          Deps Cache & ELF Gate
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                        <span className="flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-full bg-cyan-500 dark:bg-cyan-400" />
+                          Host tsc: {hostTsc}s
                         </span>
-                        <div className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                          <span
-                            className={
-                              selectedTelemetry.deps_cache_hit
-                                ? 'text-emerald-600 dark:text-emerald-400'
-                                : 'text-amber-600 dark:text-amber-400'
-                            }
-                          >
-                            {selectedTelemetry.deps_cache_hit ? 'CACHED' : `${selectedTelemetry.deps_stage_sec}s`}
-                          </span>
-                          <span className="text-slate-400"> • </span>
-                          <span>{selectedTelemetry.elf_verified_count} ELF</span>
-                        </div>
-                        <span className="text-[10px] text-slate-500 block mt-1 truncate">
-                          aarch64 (0xb7) verified
+                        <span className="flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-full bg-amber-500 dark:bg-amber-400" />
+                          Deps (npm ci): {selectedTelemetry.deps_cache_hit ? '0s (CACHED)' : `${depsSec}s`}
                         </span>
-                      </div>
-
-                      <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
-                        <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">
-                          Context & Pre-Validated Types
+                        <span className="flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-full bg-emerald-500 dark:bg-emerald-400" />
+                          Next.js Build: {nextSec}s (compile {selectedTelemetry.turbopack_compile_sec}s)
                         </span>
-                        <div className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                          {selectedTelemetry.context_transfer_kb} KB
-                        </div>
-                        <span className="text-[10px] text-slate-500 block mt-1 truncate">
-                          Types: {selectedTelemetry.types_prevalidated ? `Host (${selectedTelemetry.host_typecheck_sec}s)` : 'In-Container'}
+                        <span className="flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-full bg-indigo-500 dark:bg-indigo-400" />
+                          ARM64 Natives & Export: {Math.round(tailSec * 10) / 10}s
                         </span>
                       </div>
                     </div>
+                  );
+                })()}
 
-                    {/* Multi-Segment Proportional Stage Progress Bar */}
-                    {(() => {
-                      const hostTsc = Math.max(0, selectedTelemetry.host_typecheck_sec || 0);
-                      const depsSec = Math.max(0, selectedTelemetry.deps_stage_sec || 0);
-                      const nextSec = Math.max(0, selectedTelemetry.next_build_sec || 0);
-                      const tailSec = Math.max(
-                        0,
-                        (selectedTelemetry.arm64_natives_sec || 0) + (selectedTelemetry.export_tar_sec || 0)
-                      );
-                      const sumSec = Math.max(0.1, hostTsc + depsSec + nextSec + tailSec);
-                      const pctHost = Math.round((hostTsc / sumSec) * 100);
-                      const pctDeps = Math.round((depsSec / sumSec) * 100);
-                      const pctNext = Math.round((nextSec / sumSec) * 100);
-                      const pctTail = Math.max(0, 100 - pctHost - pctDeps - pctNext);
-
-                      return (
-                        <div className="space-y-2">
-                          <div className="h-2.5 w-full rounded-full bg-slate-100 dark:bg-slate-950 overflow-hidden flex border border-slate-200 dark:border-slate-800">
-                            {pctHost > 0 && (
-                              <div
-                                style={{ width: `${pctHost}%` }}
-                                className="bg-cyan-500 dark:bg-cyan-400 h-full"
-                                title={`Host Typecheck (tsc): ${hostTsc}s`}
-                              />
-                            )}
-                            {pctDeps > 0 && (
-                              <div
-                                style={{ width: `${pctDeps}%` }}
-                                className="bg-amber-500 dark:bg-amber-400 h-full"
-                                title={`Dependencies (npm ci): ${depsSec}s`}
-                              />
-                            )}
-                            {pctNext > 0 && (
-                              <div
-                                style={{ width: `${pctNext}%` }}
-                                className="bg-emerald-500 dark:bg-emerald-400 h-full"
-                                title={`Next.js Build (amd64): ${nextSec}s`}
-                              />
-                            )}
-                            {pctTail > 0 && (
-                              <div
-                                style={{ width: `${pctTail}%` }}
-                                className="bg-indigo-500 dark:bg-indigo-400 h-full"
-                                title={`ARM64 Natives & Export: ${Math.round(tailSec * 10) / 10}s`}
-                              />
-                            )}
-                          </div>
-                          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-slate-500 dark:text-slate-400">
-                            <span className="flex items-center gap-1.5">
-                              <span className="w-2 h-2 rounded-full bg-cyan-500 dark:bg-cyan-400" />
-                              Host tsc: {hostTsc}s
-                            </span>
-                            <span className="flex items-center gap-1.5">
-                              <span className="w-2 h-2 rounded-full bg-amber-500 dark:bg-amber-400" />
-                              Deps (npm ci): {selectedTelemetry.deps_cache_hit ? '0s (CACHED)' : `${depsSec}s`}
-                            </span>
-                            <span className="flex items-center gap-1.5">
-                              <span className="w-2 h-2 rounded-full bg-emerald-500 dark:bg-emerald-400" />
-                              Next.js Build: {nextSec}s (compile {selectedTelemetry.turbopack_compile_sec}s)
-                            </span>
-                            <span className="flex items-center gap-1.5">
-                              <span className="w-2 h-2 rounded-full bg-indigo-500 dark:bg-indigo-400" />
-                              ARM64 Natives & Export: {Math.round(tailSec * 10) / 10}s
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })()}
-
-                    {/* High-Contrast Build Regression & Budget Warnings Banner */}
-                    {selectedHealthBadge.warnings.length > 0 && (
-                      <div
-                        className={`p-3.5 rounded-lg border text-xs font-mono space-y-1.5 ${
-                          selectedHealthBadge.tone === 'rose'
-                            ? 'bg-rose-500/10 border-rose-500/30 text-rose-700 dark:text-rose-300'
-                            : 'bg-amber-500/10 border-amber-500/30 text-amber-800 dark:text-amber-300'
-                        }`}
-                      >
-                        <div className="flex items-center gap-1.5 font-bold">
-                          <AlertTriangle className="w-4 h-4 shrink-0" />
-                          <span>Build Regression & Budget Warnings ({selectedHealthBadge.warnings.length})</span>
-                        </div>
-                        <ul className="list-disc list-inside space-y-0.5 text-[11px]">
-                          {selectedHealthBadge.warnings.map((w, i) => (
-                            <li key={i}>{w}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono">
-                    <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
-                      <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">Warm Build Target</span>
-                      <span className="text-sm font-bold text-emerald-600 dark:text-emerald-400">
-                        ≤{selectedTelemetryTargets.targetWarmSec}s
-                      </span>
-                      <span className="text-[10px] text-slate-500 block mt-1">Cached npm + .next/cache</span>
+                {/* High-Contrast Build Regression & Budget Warnings Banner */}
+                {selectedHealthBadge.warnings.length > 0 && (
+                  <div
+                    className={`p-3.5 rounded-lg border text-xs font-mono space-y-1.5 ${
+                      selectedHealthBadge.tone === 'rose'
+                        ? 'bg-rose-500/10 border-rose-500/30 text-rose-700 dark:text-rose-300'
+                        : 'bg-amber-500/10 border-amber-500/30 text-amber-800 dark:text-amber-300'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 font-bold">
+                      <AlertTriangle className="w-4 h-4 shrink-0" />
+                      <span>Build Regression & Budget Warnings ({selectedHealthBadge.warnings.length})</span>
                     </div>
-                    <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
-                      <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">Cold Build Target</span>
-                      <span className="text-sm font-bold text-cyan-600 dark:text-cyan-400">
-                        ≤{selectedTelemetryTargets.targetColdSec}s
-                      </span>
-                      <span className="text-[10px] text-slate-500 block mt-1">Lockfile updated</span>
-                    </div>
-                    <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
-                      <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">Regression Gate</span>
-                      <span className="text-sm font-bold text-amber-600 dark:text-amber-400">
-                        +{selectedTelemetryTargets.regressionThresholdPct}%
-                      </span>
-                      <span className="text-[10px] text-slate-500 block mt-1">Ceiling: {selectedTelemetryTargets.maxCeilingSec}s</span>
-                    </div>
-                    <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
-                      <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">Context Budget</span>
-                      <span className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                        ≤{selectedTelemetryTargets.maxContextKB} KB
-                      </span>
-                      <span className="text-[10px] text-slate-500 block mt-1">ELF 0xb7 gate active</span>
-                    </div>
+                    <ul className="list-disc list-inside space-y-0.5 text-[11px]">
+                      {selectedHealthBadge.warnings.map((w, i) => (
+                        <li key={i}>{w}</li>
+                      ))}
+                    </ul>
                   </div>
                 )}
+              </>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono">
+                <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
+                  <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">Warm Build Target</span>
+                  <span className="text-sm font-bold text-emerald-600 dark:text-emerald-400">
+                    ≤{selectedTelemetryTargets.targetWarmSec}s
+                  </span>
+                  <span className="text-[10px] text-slate-500 block mt-1">Cached npm + .next/cache</span>
+                </div>
+                <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
+                  <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">Cold Build Target</span>
+                  <span className="text-sm font-bold text-cyan-600 dark:text-cyan-400">
+                    ≤{selectedTelemetryTargets.targetColdSec}s
+                  </span>
+                  <span className="text-[10px] text-slate-500 block mt-1">Lockfile updated</span>
+                </div>
+                <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
+                  <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">Regression Gate</span>
+                  <span className="text-sm font-bold text-amber-600 dark:text-amber-400">
+                    +{selectedTelemetryTargets.regressionThresholdPct}%
+                  </span>
+                  <span className="text-[10px] text-slate-500 block mt-1">Ceiling: {selectedTelemetryTargets.maxCeilingSec}s</span>
+                </div>
+                <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
+                  <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">Context Budget</span>
+                  <span className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                    ≤{selectedTelemetryTargets.maxContextKB} KB
+                  </span>
+                  <span className="text-[10px] text-slate-500 block mt-1">ELF 0xb7 gate active</span>
+                </div>
               </div>
+            )}
+          </div>
 
+          {/* Position 5: Standardized Work Stream Container (below Build Efficiency & Telemetry) */}
+          <WorkStreamContainer
+            pageScope="releases"
+            appSlugFilter={selectedApp.manifest.slug}
+            title={`Release & Rollback Stream (${selectedApp.manifest.displayName})`}
+            description="Multi-stage Docker Buildx, SSH/SCP artifact staging, rolling container swap, health verification, and IdP manifest sync."
+            tabs={terminalTabs}
+            expandRequest={streamExpandRequest}
+            onOpenInBottomConsole={
+              onOpenInBottomConsole ??
+              (onOpenInConsoleDrawer
+                ? (tabId) => {
+                    if (tabId) onOpenInConsoleDrawer(tabId);
+                  }
+                : undefined)
+            }
+            onAbortJob={onAbortJob}
+            onClearTab={(tabId) => {
+              onClearTab?.(tabId);
+              if (displayedDeployJob?.id === tabId) {
+                handleDismissJob(selectedApp.manifest.slug);
+              }
+            }}
+            progressSlot={(activeStreamTab) => {
+              const stageTab =
+                activeStreamTab &&
+                (activeStreamTab.id.startsWith('deploy-') ||
+                  activeStreamTab.id.startsWith('rollback-'))
+                  ? activeStreamTab
+                  : !activeStreamTab
+                  ? displayedDeployJob
+                  : undefined;
+              const stageInfo = getDeploymentStage(stageTab);
+              if (!stageTab || !stageInfo) return null;
+
+              return (
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <span className="text-slate-600 dark:text-slate-300 font-medium">
+                      Stage {stageInfo.stage} of 6:{' '}
+                      <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+                        {stageInfo.label}
+                      </span>
+                    </span>
+                    {stageInfo.subStep && (
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-mono font-semibold border ${
+                          stageInfo.isFinished
+                            ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
+                            : stageInfo.isFailed
+                            ? 'bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/30'
+                            : 'bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-500/30'
+                        }`}
+                      >
+                        {stageInfo.subStep}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-2 md:grid-cols-6 gap-2 text-xs font-mono">
+                    {[
+                      { num: 1, name: 'SemVer & Git', key: 'semver' },
+                      { num: 2, name: 'Docker Buildx', key: 'build' },
+                      { num: 3, name: 'SSH & SCP', key: 'scp' },
+                      { num: 4, name: 'Rolling Swap', key: 'swap' },
+                      { num: 5, name: 'Health Probe', key: 'health' },
+                      { num: 6, name: 'Manifest Sync', key: 'sync' },
+                    ].map((st) => {
+                      const currentStageNum = stageInfo.stage || 1;
+                      const isDone = stageInfo.isFinished || currentStageNum > st.num;
+                      const isActive = !stageInfo.isFinished && !stageInfo.isFailed && currentStageNum === st.num;
+                      const isFailed = stageInfo.isFailed && currentStageNum === st.num;
+
+                      return (
+                        <div
+                          key={st.num}
+                          className={`p-2.5 rounded-lg border flex flex-col gap-1 transition-all ${
+                            isFailed
+                              ? 'bg-rose-500/10 border-rose-500/50 text-rose-600 dark:text-rose-300'
+                              : isActive
+                              ? 'bg-amber-500/15 border-amber-500/50 text-amber-700 dark:text-amber-300 shadow-[0_0_10px_rgba(245,158,11,0.2)]'
+                              : isDone
+                              ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-700 dark:text-emerald-400'
+                              : 'bg-slate-50 dark:bg-slate-950/40 border-slate-200 dark:border-slate-800 text-slate-500'
+                          }`}
+                        >
+                          <div className="flex items-center gap-1.5">
+                            {isFailed ? (
+                              <XCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                            ) : isActive ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400 shrink-0" />
+                            ) : isDone ? (
+                              <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                            ) : (
+                              <span className="w-3.5 h-3.5 rounded-full border border-slate-400 dark:border-slate-700 flex items-center justify-center text-[10px] shrink-0">
+                                {st.num}
+                              </span>
+                            )}
+                            <span className="truncate font-semibold">{st.name}</span>
+                          </div>
+                          {isActive && stageInfo.subStep && (
+                            <span className="text-[10px] text-amber-600 dark:text-amber-400/90 truncate font-mono">
+                              {stageInfo.subStep}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            }}
+            emptyHint={`Trigger Deploy or Rollback on ${selectedApp.manifest.displayName} to stream live Buildx and SSH progress.`}
+          />
+
+          {/* Position 6: Release Composition & Rollback Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="lg:col-span-2 space-y-6">
               {/* Release Composition Summary */}
               <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-sm space-y-5">
               <div className="flex items-center justify-between">

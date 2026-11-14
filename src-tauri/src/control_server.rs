@@ -760,11 +760,13 @@ pub async fn process_ipc_message(
                         Err(e) => return IpcResponse::err(&req.id, "UNSAFE_DEV_COMMAND", e),
                     };
                     if let Ok(pid) = dev_supervisor.start_app_internal(
+                        app_handle.as_ref(),
                         sre_db,
                         &app_id,
                         &auth_app.workspace_path,
                         Some(&clean_cmd),
                         Some(auth_app.manifest.port),
+                        "mcp",
                     ) {
                         started_results.push(json!({
                             "slug": auth_app.manifest.slug,
@@ -791,11 +793,13 @@ pub async fn process_ipc_message(
                         Err(e) => return IpcResponse::err(&req.id, "UNSAFE_DEV_COMMAND", e),
                     };
                     if let Ok(pid) = dev_supervisor.start_app_internal(
+                        app_handle.as_ref(),
                         sre_db,
                         &app_id,
                         &app.workspace_path,
                         Some(&clean_cmd),
                         Some(app.manifest.port),
+                        "mcp",
                     ) {
                         started_results.push(json!({
                             "slug": app.manifest.slug,
@@ -841,11 +845,13 @@ pub async fn process_ipc_message(
                             Err(e) => return IpcResponse::err(&req.id, "UNSAFE_DEV_COMMAND", e),
                         };
                         if let Ok(auth_pid) = dev_supervisor.start_app_internal(
+                            app_handle.as_ref(),
                             sre_db,
                             &auth_id,
                             &auth_app.workspace_path,
                             Some(&clean_auth_cmd),
                             Some(auth_app.manifest.port),
+                            "mcp",
                         ) {
                             started_results.push(json!({
                                 "slug": auth_app.manifest.slug,
@@ -873,11 +879,13 @@ pub async fn process_ipc_message(
                 };
 
                 match dev_supervisor.start_app_internal(
+                    app_handle.as_ref(),
                     sre_db,
                     &app_id,
                     &target_app.workspace_path,
                     Some(&clean_cmd),
                     Some(target_app.manifest.port),
+                    "mcp",
                 ) {
                     Ok(pid) => {
                         started_results.push(json!({
@@ -945,9 +953,11 @@ pub async fn process_ipc_message(
                         .clone()
                         .unwrap_or_else(|| app.manifest.slug.clone());
                     let _ = dev_supervisor.stop_app_internal(
+                        app_handle.as_ref(),
                         sre_db,
                         &app_id,
                         Some(app.manifest.port),
+                        "mcp",
                     );
                     stopped_slugs.push(app.manifest.slug.clone());
                 }
@@ -973,9 +983,11 @@ pub async fn process_ipc_message(
                     .clone()
                     .unwrap_or_else(|| target_app.manifest.slug.clone());
                 if let Err(e) = dev_supervisor.stop_app_internal(
+                    app_handle.as_ref(),
                     sre_db,
                     &app_id,
                     Some(target_app.manifest.port),
+                    "mcp",
                 ) {
                     return IpcResponse::err(&req.id, "STOP_FAILED", e);
                 }
@@ -1058,18 +1070,22 @@ pub async fn process_ipc_message(
             };
 
             let _ = dev_supervisor.stop_app_internal(
+                app_handle.as_ref(),
                 sre_db,
                 &app_id,
                 Some(target_app.manifest.port),
+                "mcp",
             );
             tokio::time::sleep(Duration::from_millis(600)).await;
 
             match dev_supervisor.start_app_internal(
+                app_handle.as_ref(),
                 sre_db,
                 &app_id,
                 &target_app.workspace_path,
                 Some(&clean_cmd),
                 Some(target_app.manifest.port),
+                "mcp",
             ) {
                 Ok(pid) => {
                     if let Ok(guard) = sre_db.lock() {

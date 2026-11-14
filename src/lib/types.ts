@@ -1,3 +1,30 @@
+export type NavSectionId =
+  | 'hud'
+  | 'local-dev'
+  | 'releases'
+  | 'topology'
+  | 'dietpi'
+  | 'edge'
+  | 'backups'
+  | 'smoke'
+  | 'settings';
+
+export type WorkStreamSource = 'ui' | 'mcp' | 'scheduled' | 'supervisor';
+
+export interface TerminalTab {
+  id: string;
+  title: string;
+  lines: string[];
+  isRunning: boolean;
+  exitCode?: number;
+  createdAt?: string;
+  finishedAt?: string;
+  pageScope?: NavSectionId;
+  source?: WorkStreamSource;
+  appSlug?: string;
+  abortable?: boolean;
+}
+
 export interface AppManifest {
   schemaVersion: number;
   appId: string;

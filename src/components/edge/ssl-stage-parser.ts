@@ -1,4 +1,4 @@
-import { TerminalTab } from '../layout/SreTerminalDrawer';
+import { TerminalTab } from '../../lib/types';
 
 export interface SslStageInfo {
   stage: number;

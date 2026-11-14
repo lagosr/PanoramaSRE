@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { buildSslCertCommand } from '../script-adapters';
 import { DomainSslDualProbe, SslFleetSummary } from '../types';
 import { getSslStageInfo } from '../../components/edge/ssl-stage-parser';
-import { TerminalTab } from '../../components/layout/SreTerminalDrawer';
+import { TerminalTab } from '../types';
 
 describe('SSL Dual-Probe & Renewal Adapters', () => {
   const toolsPath = 'C:\\Users\\rodrigo\\Documents\\AG Projects\\PanoramaDrSuite\\tools';

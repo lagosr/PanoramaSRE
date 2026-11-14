@@ -1,15 +1,41 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Sliders, Shield, Terminal, Database, Check, RefreshCw, Info, Trash2, Search, Sun, Moon, Laptop, FolderOpen } from 'lucide-react';
+import {
+  Sliders,
+  Shield,
+  Terminal,
+  Database,
+  Check,
+  RefreshCw,
+  Info,
+  Trash2,
+  Search,
+  Sun,
+  Moon,
+  Laptop,
+  FolderOpen,
+  Copy,
+  Pin,
+  ArrowDownToLine,
+} from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { CustomSelect } from '../ui/CustomSelect';
+import { WorkStreamContainer } from '../ui/WorkStreamContainer';
+import { formatConsoleLine, stripAnsiCodes } from '../layout/ConsoleColorizer';
+import { useSmartAutoScroll } from '../../hooks/useSmartAutoScroll';
 import { APP_VERSION_INFO } from '../../lib/version';
+import { TerminalTab } from '../../lib/types';
 import { useTheme } from '../../context/ThemeContext';
 
 interface SettingsViewProps {
+  terminalTabs?: TerminalTab[];
   onWorkspaceChanged?: () => void;
   securityAuditInterval?: string;
   onSecurityAuditIntervalChanged?: (interval: string) => void;
+  onOpenInBottomConsole?: (tabId?: string) => void;
+  onAbortJob?: (tabId: string) => void;
+  onClearTab?: (tabId: string) => void;
+  onEmitSettingsStream?: (title: string, lines: string[], exitCode?: number) => void;
 }
 
 interface SystemLogEntry {
@@ -24,9 +50,14 @@ interface SystemLogEntry {
 type SettingsTab = 'general' | 'ssh' | 'logs' | 'database';
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
+  terminalTabs = [],
   onWorkspaceChanged,
   securityAuditInterval: propSecurityAuditInterval,
   onSecurityAuditIntervalChanged,
+  onOpenInBottomConsole,
+  onAbortJob,
+  onClearTab,
+  onEmitSettingsStream,
 }) => {
   const { theme, resolvedTheme, setTheme } = useTheme();
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
@@ -103,6 +134,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [autoRefreshLogs, setAutoRefreshLogs] = useState<boolean>(true);
+  const [copiedLogs, setCopiedLogs] = useState<boolean>(false);
 
   const fetchLogs = useCallback(async () => {
     try {
@@ -137,8 +169,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     try {
       await invoke('clear_system_logs');
       setLogs([]);
+      onEmitSettingsStream?.('Clear SRE System Logs', [
+        '[PanoramaSRE] Clearing persisted SQLite system_logs & sre.log buffer...',
+        '[PASS] All historical system logs purged cleanly.',
+      ]);
     } catch (err) {
       console.error('Failed to clear logs:', err);
+      onEmitSettingsStream?.(
+        'Clear SRE System Logs',
+        [`[ERROR] Failed to clear system logs: ${String(err)}`],
+        1
+      );
     }
   };
 
@@ -152,11 +193,47 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     );
   });
 
+  const {
+    containerRef: logsContainerRef,
+    isPinned: isLogsPinned,
+    unseenCount: unseenLogsCount,
+    handleScroll: handleLogsScroll,
+    pinToBottom: pinLogsToBottom,
+  } = useSmartAutoScroll({
+    lineCount: filteredLogs.length,
+    isActive: activeTab === 'logs',
+    sessionKey: `settings-logs-${selectedCategory}`,
+  });
+
+  const handleCopyFilteredLogs = useCallback(async () => {
+    if (filteredLogs.length === 0) return;
+    const formatted = filteredLogs
+      .map((log) => {
+        const ts = log.created_at.slice(11, 19);
+        const msg = stripAnsiCodes(log.message);
+        const meta = log.metadata ? ` (${stripAnsiCodes(log.metadata)})` : '';
+        return `[${ts}] [${log.category}] [${log.level}] ${msg}${meta}`;
+      })
+      .join('\n');
+    try {
+      await navigator.clipboard.writeText(formatted);
+      setCopiedLogs(true);
+      setTimeout(() => setCopiedLogs(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy application logs:', err);
+    }
+  }, [filteredLogs]);
+
   const handleSave = () => {
     localStorage.setItem('panoramasre_security_audit_interval', securityAuditInterval);
     if (onSecurityAuditIntervalChanged) {
       onSecurityAuditIntervalChanged(securityAuditInterval);
     }
+    onEmitSettingsStream?.('Save SRE Governance Settings', [
+      '[PanoramaSRE] Persisting workstation governance preferences...',
+      `[INFO] Tier 1 polling interval: ${pollInterval}s | WSH audit interval: ${securityAuditInterval}m.`,
+      '[PASS] Governance settings updated.',
+    ]);
     setIsSaved(true);
     setTimeout(() => setIsSaved(false), 2000);
   };
@@ -218,7 +295,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       {/* Tab Contents */}
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
         {activeTab === 'general' && (
-          <div className="max-w-2xl space-y-6">
+          <div className="max-w-4xl space-y-6">
             {/* Appearance & Color Scheme Preference */}
             <div className="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4 shadow-sm">
               <div className="flex items-center justify-between">
@@ -424,11 +501,22 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </p>
               </div>
             </div>
+
+            <WorkStreamContainer
+              pageScope="settings"
+              title="Settings & Governance Stream"
+              description="Workspace rescan discovery, governance preference updates, and system log purge events."
+              tabs={terminalTabs}
+              onOpenInBottomConsole={onOpenInBottomConsole}
+              onAbortJob={onAbortJob}
+              onClearTab={onClearTab}
+              emptyHint="Apply a workspace path, save governance intervals, or purge logs to inspect stream output."
+            />
           </div>
         )}
 
         {activeTab === 'ssh' && (
-          <div className="max-w-2xl space-y-4">
+          <div className="max-w-4xl space-y-6">
             <div className="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-3 font-mono text-xs shadow-sm">
               <div className="text-slate-600 dark:text-slate-400 font-semibold mb-2">TARGET HOST CONNECTION</div>
               <div className="text-slate-800 dark:text-slate-300"><span className="text-slate-500">Host:</span> wsh.panoramadr.com</div>
@@ -436,6 +524,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <div className="text-slate-800 dark:text-slate-300"><span className="text-slate-500">Key:</span> C:\Users\rodrigo\.ssh\rsa-key-deployment</div>
               <div className="text-slate-800 dark:text-slate-300"><span className="text-slate-500">Key Type:</span> OpenSSH Private Key (RSA)</div>
             </div>
+
+            <WorkStreamContainer
+              pageScope="settings"
+              title="Settings & Governance Stream"
+              description="Workspace rescan discovery, governance preference updates, and system log purge events."
+              tabs={terminalTabs}
+              onOpenInBottomConsole={onOpenInBottomConsole}
+              onAbortJob={onAbortJob}
+              onClearTab={onClearTab}
+              emptyHint="Apply a workspace path, save governance intervals, or purge logs to inspect stream output."
+            />
           </div>
         )}
 
@@ -454,7 +553,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 />
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
                 <div className="w-36">
                   <CustomSelect
                     value={selectedCategory}
@@ -473,8 +572,43 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
 
                 <button
+                  type="button"
+                  onClick={handleCopyFilteredLogs}
+                  disabled={filteredLogs.length === 0}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap flex-shrink-0 cursor-pointer"
+                  title="Copy filtered application logs for debugging"
+                >
+                  {copiedLogs ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-500" />
+                      <span className="text-emerald-600 dark:text-emerald-400">Copied!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400" />
+                      <span>Copy Logs</span>
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={pinLogsToBottom}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-mono font-medium transition-colors border whitespace-nowrap flex-shrink-0 cursor-pointer ${
+                    isLogsPinned
+                      ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
+                      : 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30'
+                  }`}
+                  title={isLogsPinned ? 'Pinned to latest log tail' : 'Click to pin scroll to bottom'}
+                >
+                  <Pin className="w-3.5 h-3.5" />
+                  <span>{isLogsPinned ? 'Pinned' : 'Scroll Paused'}</span>
+                </button>
+
+                <button
+                  type="button"
                   onClick={() => setAutoRefreshLogs(!autoRefreshLogs)}
-                  className={`px-2.5 py-1.5 rounded-lg text-xs font-mono font-medium transition-colors border ${
+                  className={`px-2.5 py-1.5 rounded-lg text-xs font-mono font-medium transition-colors border whitespace-nowrap flex-shrink-0 cursor-pointer ${
                     autoRefreshLogs
                       ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
                       : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700'
@@ -485,17 +619,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </button>
 
                 <button
+                  type="button"
                   onClick={fetchLogs}
                   disabled={isLoadingLogs}
-                  className="p-1.5 rounded-lg text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                  className="p-1.5 rounded-lg text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors flex-shrink-0 cursor-pointer"
                   title="Manual Refresh"
                 >
                   <RefreshCw className={`w-4 h-4 ${isLoadingLogs ? 'animate-spin' : ''}`} />
                 </button>
 
                 <button
+                  type="button"
                   onClick={handleClearLogs}
-                  className="p-1.5 rounded-lg text-rose-500 dark:text-rose-400 hover:text-rose-600 dark:hover:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-500/10 border border-rose-200 dark:border-rose-500/20 transition-colors"
+                  className="p-1.5 rounded-lg text-rose-500 dark:text-rose-400 hover:text-rose-600 dark:hover:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-500/10 border border-rose-200 dark:border-rose-500/20 transition-colors flex-shrink-0 cursor-pointer"
                   title="Clear All Logs"
                 >
                   <Trash2 className="w-4 h-4" />
@@ -504,60 +640,82 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
 
             {/* Terminal Log Console */}
-            <div className="flex-1 bg-slate-50 dark:bg-[#050b14] border border-slate-200 dark:border-slate-800 rounded-xl p-4 font-mono text-xs overflow-y-auto min-h-[420px] max-h-[600px] space-y-1 select-text">
-              {filteredLogs.length === 0 ? (
-                <div className="text-slate-500 dark:text-slate-600 italic py-8 text-center">
-                  No log entries found. Perform actions or run commands to stream logs.
-                </div>
-              ) : (
-                filteredLogs.map((log) => {
-                  const isWarn = log.level === 'WARN';
-                  const isError = log.level === 'ERROR';
-                  return (
-                    <div key={log.id} className="leading-relaxed hover:bg-slate-200/50 dark:hover:bg-slate-900/40 px-1 rounded flex items-start gap-2">
-                      <span className="text-slate-500 dark:text-slate-500 shrink-0 text-[11px] select-none font-mono">
-                        [{log.created_at.slice(11, 19)}]
-                      </span>
-                      <span
-                        className={`text-[10px] px-1.5 py-0.2 rounded font-bold shrink-0 font-mono ${
-                          isError
-                            ? 'bg-rose-500/15 dark:bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/30'
-                            : isWarn
-                            ? 'bg-amber-500/15 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-500/30'
-                            : 'bg-emerald-500/10 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30'
-                        }`}
-                      >
-                        {log.category}
-                      </span>
-                      <span
-                        className={`break-all ${
-                          isError
-                            ? 'text-rose-700 dark:text-rose-400 font-medium'
-                            : isWarn
-                            ? 'text-amber-800 dark:text-amber-300 font-medium'
-                            : 'text-slate-800 dark:text-emerald-300 selection:bg-emerald-500/20 dark:selection:bg-emerald-500/30 selection:text-emerald-900 dark:selection:text-emerald-200'
-                        }`}
-                      >
-                        {log.message}
-                        {log.metadata && (
-                          <span className="text-slate-500 dark:text-slate-400 text-[11px] ml-2 font-mono">
-                            ({log.metadata})
-                          </span>
-                        )}
-                      </span>
-                    </div>
-                  );
-                })
+            <div className="relative flex-1 min-h-[420px] max-h-[600px] flex flex-col">
+              <div
+                ref={logsContainerRef}
+                onScroll={handleLogsScroll}
+                className="flex-1 bg-slate-50 dark:bg-[#050b14] border border-slate-200 dark:border-slate-800 rounded-xl p-4 font-mono text-xs overflow-y-auto space-y-1 select-text"
+              >
+                {filteredLogs.length === 0 ? (
+                  <div className="text-slate-500 dark:text-slate-600 italic py-8 text-center">
+                    No log entries found. Perform actions or run commands to stream logs.
+                  </div>
+                ) : (
+                  filteredLogs.map((log) => {
+                    const isWarn = log.level === 'WARN';
+                    const isError = log.level === 'ERROR';
+                    return (
+                      <div key={log.id} className="leading-relaxed hover:bg-slate-200/50 dark:hover:bg-slate-900/40 px-1 rounded flex items-start gap-2">
+                        <span className="text-slate-500 shrink-0 text-[11px] select-none font-mono">
+                          [{log.created_at.slice(11, 19)}]
+                        </span>
+                        <span
+                          className={`text-[10px] px-1.5 py-0.2 rounded font-bold shrink-0 font-mono ${
+                            isError
+                              ? 'bg-rose-500/15 dark:bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/30'
+                              : isWarn
+                              ? 'bg-amber-500/15 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-500/30'
+                              : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30'
+                          }`}
+                        >
+                          {log.category}
+                        </span>
+                        <span className="break-all">
+                          {formatConsoleLine(log.message)}
+                          {log.metadata && (
+                            <span className="text-slate-500 dark:text-slate-400 text-[11px] ml-2 font-mono">
+                              ({log.metadata})
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              {!isLogsPinned && filteredLogs.length > 0 && (
+                <button
+                  type="button"
+                  onClick={pinLogsToBottom}
+                  className="absolute bottom-3 right-4 z-10 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg transition-colors cursor-pointer"
+                >
+                  <ArrowDownToLine className="w-3.5 h-3.5" />
+                  <span>{unseenLogsCount > 0 ? `Pin to Bottom (${unseenLogsCount} new)` : 'Pin to Bottom'}</span>
+                </button>
               )}
             </div>
           </div>
         )}
 
         {activeTab === 'database' && (
-          <div className="max-w-2xl bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-3 shadow-sm">
-            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-200">Local SQLite Telemetry Storage</h3>
-            <p className="text-xs text-slate-600 dark:text-slate-400">Stores audit logs, system telemetry, and command run history locally in WAL mode.</p>
-            <div className="text-xs font-mono text-slate-500">Database file: data/sre.sqlite (WAL enabled)</div>
+          <div className="max-w-4xl space-y-6">
+            <div className="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-3 shadow-sm">
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-200">Local SQLite Telemetry Storage</h3>
+              <p className="text-xs text-slate-600 dark:text-slate-400">Stores audit logs, system telemetry, and command run history locally in WAL mode.</p>
+              <div className="text-xs font-mono text-slate-500">Database file: data/sre.sqlite (WAL enabled)</div>
+            </div>
+
+            <WorkStreamContainer
+              pageScope="settings"
+              title="Settings & Governance Stream"
+              description="Workspace rescan discovery, governance preference updates, and system log purge events."
+              tabs={terminalTabs}
+              onOpenInBottomConsole={onOpenInBottomConsole}
+              onAbortJob={onAbortJob}
+              onClearTab={onClearTab}
+              emptyHint="Apply a workspace path, save governance intervals, or purge logs to inspect stream output."
+            />
           </div>
         )}
       </div>
