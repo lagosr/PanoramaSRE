@@ -12,27 +12,41 @@ import {
   Terminal,
 } from 'lucide-react';
 import { SynthesizedTopology } from '../../lib/topology-synthesizer';
-import { WshSnapshot } from '../../lib/types';
+import { WshSnapshot, CloudflareTunnelVersionStatus } from '../../lib/types';
 import { stripAnsiCodes, formatConsoleLine } from '../layout/ConsoleColorizer';
 
 interface CloudflareTunnelTopologyCardProps {
   topology: SynthesizedTopology;
   snapshot?: WshSnapshot | null;
+  tunnelVersion?: CloudflareTunnelVersionStatus | null;
+  isCheckingVersion?: boolean;
   onTriggerTunnelAction?: (action: 'status' | 'check_update' | 'update' | 'update_force') => void;
 }
 
 export const CloudflareTunnelTopologyCard: React.FC<CloudflareTunnelTopologyCardProps> = ({
   topology,
   snapshot,
+  tunnelVersion,
+  isCheckingVersion = false,
   onTriggerTunnelAction,
 }) => {
   const [copiedTunnelLogs, setCopiedTunnelLogs] = useState(false);
 
   const { cloudflared } = topology;
-  const versionRaw = snapshot?.cloudflared?.version_raw || cloudflared.version || '';
-  const versionMatch = versionRaw.match(/version\s+([0-9.]+)/i);
-  const detectedVersion = versionMatch ? `v${versionMatch[1]}` : versionRaw ? versionRaw : 'v2026.10.7';
-  const isUpToDate = !versionMatch || versionMatch[1] === '2026.10.7' || versionMatch[1] >= '2026.10.7';
+  const versionRaw =
+    snapshot?.cloudflared?.version_raw ||
+    tunnelVersion?.runningRaw ||
+    (cloudflared.version !== 'cloudflared daemon' ? cloudflared.version : '');
+  const runningVersion = cloudflared.runningVersion || tunnelVersion?.runningVersion || null;
+  const detectedVersion = runningVersion
+    ? `v${runningVersion}`
+    : versionRaw || 'Unknown version';
+  const latestVersion = cloudflared.latestVersion || tunnelVersion?.latestVersion || null;
+  const updateAvailable = cloudflared.updateAvailable;
+  const isUpToDate = cloudflared.isUpToDate;
+  const checkedAtLabel = cloudflared.lastCheckedAt
+    ? new Date(cloudflared.lastCheckedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : null;
 
   const tunnelLogs = (snapshot?.cloudflared?.recent_logs || '').trim();
   const logLines = tunnelLogs
@@ -64,27 +78,35 @@ export const CloudflareTunnelTopologyCard: React.FC<CloudflareTunnelTopologyCard
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {isUpToDate ? (
-            <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
+          {isCheckingVersion && !latestVersion ? (
+            <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-sky-500/10 text-sky-700 dark:text-sky-300 border border-sky-500/30 flex items-center gap-1 whitespace-nowrap flex-shrink-0">
+              <RefreshCw className="w-3.5 h-3.5 animate-spin text-sky-500" /> Checking Release...
+            </span>
+          ) : updateAvailable ? (
+            <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/30 flex items-center gap-1 whitespace-nowrap flex-shrink-0">
+              <AlertTriangle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" /> Update Available ({detectedVersion} → {latestVersion ? `v${latestVersion}` : 'Latest'})
+            </span>
+          ) : isUpToDate === true ? (
+            <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30 flex items-center gap-1 whitespace-nowrap flex-shrink-0">
               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" /> Up to Date
             </span>
           ) : (
-            <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/30 flex items-center gap-1">
-              <AlertTriangle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" /> Upgrade Recommended
+            <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-500/10 text-slate-600 dark:text-slate-400 border border-slate-300 dark:border-slate-700 flex items-center gap-1 whitespace-nowrap flex-shrink-0">
+              <Cloud className="w-3.5 h-3.5 text-slate-500" /> Version Unknown
             </span>
           )}
 
-          <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-semibold bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20 flex items-center gap-1.5">
+          <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-semibold bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20 flex items-center gap-1.5 whitespace-nowrap flex-shrink-0">
             <Radio className="w-3.5 h-3.5 animate-pulse text-purple-500" />
             ACTIVE QUIC TUNNEL
           </span>
 
           {/* Action Buttons backed by deploy-cloudflare-tunnel.ps1 */}
           {onTriggerTunnelAction && (
-            <div className="flex items-center gap-1.5 ml-1">
+            <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 ml-1">
               <button
                 onClick={() => onTriggerTunnelAction('status')}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-mono font-medium bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 transition-colors"
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-mono font-medium bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 transition-colors whitespace-nowrap flex-shrink-0"
                 title="Query live container status and logs via deploy-cloudflare-tunnel.ps1 -Status"
               >
                 <Terminal className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
@@ -93,7 +115,7 @@ export const CloudflareTunnelTopologyCard: React.FC<CloudflareTunnelTopologyCard
 
               <button
                 onClick={() => onTriggerTunnelAction('check_update')}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-mono font-medium bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 transition-colors"
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-mono font-medium bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 transition-colors whitespace-nowrap flex-shrink-0"
                 title="Check upstream GitHub releases via deploy-cloudflare-tunnel.ps1 -CheckUpdate"
               >
                 <RefreshCw className="w-3 h-3 text-sky-600 dark:text-sky-400" />
@@ -101,20 +123,20 @@ export const CloudflareTunnelTopologyCard: React.FC<CloudflareTunnelTopologyCard
               </button>
 
               <button
-                onClick={() => onTriggerTunnelAction(isUpToDate ? 'update_force' : 'update')}
-                className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-mono font-semibold transition-all ${
-                  isUpToDate
-                    ? 'bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700'
-                    : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm ring-1 ring-emerald-400'
+                onClick={() => onTriggerTunnelAction(updateAvailable ? 'update' : 'update_force')}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-mono font-semibold transition-all whitespace-nowrap flex-shrink-0 ${
+                  updateAvailable
+                    ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm ring-1 ring-emerald-400'
+                    : 'bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700'
                 }`}
                 title={
-                  isUpToDate
-                    ? 'Re-deploy and verify container via deploy-cloudflare-tunnel.ps1 -Update -Force'
-                    : 'Upgrade container to latest release via deploy-cloudflare-tunnel.ps1 -Update'
+                  updateAvailable
+                    ? 'Upgrade container to latest release via deploy-cloudflare-tunnel.ps1 -Update'
+                    : 'Re-deploy and verify container via deploy-cloudflare-tunnel.ps1 -Update -Force'
                 }
               >
                 <Cloud className="w-3 h-3" />
-                {isUpToDate ? 'Re-Deploy Tunnel' : 'Update Tunnel Now'}
+                {updateAvailable ? 'Update Tunnel Now' : 'Re-Deploy Tunnel'}
               </button>
             </div>
           )}
@@ -170,12 +192,45 @@ export const CloudflareTunnelTopologyCard: React.FC<CloudflareTunnelTopologyCard
           </div>
 
           <div className="p-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 space-y-1">
-            <div className="text-[10px] text-slate-400">Tunnel Daemon Version</div>
-            <div className="text-slate-800 dark:text-slate-200 font-bold truncate">{versionRaw || 'cloudflared daemon'}</div>
-            <div className="text-[10px] text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
-              <CheckCircle2 className="w-3 h-3" />
-              Upstream Synchronized
+            <div className="flex items-center justify-between text-[10px] text-slate-400 gap-2">
+              <span>Tunnel Daemon Version</span>
+              <span className="font-mono text-slate-500">
+                {checkedAtLabel ? `Hourly check · ${checkedAtLabel}` : 'Hourly auto-check (1h)'}
+              </span>
             </div>
+            <div className="text-slate-800 dark:text-slate-200 font-bold truncate">
+              {versionRaw || detectedVersion}
+            </div>
+            {latestVersion ? (
+              <div
+                className={`text-[10px] flex items-center gap-1 ${
+                  updateAvailable
+                    ? 'text-amber-600 dark:text-amber-400'
+                    : 'text-emerald-600 dark:text-emerald-400'
+                }`}
+              >
+                {updateAvailable ? (
+                  <AlertTriangle className="w-3 h-3 shrink-0" />
+                ) : (
+                  <CheckCircle2 className="w-3 h-3 shrink-0" />
+                )}
+                <span>
+                  Running: {runningVersion ? `v${runningVersion}` : 'Unknown'} · Latest: v{latestVersion}
+                  {tunnelVersion?.error ? ' (cached)' : ''}
+                </span>
+              </div>
+            ) : (
+              <div className="text-[10px] text-slate-500 dark:text-slate-400 flex items-center gap-1">
+                <RefreshCw className={`w-3 h-3 shrink-0 ${isCheckingVersion ? 'animate-spin text-sky-500' : ''}`} />
+                <span>
+                  {tunnelVersion?.error
+                    ? `Upstream check pending (${tunnelVersion.error})`
+                    : isCheckingVersion
+                    ? 'Checking GitHub latest release...'
+                    : 'Awaiting hourly upstream check'}
+                </span>
+              </div>
+            )}
           </div>
         </div>
       </div>

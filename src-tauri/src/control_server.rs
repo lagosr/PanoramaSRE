@@ -1,6 +1,9 @@
 use crate::commands::git_ops::compute_app_composition;
 use crate::commands::ledger::read_backup_ledger;
-use crate::commands::monitor::{detect_network_posture, probe_app_health};
+use crate::commands::monitor::{
+    check_cloudflare_tunnel_version_internal, detect_network_posture,
+    get_cached_tunnel_version_status, probe_app_health,
+};
 use crate::commands::smoke_ops::{get_smoke_test_history, run_smoke_tests_streaming};
 use crate::commands::ssl_ops::get_ssl_fleet_status;
 use crate::commands::workspace::{discover_suite_apps_internal, resolve_suite_workspace_root};
@@ -1244,7 +1247,25 @@ pub async fn process_ipc_message(
                 }
                 "posture" => {
                     let posture = detect_network_posture(None).await;
-                    IpcResponse::success(&req.id, json!({ "networkPosture": posture }))
+                    let cf_version = get_cached_tunnel_version_status(sre_db);
+                    IpcResponse::success(
+                        &req.id,
+                        json!({
+                            "networkPosture": posture,
+                            "cloudflaredVersion": cf_version
+                        }),
+                    )
+                }
+                "tunnel" => {
+                    let force = req.params["force"].as_bool().unwrap_or(false);
+                    let running_raw = req.params["runningRaw"].as_str().map(|s| s.to_string());
+                    let status = check_cloudflare_tunnel_version_internal(
+                        running_raw,
+                        force,
+                        sre_db,
+                    )
+                    .await;
+                    IpcResponse::success(&req.id, json!(status))
                 }
                 "backups" => match read_backup_ledger(None).await {
                     Ok(summary) => IpcResponse::success(&req.id, json!(summary)),

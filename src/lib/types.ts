@@ -513,3 +513,18 @@ export interface SmokeTestRun {
   results: SmokeCheckResult[];
 }
 
+export interface CloudflareTunnelVersionStatus {
+  runningVersion?: string | null;
+  runningRaw?: string | null;
+  latestVersion?: string | null;
+  releaseUrl?: string | null;
+  publishedAt?: string | null;
+  isUpToDate?: boolean | null;
+  updateAvailable: boolean;
+  etag?: string | null;
+  checkedAtIso: string;
+  checkedAtEpoch: number;
+  source: string;
+  error?: string | null;
+}
+

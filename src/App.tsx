@@ -29,6 +29,7 @@ import {
   SslFleetSummary,
   McpBridgeStatus,
   SmokeTestRun,
+  CloudflareTunnelVersionStatus,
   NavSectionId,
   WorkStreamSource,
   isAppDeployCandidate,
@@ -53,8 +54,14 @@ export const App: React.FC = () => {
   const [securityAuditInterval, setSecurityAuditInterval] = useState<string>(() => {
     return localStorage.getItem('panoramasre_security_audit_interval') || '5';
   });
+  const [tier1PollInterval, setTier1PollInterval] = useState<string>(() => {
+    return localStorage.getItem('panoramasre_tier1_poll_interval') || '15';
+  });
   const [lastSecurityAuditTime, setLastSecurityAuditTime] = useState<string | null>(null);
+  const [lastHourlyCheckTime, setLastHourlyCheckTime] = useState<string | null>(null);
   const [wshSnapshot, setWshSnapshot] = useState<WshSnapshot | null>(null);
+  const [tunnelVersionStatus, setTunnelVersionStatus] = useState<CloudflareTunnelVersionStatus | null>(null);
+  const [isCheckingTunnelVersion, setIsCheckingTunnelVersion] = useState<boolean>(false);
   const [backupLedger, setBackupLedger] = useState<BackupLedgerSummary | null>(null);
   const [sslFleet, setSslFleet] = useState<SslFleetSummary | null>(null);
   const [mcpStatus, setMcpStatus] = useState<McpBridgeStatus | null>(null);
@@ -232,9 +239,12 @@ export const App: React.FC = () => {
     setIsDrawerOpen(true);
   }, []);
 
-  // Keep ref to current apps to update granular sub-properties without full component tree thrashing
+  // Keep refs to current apps, snapshot, and scheduled smoke runner for async callbacks
   const appsRef = useRef<DiscoveredApp[]>([]);
   appsRef.current = apps;
+  const wshSnapshotRef = useRef<WshSnapshot | null>(null);
+  wshSnapshotRef.current = wshSnapshot;
+  const runSmokeTestsRef = useRef<((triggeredBy?: string, forceSms?: boolean) => void) | null>(null);
 
   // Refresh Dev Server process states (lightweight TCP / PID check)
   const refreshDevServers = useCallback(async () => {
@@ -335,11 +345,47 @@ export const App: React.FC = () => {
     }
   }, []);
 
+  // Refresh Upstream Cloudflare Tunnel Release Status (non-SSH, ETag cached)
+  const refreshTunnelVersion = useCallback(async (force = false, explicitRunningRaw?: string) => {
+    setIsCheckingTunnelVersion(true);
+    try {
+      const runningRaw =
+        explicitRunningRaw ?? wshSnapshotRef.current?.cloudflared?.version_raw ?? undefined;
+      const status = await invoke<CloudflareTunnelVersionStatus>(
+        'check_cloudflare_tunnel_version',
+        {
+          runningVersionRaw: runningRaw ?? null,
+          force,
+        }
+      );
+      setTunnelVersionStatus(status);
+      setLastHourlyCheckTime(new Date().toLocaleTimeString());
+    } catch (cfErr) {
+      console.warn('[PanoramaSRE] Cloudflare tunnel version check warning:', cfErr);
+    } finally {
+      setIsCheckingTunnelVersion(false);
+    }
+  }, []);
+
+  // Execute Tier 4 hourly checks (Cloudflare Tunnel release, SSL matrix, GFS backup ledger)
+  const runHourlyChecksNow = useCallback(
+    async (force = false, explicitRunningRaw?: string) => {
+      await Promise.all([
+        refreshTunnelVersion(force, explicitRunningRaw),
+        refreshSslStatus(),
+        refreshBackupLedger(),
+      ]);
+      setLastHourlyCheckTime(new Date().toLocaleTimeString());
+    },
+    [refreshTunnelVersion, refreshSslStatus, refreshBackupLedger]
+  );
+
   // Full Initial App Discovery & Telemetry Probe
   const syncFullTelemetry = useCallback(async (
     isUserInitiated = false,
     includeWshSnapshot = true,
-    traceScope: NavSectionId = 'hud'
+    traceScope: NavSectionId = 'hud',
+    includeHourlyTiers = false
   ) => {
     const syncJobId = isUserInitiated ? `${traceScope}-sync-${Date.now()}` : null;
     if (isUserInitiated && syncJobId) {
@@ -493,10 +539,9 @@ export const App: React.FC = () => {
         `[INFO] Discovered ${enrichedApps.length} suite apps (${healthyCount}/${enrichedApps.length} production healthy).`
       );
 
-      // 5. Probe Home Lab Appliances
-      await refreshAppliances();
-
-      // 6. Fetch WSH Host & Topology Snapshot (LAN Direct only)
+      // 5. Fetch WSH Host & Topology Snapshot (LAN Direct only)
+      let capturedRunningRaw: string | undefined =
+        wshSnapshotRef.current?.cloudflared?.version_raw;
       if (includeWshSnapshot && posture === 'LAN_DIRECT') {
         try {
           const snap = await invoke<WshSnapshot>('fetch_wsh_snapshot', {
@@ -504,6 +549,7 @@ export const App: React.FC = () => {
             force: isUserInitiated,
           });
           setWshSnapshot(snap);
+          capturedRunningRaw = snap.cloudflared?.version_raw;
           setLastSecurityAuditTime(new Date().toLocaleTimeString());
           pushSyncTrace('[INFO] WSH host firewall, Docker, and CGNAT snapshot updated.');
         } catch (snapErr) {
@@ -512,11 +558,15 @@ export const App: React.FC = () => {
         }
       }
 
-      // 7. Fetch GFS Backup Ledger
-      await refreshBackupLedger();
-
-      // 8. Fetch 5-Domain SSL Dual-Probe Matrix
-      await refreshSslStatus();
+      // 6. On initial startup or manual Sync Now, also execute Tier 2 appliances + Tier 4 hourly checks
+      if (includeHourlyTiers) {
+        await Promise.all([
+          refreshAppliances(),
+          refreshBackupLedger(),
+          refreshSslStatus(),
+          refreshTunnelVersion(isUserInitiated, capturedRunningRaw),
+        ]);
+      }
 
       if (syncJobId) {
         const finishedAt = new Date().toISOString();
@@ -563,37 +613,77 @@ export const App: React.FC = () => {
         setIsManualSyncing(false);
       }
     }
-  }, [refreshAppliances, refreshBackupLedger, refreshSslStatus, saveTabToDb]);
+  }, [refreshAppliances, refreshBackupLedger, refreshSslStatus, refreshTunnelVersion, saveTabToDb]);
 
-  // Initial sync on mount
+  // Initial sync on mount (all tiers once on startup)
   useEffect(() => {
-    syncFullTelemetry(false);
+    syncFullTelemetry(false, true, 'hud', true);
     refreshMcpStatus();
   }, [syncFullTelemetry, refreshMcpStatus]);
 
-  // Listen for background TelemetryScheduler ticks and update ONLY relevant tier data
+  // Synchronize configurable Tier 1 & Tier 3 intervals to Rust TelemetryScheduler
+  useEffect(() => {
+    const t1 = Math.max(5, Number.parseInt(tier1PollInterval, 10) || 15);
+    const t3Mins = Math.max(1, Number.parseInt(securityAuditInterval, 10) || 5);
+    invoke('update_scheduler_intervals', {
+      tier1Secs: t1,
+      tier3Secs: t3Mins * 60,
+    }).catch((err) => {
+      console.warn('[PanoramaSRE] Failed to update scheduler intervals:', err);
+    });
+  }, [tier1PollInterval, securityAuditInterval]);
+
+  // Listen for unified 4-tier TelemetryScheduler ticks and dispatch due tier workloads
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    listen('sre://telemetry-tick', (event: any) => {
+    listen<{ tier?: number; tiers?: number[] }>('sre://telemetry-tick', (event) => {
       const payload = event.payload;
-      const tier = payload?.tier;
+      const dueTiers: number[] =
+        Array.isArray(payload?.tiers) && payload.tiers.length > 0
+          ? payload.tiers
+          : payload?.tier
+          ? [payload.tier]
+          : [];
 
-      // Tier 1 (every 15s): update dev servers and appliances without full page re-fetching
-      if (tier === 1) {
+      // Tier 1 (15s default): local dev servers & Named Pipe MCP bridge (0 LAN/WAN traffic)
+      if (dueTiers.includes(1)) {
         refreshDevServers();
-        refreshAppliances();
         refreshMcpStatus();
       }
 
-      // Tier 2 (every 60s): update backup ledger & SSL dual-probes (no SSH to WSH port 22 to avoid IDS scan thresholds)
-      if (tier === 2) {
-        refreshBackupLedger();
-        refreshSslStatus();
+      // Tier 2 (60s): pooled home lab appliance probes & 4x/day Smoke Test slot check
+      if (dueTiers.includes(2)) {
+        refreshAppliances();
+
+        const now = new Date();
+        const currentMinutes = now.getHours() * 60 + now.getMinutes();
+        const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        const SCHEDULE_SLOTS = [
+          { label: '08:00', mins: 8 * 60 },
+          { label: '13:00', mins: 13 * 60 },
+          { label: '17:00', mins: 17 * 60 },
+          { label: '22:00', mins: 22 * 60 },
+        ];
+        const dueSlot = SCHEDULE_SLOTS.find(
+          (slot) => currentMinutes >= slot.mins && currentMinutes <= slot.mins + 1
+        );
+        if (dueSlot) {
+          const slotKey = `${dateStr} ${dueSlot.label}`;
+          if (localStorage.getItem('panoramasre_last_smoke_slot') !== slotKey) {
+            localStorage.setItem('panoramasre_last_smoke_slot', slotKey);
+            runSmokeTestsRef.current?.(`sre-scheduled:${dueSlot.label}`);
+          }
+        }
       }
 
-      // Tier 3 (every 300s): update git composition & health probes (WSH SSH snapshot is handled by the configurable Security Audit timer)
-      if (tier === 3) {
-        syncFullTelemetry(false, false);
+      // Tier 3 (300s default / configurable): posture + 6x health + 6x git composition + WSH --fast SSH snapshot
+      if (dueTiers.includes(3)) {
+        syncFullTelemetry(false, true, 'hud', false);
+      }
+
+      // Tier 4 (3600s / 1 hour): upstream cloudflared GitHub check + 5-domain SSL + backup ledger
+      if (dueTiers.includes(4)) {
+        runHourlyChecksNow(false);
       }
     }).then((unsub) => {
       unlisten = unsub;
@@ -602,7 +692,7 @@ export const App: React.FC = () => {
     return () => {
       if (unlisten) unlisten();
     };
-  }, [refreshDevServers, refreshAppliances, refreshWshTelemetry, refreshBackupLedger, refreshSslStatus, syncFullTelemetry]);
+  }, [refreshDevServers, refreshMcpStatus, refreshAppliances, syncFullTelemetry, runHourlyChecksNow]);
 
   // Listen for AI Agent MCP Control Plane IPC actions & security alerts
   useEffect(() => {
@@ -736,18 +826,6 @@ export const App: React.FC = () => {
       if (unlistenEnd) unlistenEnd();
     };
   }, [refreshDevServers, saveTabToDb]);
-
-  // Periodic WSH Security Hardening & Penetration Audit Timer
-  useEffect(() => {
-    const minutes = parseInt(securityAuditInterval, 10);
-    const intervalMs = (isNaN(minutes) || minutes < 1 ? 5 : minutes) * 60 * 1000;
-
-    const timer = setInterval(() => {
-      refreshWshTelemetry();
-    }, intervalMs);
-
-    return () => clearInterval(timer);
-  }, [securityAuditInterval, refreshWshTelemetry]);
 
   // Dev Server Actions
   const handleStartDevServer = async (appId: string, workspacePath: string, devCommand: string, port?: number) => {
@@ -1146,7 +1224,9 @@ export const App: React.FC = () => {
       },
       onComplete: (exitCode) => {
         finalizeTerminalJob(jobId, exitCode);
-        syncFullTelemetry(false);
+        syncFullTelemetry(false, true, 'topology', false).then(() => {
+          refreshTunnelVersion(action !== 'status');
+        });
       },
       onError: (err) => {
         failTerminalJob(jobId, `Cloudflare Tunnel execution failed: ${err}`);
@@ -1740,7 +1820,10 @@ export const App: React.FC = () => {
     return count;
   })();
 
-  const topology = React.useMemo(() => synthesizeTopology(apps, wshSnapshot), [apps, wshSnapshot]);
+  const topology = React.useMemo(
+    () => synthesizeTopology(apps, wshSnapshot, tunnelVersionStatus),
+    [apps, wshSnapshot, tunnelVersionStatus]
+  );
   const securityViolationCount = wshSnapshot ? topology.securityAudit.securityViolationCount : 0;
   const failingInvariants = wshSnapshot ? topology.securityAudit.invariants.filter((i) => i.status === 'FAIL') : [];
   const smokeFailureCount = smokeRuns[0]?.failed || 0;
@@ -1837,6 +1920,8 @@ export const App: React.FC = () => {
     ]
   );
 
+  runSmokeTestsRef.current = handleRunSmokeTests;
+
   const handleRegisterSmokeSchedule = useCallback(() => {
     const jobId = `smoke-schedule-${Date.now()}`;
     const smokeDir = `${getWorkspaceRoot()}\\PanoramaDrSuite\\tools\\smoke-tester`;
@@ -1872,26 +1957,6 @@ export const App: React.FC = () => {
       refreshSmokeHistory();
     }
   }, [apps.length, refreshSmokeHistory]);
-
-  // 4x Daily Smoke Test Scheduler (08:00, 13:00, 17:00, 22:00 local time)
-  useEffect(() => {
-    const SCHEDULE_SLOTS = ['08:00', '13:00', '17:00', '22:00'];
-    const timer = setInterval(() => {
-      const now = new Date();
-      const hh = String(now.getHours()).padStart(2, '0');
-      const mm = String(now.getMinutes()).padStart(2, '0');
-      const hhmm = `${hh}:${mm}`;
-      if (!SCHEDULE_SLOTS.includes(hhmm)) return;
-
-      const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-      const slotKey = `${dateStr} ${hhmm}`;
-      if (localStorage.getItem('panoramasre_last_smoke_slot') === slotKey) return;
-
-      localStorage.setItem('panoramasre_last_smoke_slot', slotKey);
-      handleRunSmokeTests(`sre-scheduled:${hhmm}`);
-    }, 30000);
-    return () => clearInterval(timer);
-  }, [handleRunSmokeTests]);
 
   // Listen for AI Agent MCP-triggered Smoke Test executions (`sre_ops_telemetry({ domain: "smoke_run" })`)
   useEffect(() => {
@@ -2111,7 +2176,7 @@ export const App: React.FC = () => {
             lastSecurityAuditTime={lastSecurityAuditTime}
             securityAuditInterval={securityAuditInterval}
             isSyncing={isManualSyncing}
-            onRefresh={() => syncFullTelemetry(true, true, activeTab)}
+            onRefresh={() => syncFullTelemetry(true, true, activeTab, true)}
             backupFailureCount={backupFailureCount}
             onNavigateToBackups={() => setActiveTab('backups')}
             securityViolationCount={securityViolationCount}
@@ -2166,6 +2231,8 @@ export const App: React.FC = () => {
               snapshot={wshSnapshot}
               apps={apps}
               terminalTabs={terminalTabs}
+              tunnelVersionStatus={tunnelVersionStatus}
+              isCheckingTunnelVersion={isCheckingTunnelVersion}
               isLoading={isManualSyncing}
               onRefresh={handleManualTopologyRefresh}
               onRunPenetrationAudit={() => handleRunPenetrationAudit('topology')}
@@ -2403,9 +2470,21 @@ export const App: React.FC = () => {
           {activeTab === 'settings' && (
             <SettingsView
               terminalTabs={terminalTabs}
-              onWorkspaceChanged={() => syncFullTelemetry(true, true, 'settings')}
+              onWorkspaceChanged={() => syncFullTelemetry(true, true, 'settings', true)}
+              pollInterval={tier1PollInterval}
+              onPollIntervalChanged={(val) => setTier1PollInterval(val)}
               securityAuditInterval={securityAuditInterval}
               onSecurityAuditIntervalChanged={(val) => setSecurityAuditInterval(val)}
+              lastHourlyCheckTime={lastHourlyCheckTime}
+              isCheckingHourly={isCheckingTunnelVersion || isLoadingSsl}
+              onRunHourlyChecksNow={async () => {
+                await runHourlyChecksNow(true);
+                handleEmitSettingsStream('Run Tier 4 Hourly Checks', [
+                  '[PanoramaSRE] Executing Tier 4 hourly checks...',
+                  '[INFO] Checked upstream cloudflared GitHub release (ETag), 5-domain SSL fleet, and GFS backup ledger.',
+                  '[PASS] Tier 4 hourly telemetry refreshed.',
+                ]);
+              }}
               onOpenInBottomConsole={handleOpenInBottomConsole}
               onAbortJob={handleAbortJob}
               onClearTab={handleClearTab}

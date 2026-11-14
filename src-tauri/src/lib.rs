@@ -33,7 +33,7 @@ use commands::workspace::*;
 use db::SreDatabase;
 use dev_supervisor::{get_dev_servers_status, start_dev_server, stop_dev_server, DevSupervisor};
 use job_manager::JobManager;
-use scheduler::TelemetryScheduler;
+use scheduler::{TelemetryScheduler, update_scheduler_intervals};
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
@@ -110,6 +110,8 @@ pub fn run() {
             probe_host_tcp,
             probe_app_health,
             probe_appliances,
+            check_cloudflare_tunnel_version,
+            update_scheduler_intervals,
             get_dev_servers_status,
             start_dev_server,
             stop_dev_server,

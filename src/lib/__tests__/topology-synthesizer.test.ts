@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { synthesizeTopology } from '../topology-synthesizer';
-import { DiscoveredApp, WshSnapshot } from '../types';
+import { synthesizeTopology, compareTunnelVersions } from '../topology-synthesizer';
+import { DiscoveredApp, WshSnapshot, CloudflareTunnelVersionStatus } from '../types';
 
 describe('synthesizeTopology', () => {
   const mockApps: DiscoveredApp[] = [
@@ -246,5 +246,72 @@ describe('synthesizeTopology', () => {
     expect(sec03?.status).toBe('PASS');
     const sec04 = result.securityAudit.invariants.find((i) => i.id === 'SEC-04');
     expect(sec04?.status).toBe('PASS');
+  });
+
+  it('compares cloudflared CalVer versions numerically and evaluates upstream release delta dynamically', () => {
+    expect(compareTunnelVersions('cloudflared version 2026.9.1', 'v2026.10.7')).toBe(-1);
+    expect(compareTunnelVersions('2026.10.7', '2026.10.7')).toBe(0);
+    expect(compareTunnelVersions('2026.11.0', '2026.10.7')).toBe(1);
+    expect(compareTunnelVersions('cloudflared daemon', '2026.10.7')).toBeNull();
+
+    const outdatedSnapshot: WshSnapshot = {
+      mode: '--fast',
+      hostname: 'wsh-live',
+      kernel: '6.6.20',
+      uptime_secs: 100,
+      dietpi_version: '9.3.0',
+      dietpi_update_available: '',
+      reboot_required: false,
+      rpi_throttled: '0x0',
+      services: { lighttpd: 'active', docker: 'active', ssh: 'active' },
+      listening_ports: [80, 443, 3000],
+      lighttpd_routes_raw: 'auth:3000',
+      containers: [],
+      container_stats: [],
+      images: [],
+      cloudflared: {
+        version_raw: 'cloudflared version 2026.10.7 (built 2026-10-15 UTC)',
+        recent_logs: '',
+      },
+      apt_upgradable_raw: '',
+      data_volumes_raw: '',
+      docker_df: [],
+      release_ledgers: {},
+    };
+
+    const tunnelStatus: CloudflareTunnelVersionStatus = {
+      runningVersion: '2026.10.7',
+      runningRaw: 'cloudflared version 2026.10.7',
+      latestVersion: '2026.11.0',
+      releaseUrl: 'https://github.com/cloudflare/cloudflared/releases/tag/2026.11.0',
+      publishedAt: '2026-11-10T00:00:00Z',
+      isUpToDate: false,
+      updateAvailable: true,
+      etag: 'W/"rel-2026-11-0"',
+      checkedAtIso: '2026-11-13T20:00:00Z',
+      checkedAtEpoch: 1794600000,
+      source: 'github',
+      error: null,
+    };
+
+    const staleResult = synthesizeTopology(mockApps, outdatedSnapshot, tunnelStatus);
+    expect(staleResult.cloudflared.runningVersion).toBe('2026.10.7');
+    expect(staleResult.cloudflared.latestVersion).toBe('2026.11.0');
+    expect(staleResult.cloudflared.updateAvailable).toBe(true);
+    expect(staleResult.cloudflared.isUpToDate).toBe(false);
+
+    // Once snapshot reflects the upgraded version, topology clears updateAvailable even before next GitHub check
+    const upgradedSnapshot: WshSnapshot = {
+      ...outdatedSnapshot,
+      cloudflared: {
+        version_raw: 'cloudflared version 2026.11.0 (built 2026-11-10 UTC)',
+        recent_logs: '',
+      },
+    };
+    const upToDateResult = synthesizeTopology(mockApps, upgradedSnapshot, tunnelStatus);
+    expect(upToDateResult.cloudflared.runningVersion).toBe('2026.11.0');
+    expect(upToDateResult.cloudflared.latestVersion).toBe('2026.11.0');
+    expect(upToDateResult.cloudflared.updateAvailable).toBe(false);
+    expect(upToDateResult.cloudflared.isUpToDate).toBe(true);
   });
 });

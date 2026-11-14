@@ -30,8 +30,13 @@ import { useTheme } from '../../context/ThemeContext';
 interface SettingsViewProps {
   terminalTabs?: TerminalTab[];
   onWorkspaceChanged?: () => void;
+  pollInterval?: string;
+  onPollIntervalChanged?: (interval: string) => void;
   securityAuditInterval?: string;
   onSecurityAuditIntervalChanged?: (interval: string) => void;
+  lastHourlyCheckTime?: string | null;
+  onRunHourlyChecksNow?: () => void;
+  isCheckingHourly?: boolean;
   onOpenInBottomConsole?: (tabId?: string) => void;
   onAbortJob?: (tabId: string) => void;
   onClearTab?: (tabId: string) => void;
@@ -52,8 +57,13 @@ type SettingsTab = 'general' | 'ssh' | 'logs' | 'database';
 export const SettingsView: React.FC<SettingsViewProps> = ({
   terminalTabs = [],
   onWorkspaceChanged,
+  pollInterval: propPollInterval,
+  onPollIntervalChanged,
   securityAuditInterval: propSecurityAuditInterval,
   onSecurityAuditIntervalChanged,
+  lastHourlyCheckTime = null,
+  onRunHourlyChecksNow,
+  isCheckingHourly = false,
   onOpenInBottomConsole,
   onAbortJob,
   onClearTab,
@@ -63,10 +73,24 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const [minimizeToTray, setMinimizeToTray] = useState(true);
   const [toastAlerts, setToastAlerts] = useState(true);
-  const [pollInterval, setPollInterval] = useState('15');
+  const [pollInterval, setPollInterval] = useState<string>(() => {
+    return propPollInterval || localStorage.getItem('panoramasre_tier1_poll_interval') || '15';
+  });
   const [securityAuditInterval, setSecurityAuditInterval] = useState<string>(() => {
     return propSecurityAuditInterval || localStorage.getItem('panoramasre_security_audit_interval') || '5';
   });
+
+  useEffect(() => {
+    if (propPollInterval && propPollInterval !== pollInterval) {
+      setPollInterval(propPollInterval);
+    }
+  }, [propPollInterval, pollInterval]);
+
+  useEffect(() => {
+    if (propSecurityAuditInterval && propSecurityAuditInterval !== securityAuditInterval) {
+      setSecurityAuditInterval(propSecurityAuditInterval);
+    }
+  }, [propSecurityAuditInterval, securityAuditInterval]);
   const [isSaved, setIsSaved] = useState(false);
   const [workspaceRoot, setWorkspaceRoot] = useState<string>('');
   const [workspaceFeedback, setWorkspaceFeedback] = useState<string | null>(null);
@@ -225,13 +249,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   }, [filteredLogs]);
 
   const handleSave = () => {
+    localStorage.setItem('panoramasre_tier1_poll_interval', pollInterval);
     localStorage.setItem('panoramasre_security_audit_interval', securityAuditInterval);
+    if (onPollIntervalChanged) {
+      onPollIntervalChanged(pollInterval);
+    }
     if (onSecurityAuditIntervalChanged) {
       onSecurityAuditIntervalChanged(securityAuditInterval);
     }
     onEmitSettingsStream?.('Save SRE Governance Settings', [
       '[PanoramaSRE] Persisting workstation governance preferences...',
-      `[INFO] Tier 1 polling interval: ${pollInterval}s | WSH audit interval: ${securityAuditInterval}m.`,
+      `[INFO] Tier 1 local interval: ${pollInterval}s | Tier 2 LAN/schedule: 60s | Tier 3 WSH/fleet: ${securityAuditInterval}m | Tier 4 hourly checks: 1h.`,
       '[PASS] Governance settings updated.',
     ]);
     setIsSaved(true);
@@ -458,13 +486,30 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
 
             <div className="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4 shadow-sm">
-              <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-200">Telemetry & Polling Intervals</h3>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-200">Telemetry & Unified 4-Tier Schedule</h3>
+                {onRunHourlyChecksNow && (
+                  <button
+                    type="button"
+                    onClick={onRunHourlyChecksNow}
+                    disabled={isCheckingHourly}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-medium bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-colors disabled:opacity-50 whitespace-nowrap flex-shrink-0 cursor-pointer"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 text-sky-600 dark:text-sky-400 ${isCheckingHourly ? 'animate-spin' : ''}`} />
+                    <span>{isCheckingHourly ? 'Running Hourly Checks...' : 'Run Hourly Checks Now'}</span>
+                  </button>
+                )}
+              </div>
               
               <div>
-                <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1.5">Tier 1 Polling Interval</label>
+                <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1.5">Tier 1 Local Polling Interval</label>
                 <CustomSelect
                   value={pollInterval}
-                  onChange={setPollInterval}
+                  onChange={(val) => {
+                    setPollInterval(val);
+                    localStorage.setItem('panoramasre_tier1_poll_interval', val);
+                    onPollIntervalChanged?.(val);
+                  }}
                   options={[
                     { value: '5', label: '5 seconds (High Frequency / Debug)' },
                     { value: '15', label: '15 seconds (Recommended Default)' },
@@ -472,11 +517,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     { value: '60', label: '60 seconds' },
                   ]}
                 />
+                <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1 font-mono">
+                  Local-only polling of dev servers and the Named Pipe MCP bridge (zero LAN/WAN traffic).
+                </p>
               </div>
 
               <div>
                 <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1.5">
-                  WSH Security Hardening & Penetration Audit Interval
+                  Tier 3 WSH SSH & Fleet Sync Interval
                 </label>
                 <CustomSelect
                   value={securityAuditInterval}
@@ -497,8 +545,35 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   ]}
                 />
                 <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1 font-mono">
-                  Periodic automated verification of Docker network isolation, firewall rules, and container defense-in-depth invariants.
+                  Probes network posture, 6 suite health endpoints, local Git composition, and WSH --fast SSH snapshot.
                 </p>
+              </div>
+
+              <div className="pt-2 border-t border-slate-200 dark:border-slate-800 space-y-2">
+                <div className="flex items-center justify-between text-xs font-mono text-slate-600 dark:text-slate-400">
+                  <span className="font-semibold text-slate-700 dark:text-slate-300">Active 4-Tier Background Schedule</span>
+                  <span className="text-[11px] text-slate-500">
+                    Last hourly run: {lastHourlyCheckTime || 'Startup / Pending'}
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px] font-mono">
+                  <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800">
+                    <div className="font-semibold text-slate-800 dark:text-slate-200">Tier 1 · {pollInterval}s (Local)</div>
+                    <div className="text-slate-500">Dev Servers & Named Pipe MCP Bridge</div>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800">
+                    <div className="font-semibold text-slate-800 dark:text-slate-200">Tier 2 · 60s (LAN / Slots)</div>
+                    <div className="text-slate-500">4 Appliances (pooled) & 4x/day Smoke Slot Check</div>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800">
+                    <div className="font-semibold text-slate-800 dark:text-slate-200">Tier 3 · {securityAuditInterval}m (Fleet + SSH)</div>
+                    <div className="text-slate-500">Posture, 6x Health, 6x Git, WSH --fast SSH Snapshot</div>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800">
+                    <div className="font-semibold text-slate-800 dark:text-slate-200">Tier 4 · 1h + Startup (Slow/Upstream)</div>
+                    <div className="text-slate-500">Cloudflare Tunnel Release (ETag), SSL Fleet, Backup Ledger</div>
+                  </div>
+                </div>
               </div>
             </div>
 

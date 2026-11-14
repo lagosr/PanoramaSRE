@@ -1,4 +1,44 @@
-import { DiscoveredApp, WshSnapshot, DockerNetworkDetail, NetworkInterfaceDetail, SecurityPostureInvariant } from './types';
+import {
+  DiscoveredApp,
+  WshSnapshot,
+  DockerNetworkDetail,
+  NetworkInterfaceDetail,
+  SecurityPostureInvariant,
+  CloudflareTunnelVersionStatus,
+} from './types';
+
+function extractCloudflaredSemver(raw?: string | null): string | null {
+  if (!raw) return null;
+  const match = raw.trim().match(/(?:version\s+|v)?(\d{4}\.\d+(?:\.\d+)+|\d+\.\d+\.\d+)/i);
+  return match ? match[1] : null;
+}
+
+/**
+ * Compares two `cloudflared` CalVer/SemVer strings numerically.
+ * Returns `-1` when running < latest (update available), `0` when equal,
+ * `1` when running > latest, or `null` if either version cannot be parsed.
+ */
+export function compareTunnelVersions(
+  runningRaw?: string | null,
+  latestRaw?: string | null
+): -1 | 0 | 1 | null {
+  const runningVer = extractCloudflaredSemver(runningRaw);
+  const latestVer = extractCloudflaredSemver(latestRaw);
+  if (!runningVer || !latestVer) return null;
+
+  const rParts = runningVer.split('.').map((seg) => Number.parseInt(seg, 10));
+  const lParts = latestVer.split('.').map((seg) => Number.parseInt(seg, 10));
+  if (rParts.some(Number.isNaN) || lParts.some(Number.isNaN)) return null;
+
+  const maxLen = Math.max(rParts.length, lParts.length);
+  for (let i = 0; i < maxLen; i += 1) {
+    const r = rParts[i] ?? 0;
+    const l = lParts[i] ?? 0;
+    if (r < l) return -1;
+    if (r > l) return 1;
+  }
+  return 0;
+}
 
 export interface TopologyRouteItem {
   slug: string;
@@ -43,6 +83,11 @@ export interface SynthesizedTopology {
   routes: TopologyRouteItem[];
   cloudflared: {
     version: string;
+    runningVersion: string | null;
+    latestVersion: string | null;
+    isUpToDate: boolean | null;
+    updateAvailable: boolean;
+    lastCheckedAt: string | null;
     networkMode: string;
     ingressTarget: string;
     recentLogs: string[];
@@ -83,7 +128,8 @@ const KNOWN_SUBNET_MAP: Record<string, { subnet: string; containerIp: string; br
  */
 export function synthesizeTopology(
   apps: DiscoveredApp[],
-  snapshot: WshSnapshot | null
+  snapshot: WshSnapshot | null,
+  tunnelVersionStatus?: CloudflareTunnelVersionStatus | null
 ): SynthesizedTopology {
   // 1. Parse raw Lighttpd routes
   const rawRoutePairs = (snapshot?.lighttpd_routes_raw || '')
@@ -157,8 +203,28 @@ export function synthesizeTopology(
     };
   });
 
-  // 3. Parse Cloudflare Tunnel info
-  const cfVersionRaw = snapshot?.cloudflared?.version_raw || 'cloudflared 2026.10.7';
+  // 3. Parse Cloudflare Tunnel info & evaluate upstream release delta
+  const cfVersionRaw =
+    snapshot?.cloudflared?.version_raw ||
+    tunnelVersionStatus?.runningRaw ||
+    '';
+  const runningVersion =
+    extractCloudflaredSemver(cfVersionRaw) ||
+    tunnelVersionStatus?.runningVersion ||
+    null;
+  const latestVersion = tunnelVersionStatus?.latestVersion
+    ? extractCloudflaredSemver(tunnelVersionStatus.latestVersion) || tunnelVersionStatus.latestVersion
+    : null;
+  const versionComparison = compareTunnelVersions(runningVersion, latestVersion);
+  const isUpToDate =
+    versionComparison !== null
+      ? versionComparison >= 0
+      : (tunnelVersionStatus?.isUpToDate ?? null);
+  const updateAvailable =
+    versionComparison !== null
+      ? versionComparison < 0
+      : Boolean(tunnelVersionStatus?.updateAvailable);
+
   const cfLogs = (snapshot?.cloudflared?.recent_logs || '')
     .split('\n')
     .map((l) => l.trim())
@@ -568,7 +634,12 @@ export function synthesizeTopology(
   return {
     routes,
     cloudflared: {
-      version: cfVersionRaw,
+      version: cfVersionRaw || 'cloudflared daemon',
+      runningVersion,
+      latestVersion,
+      isUpToDate,
+      updateAvailable,
+      lastCheckedAt: tunnelVersionStatus?.checkedAtIso ?? null,
       networkMode: 'cf-egress-net (100.64.250.0/24)',
       ingressTarget: 'https://wsh.panoramadr.com:443',
       recentLogs: cfLogs.slice(0, 15),

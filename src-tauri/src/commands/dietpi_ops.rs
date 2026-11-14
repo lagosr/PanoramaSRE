@@ -61,6 +61,18 @@ fn snapshot_gate() -> &'static Mutex<SnapshotCacheState> {
 
 const SNAPSHOT_COOLDOWN: Duration = Duration::from_secs(30);
 
+/// Returns the cached `cloudflared.version_raw` from the most recent WSH snapshot without
+/// spawning an SSH process or blocking on an in-flight snapshot probe.
+pub fn get_cached_cloudflared_version_raw() -> Option<String> {
+    let guard = snapshot_gate().try_lock().ok()?;
+    let (_, ref snap) = guard.last_snapshot.as_ref()?;
+    snap.cloudflared
+        .get("version_raw")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 #[tauri::command]
 pub async fn fetch_wsh_snapshot(
     ssh_key_path: Option<String>,

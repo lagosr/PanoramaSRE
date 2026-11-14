@@ -7,7 +7,7 @@ import {
   Cloud,
   Zap,
 } from 'lucide-react';
-import { WshSnapshot, DiscoveredApp, TerminalTab } from '../../lib/types';
+import { WshSnapshot, DiscoveredApp, TerminalTab, CloudflareTunnelVersionStatus } from '../../lib/types';
 import {
   synthesizeTopology,
   TopologyRouteItem,
@@ -26,6 +26,8 @@ interface TopologyStacksViewProps {
   snapshot: WshSnapshot | null;
   apps?: DiscoveredApp[];
   terminalTabs?: TerminalTab[];
+  tunnelVersionStatus?: CloudflareTunnelVersionStatus | null;
+  isCheckingTunnelVersion?: boolean;
   isLoading?: boolean;
   onRefresh?: () => void;
   onRunAuditCommand?: (label: string, cmd: string, args: string[]) => void;
@@ -41,6 +43,8 @@ export function TopologyStacksView({
   snapshot,
   apps = [],
   terminalTabs = [],
+  tunnelVersionStatus = null,
+  isCheckingTunnelVersion = false,
   isLoading = false,
   onRefresh,
   onRunAuditCommand,
@@ -60,7 +64,10 @@ export function TopologyStacksView({
   const [drawerHop, setDrawerHop] = useState<IngressHop | null>(null);
 
   // Synthesize deterministic topology model
-  const topology = useMemo(() => synthesizeTopology(apps, snapshot), [apps, snapshot]);
+  const topology = useMemo(
+    () => synthesizeTopology(apps, snapshot, tunnelVersionStatus),
+    [apps, snapshot, tunnelVersionStatus]
+  );
 
   const handleOpenInspector = (route: TopologyRouteItem | null, hop: IngressHop | null) => {
     setDrawerRoute(route);
@@ -147,6 +154,12 @@ export function TopologyStacksView({
           >
             <Cloud className="w-3.5 h-3.5 text-indigo-500" />
             Cloudflare Tunnel
+            {topology.cloudflared.updateAvailable && (
+              <span
+                className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"
+                title="Cloudflare Tunnel update available"
+              />
+            )}
           </button>
 
           <button
@@ -198,6 +211,8 @@ export function TopologyStacksView({
         <CloudflareTunnelTopologyCard
           topology={topology}
           snapshot={snapshot}
+          tunnelVersion={tunnelVersionStatus}
+          isCheckingVersion={isCheckingTunnelVersion}
           onTriggerTunnelAction={onTriggerTunnelAction}
         />
       )}
