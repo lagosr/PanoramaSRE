@@ -23,6 +23,8 @@ interface SidebarRailProps {
   behindReleasesCount?: number;
   dietpiPackagesCount?: number;
   securityViolationCount?: number;
+  topologyAlertCount?: number;
+  topologyAlertSeverity?: 'error' | 'warning' | null;
   smokeFailureCount?: number;
 }
 
@@ -34,29 +36,46 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
   behindReleasesCount = 0,
   dietpiPackagesCount = 0,
   securityViolationCount = 0,
+  topologyAlertCount,
+  topologyAlertSeverity,
   smokeFailureCount = 0,
 }) => {
-  const navItems: { id: NavItem; label: string; icon: React.ComponentType<{ className?: string }>; badge?: number; badgeColor?: string }[] = [
+  const effectiveTopologyBadge =
+    topologyAlertCount !== undefined ? topologyAlertCount : securityViolationCount;
+  const effectiveTopologySeverity =
+    topologyAlertSeverity !== undefined
+      ? topologyAlertSeverity
+      : securityViolationCount > 0
+      ? 'error'
+      : null;
+
+  const navItems: {
+    id: NavItem;
+    label: string;
+    icon: React.ComponentType<{ className?: string }>;
+    badge?: number;
+    severity?: 'error' | 'warning';
+  }[] = [
     {
       id: 'hud',
       label: 'Command HUD',
       icon: Activity,
       badge: unhealthyCount > 0 ? unhealthyCount : securityViolationCount > 0 ? securityViolationCount : undefined,
-      badgeColor: 'bg-rose-500',
+      severity: 'error',
     },
     { id: 'local-dev', label: 'Local Dev Supervisor', icon: Terminal },
-    { id: 'releases', label: 'Releases & Drift', icon: GitBranch, badge: behindReleasesCount, badgeColor: 'bg-amber-500' },
+    { id: 'releases', label: 'Releases & Drift', icon: GitBranch, badge: behindReleasesCount, severity: 'warning' },
     {
       id: 'topology',
       label: 'Topology & Stacks',
       icon: Network,
-      badge: securityViolationCount > 0 ? securityViolationCount : undefined,
-      badgeColor: 'bg-rose-500 animate-pulse',
+      badge: effectiveTopologyBadge > 0 ? effectiveTopologyBadge : undefined,
+      severity: effectiveTopologySeverity || 'warning',
     },
-    { id: 'dietpi', label: 'DietPi Host', icon: Server, badge: dietpiPackagesCount, badgeColor: 'bg-amber-500' },
+    { id: 'dietpi', label: 'DietPi Host', icon: Server, badge: dietpiPackagesCount, severity: 'warning' },
     { id: 'edge', label: 'PKI & Certificates', icon: ShieldCheck },
-    { id: 'backups', label: 'Database Backups & DR', icon: HardDrive, badge: backupFailureCount, badgeColor: 'bg-rose-500' },
-    { id: 'smoke', label: 'Smoke Tests', icon: FlaskConical, badge: smokeFailureCount > 0 ? smokeFailureCount : undefined, badgeColor: 'bg-rose-500 animate-pulse' },
+    { id: 'backups', label: 'Database Backups & DR', icon: HardDrive, badge: backupFailureCount, severity: 'error' },
+    { id: 'smoke', label: 'Smoke Tests', icon: FlaskConical, badge: smokeFailureCount > 0 ? smokeFailureCount : undefined, severity: 'error' },
     { id: 'settings', label: 'Settings', icon: SettingsIcon },
   ];
 
@@ -126,18 +145,20 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
 
                 {item.badge !== undefined && item.badge > 0 && (
                   <>
-                    <span className={`md:hidden absolute top-2 right-2 w-2 h-2 rounded-full ${
-                      item.id === 'hud' || item.id === 'backups' ? 'bg-rose-500 animate-pulse' : 'bg-amber-400'
-                    }`} />
-                    <span className={`hidden md:inline-flex items-center justify-center ml-auto px-2 py-0.5 rounded-full text-[11px] font-mono font-bold shrink-0 ${
-                      item.id === 'hud' || item.id === 'backups'
-                        ? 'bg-rose-500 text-white shadow-[0_0_8px_rgba(244,63,94,0.6)] animate-pulse'
-                        : item.id === 'releases'
-                        ? 'bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/40 shadow-[0_0_6px_rgba(245,158,11,0.25)] font-bold'
-                        : item.id === 'dietpi'
-                        ? 'bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/40'
-                        : 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/40'
-                    }`}>
+                    <span
+                      className={`md:hidden absolute top-2 right-2 w-2 h-2 rounded-full ${
+                        item.severity === 'error'
+                          ? 'bg-rose-500 animate-pulse'
+                          : 'bg-amber-400 animate-pulse'
+                      }`}
+                    />
+                    <span
+                      className={`hidden md:inline-flex items-center justify-center ml-auto px-2 py-0.5 rounded-full text-[11px] font-mono font-bold shrink-0 ${
+                        item.severity === 'error'
+                          ? 'bg-rose-500 text-white shadow-[0_0_8px_rgba(244,63,94,0.6)] animate-pulse'
+                          : 'bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/40 shadow-[0_0_6px_rgba(245,158,11,0.25)] font-bold'
+                      }`}
+                    >
                       {item.badge}
                     </span>
                   </>

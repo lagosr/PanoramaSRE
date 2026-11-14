@@ -10,8 +10,10 @@ import {
 import { WshSnapshot, DiscoveredApp, TerminalTab, CloudflareTunnelVersionStatus } from '../../lib/types';
 import {
   synthesizeTopology,
+  computeTopologyBadges,
   TopologyRouteItem,
   IngressHop,
+  TopologyTabBadge,
 } from '../../lib/topology-synthesizer';
 import { buildRemoteSshCommand } from '../../lib/script-adapters';
 import { NetworkBoundaryCanvas } from './NetworkBoundaryCanvas';
@@ -69,6 +71,26 @@ export function TopologyStacksView({
     [apps, snapshot, tunnelVersionStatus]
   );
 
+  const badgeSummary = useMemo(
+    () => computeTopologyBadges(topology, snapshot !== null),
+    [topology, snapshot]
+  );
+
+  const renderTabBadge = (badge: TopologyTabBadge) => {
+    if (badge.count <= 0) return null;
+    return (
+      <span
+        className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold whitespace-nowrap flex-shrink-0 ${
+          badge.severity === 'error'
+            ? 'bg-rose-500 text-white animate-pulse'
+            : 'bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/40'
+        }`}
+      >
+        {badge.count}
+      </span>
+    );
+  };
+
   const handleOpenInspector = (route: TopologyRouteItem | null, hop: IngressHop | null) => {
     setDrawerRoute(route);
     setDrawerHop(hop);
@@ -110,7 +132,7 @@ export function TopologyStacksView({
         <div className="flex flex-wrap items-center gap-1.5 p-1 rounded-xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/60 text-xs font-mono">
           <button
             onClick={() => setActiveTab('visual')}
-            className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
               activeTab === 'visual'
                 ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm font-semibold'
                 : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
@@ -118,11 +140,12 @@ export function TopologyStacksView({
           >
             <Zap className="w-3.5 h-3.5 text-emerald-500" />
             Visual Boundary Map
+            {renderTabBadge(badgeSummary.tabs.visual)}
           </button>
 
           <button
             onClick={() => setActiveTab('matrix')}
-            className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
               activeTab === 'matrix'
                 ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm font-semibold'
                 : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
@@ -130,11 +153,12 @@ export function TopologyStacksView({
           >
             <Server className="w-3.5 h-3.5 text-sky-500" />
             Proxy Routing Table
+            {renderTabBadge(badgeSummary.tabs.matrix)}
           </button>
 
           <button
             onClick={() => setActiveTab('hardware')}
-            className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
               activeTab === 'hardware'
                 ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm font-semibold'
                 : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
@@ -142,11 +166,12 @@ export function TopologyStacksView({
           >
             <Layers className="w-3.5 h-3.5 text-purple-500" />
             DietPi Hardware
+            {renderTabBadge(badgeSummary.tabs.hardware)}
           </button>
 
           <button
             onClick={() => setActiveTab('tunnel')}
-            className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
               activeTab === 'tunnel'
                 ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm font-semibold'
                 : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
@@ -154,17 +179,12 @@ export function TopologyStacksView({
           >
             <Cloud className="w-3.5 h-3.5 text-indigo-500" />
             Cloudflare Tunnel
-            {topology.cloudflared.updateAvailable && (
-              <span
-                className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"
-                title="Cloudflare Tunnel update available"
-              />
-            )}
+            {renderTabBadge(badgeSummary.tabs.tunnel)}
           </button>
 
           <button
             onClick={() => setActiveTab('rules')}
-            className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
               activeTab === 'rules'
                 ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm font-semibold'
                 : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
@@ -172,9 +192,7 @@ export function TopologyStacksView({
           >
             <Sliders className="w-3.5 h-3.5 text-amber-500" />
             Security & Rules Advisor
-            {topology.securityAudit.securityViolationCount > 0 && (
-              <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
-            )}
+            {renderTabBadge(badgeSummary.tabs.rules)}
           </button>
         </div>
       </div>

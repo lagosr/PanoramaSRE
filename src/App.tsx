@@ -16,7 +16,7 @@ import { EdgePkiView } from './components/edge/EdgePkiView';
 import { ReleasePipelineView } from './components/releases/ReleasePipelineView';
 import { BackupsRecoveryView } from './components/backups/BackupsRecoveryView';
 import { SmokeTestsView } from './components/smoke/SmokeTestsView';
-import { synthesizeTopology } from './lib/topology-synthesizer';
+import { synthesizeTopology, computeTopologyBadges } from './lib/topology-synthesizer';
 import {
   DiscoveredApp,
   NetworkPosture,
@@ -1824,6 +1824,10 @@ export const App: React.FC = () => {
     () => synthesizeTopology(apps, wshSnapshot, tunnelVersionStatus),
     [apps, wshSnapshot, tunnelVersionStatus]
   );
+  const topologyBadges = React.useMemo(
+    () => computeTopologyBadges(topology, wshSnapshot !== null),
+    [topology, wshSnapshot]
+  );
   const securityViolationCount = wshSnapshot ? topology.securityAudit.securityViolationCount : 0;
   const failingInvariants = wshSnapshot ? topology.securityAudit.invariants.filter((i) => i.status === 'FAIL') : [];
   const smokeFailureCount = smokeRuns[0]?.failed || 0;
@@ -2163,6 +2167,8 @@ export const App: React.FC = () => {
           behindReleasesCount={behindReleasesCount}
           dietpiPackagesCount={dietpiPackagesCount}
           securityViolationCount={securityViolationCount}
+          topologyAlertCount={topologyBadges.totalCount}
+          topologyAlertSeverity={topologyBadges.severity}
           smokeFailureCount={smokeFailureCount}
         />
 

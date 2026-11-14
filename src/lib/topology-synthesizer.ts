@@ -674,3 +674,101 @@ export function synthesizeTopology(
     ingressTraces,
   };
 }
+
+export type TopologyAlertSeverity = 'error' | 'warning' | null;
+
+export interface TopologyTabBadge {
+  count: number;
+  severity: TopologyAlertSeverity;
+}
+
+export interface TopologyBadgeSummary {
+  /** Total distinct error count across tunnel, proxy routes, hardware NIC, and security invariants */
+  errorCount: number;
+  /** Total distinct update/warning count (e.g., upstream cloudflared update available) */
+  updateCount: number;
+  /** Combined count for the SidebarRail "Topology & Stacks" badge */
+  totalCount: number;
+  /** 'error' (rose) when errorCount > 0, 'warning' (amber) when only updateCount > 0, null when 0 */
+  severity: TopologyAlertSeverity;
+  /** Per-subpage badge counts and severities for TopologyStacksView tabs */
+  tabs: {
+    visual: TopologyTabBadge;
+    matrix: TopologyTabBadge;
+    hardware: TopologyTabBadge;
+    tunnel: TopologyTabBadge;
+    rules: TopologyTabBadge;
+  };
+}
+
+/**
+ * Computes navigation and sub-tab error/update badges across Cloudflare Tunnel
+ * and all Topology & Stacks views without emitting false errors before initial snapshot load.
+ */
+export function computeTopologyBadges(
+  topology: SynthesizedTopology,
+  hasSnapshot: boolean
+): TopologyBadgeSummary {
+  const unhealthyRoutesCount = hasSnapshot
+    ? topology.routes.filter((r) => !r.isHealthy).length
+    : 0;
+  const eth0 =
+    topology.host.physicalInterfaces.find((i) => i.ifname === 'eth0') ||
+    topology.host.physicalInterfaces[0];
+  const eth0DownCount =
+    hasSnapshot && eth0?.operstate && eth0.operstate.toUpperCase() !== 'UP' ? 1 : 0;
+  const zeroBindCount = hasSnapshot ? topology.securityAudit.zeroBindViolations.length : 0;
+  const securityViolationCount = hasSnapshot ? topology.securityAudit.securityViolationCount : 0;
+  const tunnelErrorCount = hasSnapshot && !topology.cloudflared.isHealthy ? 1 : 0;
+  const tunnelUpdateCount = topology.cloudflared.updateAvailable ? 1 : 0;
+
+  const matrixBadge: TopologyTabBadge = {
+    count: unhealthyRoutesCount,
+    severity: unhealthyRoutesCount > 0 ? 'error' : null,
+  };
+
+  const hardwareCount = eth0DownCount + zeroBindCount;
+  const hardwareBadge: TopologyTabBadge = {
+    count: hardwareCount,
+    severity: hardwareCount > 0 ? 'error' : null,
+  };
+
+  const tunnelCount = tunnelErrorCount + tunnelUpdateCount;
+  const tunnelBadge: TopologyTabBadge = {
+    count: tunnelCount,
+    severity: tunnelErrorCount > 0 ? 'error' : tunnelUpdateCount > 0 ? 'warning' : null,
+  };
+
+  const rulesBadge: TopologyTabBadge = {
+    count: securityViolationCount,
+    severity: securityViolationCount > 0 ? 'error' : null,
+  };
+
+  const visualErrors = unhealthyRoutesCount + tunnelErrorCount + securityViolationCount;
+  const visualCount = visualErrors + tunnelUpdateCount;
+  const visualBadge: TopologyTabBadge = {
+    count: visualCount,
+    severity: visualErrors > 0 ? 'error' : tunnelUpdateCount > 0 ? 'warning' : null,
+  };
+
+  const errorCount =
+    securityViolationCount + unhealthyRoutesCount + eth0DownCount + tunnelErrorCount;
+  const updateCount = tunnelUpdateCount;
+  const totalCount = errorCount + updateCount;
+  const severity: TopologyAlertSeverity =
+    errorCount > 0 ? 'error' : updateCount > 0 ? 'warning' : null;
+
+  return {
+    errorCount,
+    updateCount,
+    totalCount,
+    severity,
+    tabs: {
+      visual: visualBadge,
+      matrix: matrixBadge,
+      hardware: hardwareBadge,
+      tunnel: tunnelBadge,
+      rules: rulesBadge,
+    },
+  };
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { synthesizeTopology, compareTunnelVersions } from '../topology-synthesizer';
+import { synthesizeTopology, compareTunnelVersions, computeTopologyBadges } from '../topology-synthesizer';
 import { DiscoveredApp, WshSnapshot, CloudflareTunnelVersionStatus } from '../types';
 
 describe('synthesizeTopology', () => {
@@ -313,5 +313,98 @@ describe('synthesizeTopology', () => {
     expect(upToDateResult.cloudflared.latestVersion).toBe('2026.11.0');
     expect(upToDateResult.cloudflared.updateAvailable).toBe(false);
     expect(upToDateResult.cloudflared.isUpToDate).toBe(true);
+  });
+
+  it('computes warning and error badges across navigation bar and all topology sub-tabs', () => {
+    const cleanSnapshot: WshSnapshot = {
+      mode: '--fast',
+      hostname: 'wsh-live',
+      kernel: '6.6.20',
+      uptime_secs: 100,
+      dietpi_version: '9.3.0',
+      dietpi_update_available: '',
+      reboot_required: false,
+      rpi_throttled: '0x0',
+      services: { lighttpd: 'active', docker: 'active', ssh: 'active' },
+      listening_ports: [80, 443, 3000, 3001],
+      lighttpd_routes_raw: 'auth:3000,spendy:3001',
+      containers: [
+        { Names: 'panorama-auth', State: 'running', Ports: '127.0.0.1:3000->3000/tcp' },
+        { Names: 'spendy-ledger', State: 'running', Ports: '127.0.0.1:3001->3001/tcp' },
+      ],
+      container_stats: [],
+      images: [],
+      cloudflared: {
+        version_raw: 'cloudflared version 2026.10.7',
+        recent_logs: '2026-11-13T10:00:00Z INF Registered tunnel connection',
+      },
+      apt_upgradable_raw: '',
+      data_volumes_raw: '',
+      docker_df: [],
+      release_ledgers: {},
+      network_interfaces: [{ ifname: 'eth0', flags: ['BROADCAST', 'MULTICAST', 'UP'], mtu: 1500, operstate: 'UP' }],
+      firewall_rules_raw:
+        '-N DOCKER-USER\n-A DOCKER-USER -d 10.0.0.0/8 -o eth0 -j DROP\n-A DOCKER-USER -d 172.16.0.0/12 -o eth0 -j DROP\n-A DOCKER-USER -d 192.168.0.0/16 -o eth0 -j DROP\n-N PANORAMA-INPUT\n-A PANORAMA-INPUT -i br-+ -p tcp -m tcp --dport 22 -j DROP\n',
+    };
+
+    const updateStatus: CloudflareTunnelVersionStatus = {
+      runningVersion: '2026.10.7',
+      runningRaw: 'cloudflared version 2026.10.7',
+      latestVersion: '2026.11.0',
+      isUpToDate: false,
+      updateAvailable: true,
+      checkedAtIso: '2026-11-13T20:00:00Z',
+      checkedAtEpoch: 1794600000,
+      source: 'github',
+    };
+
+    // 1. Update-only warning state
+    const warningTopo = synthesizeTopology(mockApps, cleanSnapshot, updateStatus);
+    const warningBadges = computeTopologyBadges(warningTopo, true);
+    expect(warningBadges.errorCount).toBe(0);
+    expect(warningBadges.updateCount).toBe(1);
+    expect(warningBadges.totalCount).toBe(1);
+    expect(warningBadges.severity).toBe('warning');
+    expect(warningBadges.tabs.tunnel).toEqual({ count: 1, severity: 'warning' });
+    expect(warningBadges.tabs.visual).toEqual({ count: 1, severity: 'warning' });
+    expect(warningBadges.tabs.matrix.count).toBe(0);
+    expect(warningBadges.tabs.hardware.count).toBe(0);
+    expect(warningBadges.tabs.rules.count).toBe(0);
+
+    // 2. Multi-subpage error state (unhealthy route + tunnel ERR + eth0 DOWN + 0.0.0.0 violation)
+    const brokenSnapshot: WshSnapshot = {
+      ...cleanSnapshot,
+      containers: [
+        { Names: 'panorama-auth', State: 'running', Ports: '127.0.0.1:3000->3000/tcp' },
+        { Names: 'spendy-ledger', State: 'exited', Ports: '0.0.0.0:3001->3001/tcp' },
+      ],
+      cloudflared: {
+        version_raw: 'cloudflared version 2026.10.7',
+        recent_logs: '2026-11-13T10:00:00Z ERR failed to connect to edge',
+      },
+      network_interfaces: [{ ifname: 'eth0', flags: ['BROADCAST', 'MULTICAST'], mtu: 1500, operstate: 'DOWN' }],
+    };
+
+    const errorTopo = synthesizeTopology(mockApps, brokenSnapshot, updateStatus);
+    const errorBadges = computeTopologyBadges(errorTopo, true);
+    expect(errorBadges.severity).toBe('error');
+    expect(errorBadges.tabs.matrix).toEqual({ count: 1, severity: 'error' });
+    expect(errorBadges.tabs.hardware).toEqual({ count: 2, severity: 'error' }); // eth0 DOWN + zeroBindViolation
+    expect(errorBadges.tabs.tunnel).toEqual({ count: 2, severity: 'error' }); // tunnel error + update
+    expect(errorBadges.tabs.rules.count).toBeGreaterThan(0);
+    expect(errorBadges.tabs.rules.severity).toBe('error');
+    expect(errorBadges.tabs.visual.severity).toBe('error');
+    expect(errorBadges.totalCount).toBeGreaterThan(2);
+
+    // 3. No snapshot yet -> suppresses false snapshot errors, retains cached tunnel update warning
+    const preSnapshotTopo = synthesizeTopology(mockApps, null, updateStatus);
+    const preSnapshotBadges = computeTopologyBadges(preSnapshotTopo, false);
+    expect(preSnapshotBadges.errorCount).toBe(0);
+    expect(preSnapshotBadges.updateCount).toBe(1);
+    expect(preSnapshotBadges.severity).toBe('warning');
+    expect(preSnapshotBadges.tabs.matrix.count).toBe(0);
+    expect(preSnapshotBadges.tabs.hardware.count).toBe(0);
+    expect(preSnapshotBadges.tabs.rules.count).toBe(0);
+    expect(preSnapshotBadges.tabs.tunnel).toEqual({ count: 1, severity: 'warning' });
   });
 });
