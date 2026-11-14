@@ -511,6 +511,11 @@ export const App: React.FC = () => {
 
     listen<{ action: string; slug: string; message: string }>('sre://agent-action', (event) => {
       const msg = event.payload?.message || `AI Agent executed ${event.payload?.action || 'action'}`;
+      if (event.payload?.action === 'composition') {
+        syncFullTelemetry(false, false);
+        refreshMcpStatus();
+        return;
+      }
       showActionFeedback(msg, 'success', 4000);
       refreshDevServers();
       refreshMcpStatus();
@@ -534,7 +539,7 @@ export const App: React.FC = () => {
       if (unlistenAction) unlistenAction();
       if (unlistenAlert) unlistenAlert();
     };
-  }, [showActionFeedback, refreshDevServers, refreshMcpStatus]);
+  }, [showActionFeedback, refreshDevServers, refreshMcpStatus, syncFullTelemetry]);
 
   // Periodic WSH Security Hardening & Penetration Audit Timer
   useEffect(() => {
@@ -983,7 +988,10 @@ export const App: React.FC = () => {
           currentRunningDeployJobIdRef.current = null;
         }
         finalizeTerminalJob(jobId, exitCode);
-        syncFullTelemetry(false);
+        syncFullTelemetry(false, false);
+        setTimeout(() => {
+          syncFullTelemetry(false, false);
+        }, 1500);
         if (!skipSmoke) {
           refreshSmokeHistory();
         }

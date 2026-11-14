@@ -59,7 +59,7 @@ fn read_local_build_telemetry(repo_dir: &Path) -> Option<serde_json::Value> {
     parsed.get("build_telemetry").cloned().filter(|v| !v.is_null())
 }
 
-fn run_git(repo_dir: &Path, args: &[&str]) -> Result<String, String> {
+fn run_git_raw(repo_dir: &Path, args: &[&str]) -> Result<String, String> {
     #[cfg(windows)]
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -73,7 +73,47 @@ fn run_git(repo_dir: &Path, args: &[&str]) -> Result<String, String> {
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .trim_end_matches(&['\r', '\n'][..])
+        .to_string())
+}
+
+fn run_git(repo_dir: &Path, args: &[&str]) -> Result<String, String> {
+    run_git_raw(repo_dir, args).map(|s| s.trim().to_string())
+}
+
+pub fn parse_porcelain_line(line: &str) -> Option<ChangedFileItem> {
+    let clean = line.trim_end_matches(&['\r', '\n'][..]);
+    if clean.trim().is_empty() || clean.contains("release-manifest.json") {
+        return None;
+    }
+
+    let chars: Vec<char> = clean.chars().collect();
+    let (status, path) = if chars.len() >= 4 && chars[2] == ' ' {
+        (
+            chars[..2].iter().collect::<String>().trim().to_string(),
+            chars[3..].iter().collect::<String>().trim().to_string(),
+        )
+    } else if chars.len() >= 3 && chars[1] == ' ' && chars[2] != ' ' {
+        (
+            chars[0].to_string(),
+            chars[2..].iter().collect::<String>().trim().to_string(),
+        )
+    } else if let Some((st, p)) = clean.trim().split_once(char::is_whitespace) {
+        (st.trim().to_string(), p.trim().to_string())
+    } else {
+        return None;
+    };
+
+    if path.is_empty() {
+        return None;
+    }
+
+    Some(ChangedFileItem { status, path })
+}
+
+pub fn parse_porcelain_dirty_files(raw: &str) -> Vec<ChangedFileItem> {
+    raw.lines().filter_map(parse_porcelain_line).collect()
 }
 
 pub fn classify_blast_radius(paths: &[String], has_new_env_keys: bool) -> Vec<String> {
@@ -130,15 +170,8 @@ pub async fn compute_app_composition(
     let head_short = head_sha.chars().take(7).collect::<String>();
     let branch = run_git(repo, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_else(|_| "HEAD".into());
 
-    let porcelain = run_git(repo, &["status", "--porcelain"]).unwrap_or_default();
-    let dirty_files: Vec<ChangedFileItem> = porcelain
-        .lines()
-        .filter(|l| !l.trim().is_empty() && !l.contains("release-manifest.json"))
-        .map(|l| ChangedFileItem {
-            status: l.chars().take(2).collect::<String>().trim().to_string(),
-            path: l.chars().skip(3).collect::<String>().trim().to_string(),
-        })
-        .collect();
+    let porcelain = run_git_raw(repo, &["status", "--porcelain"]).unwrap_or_default();
+    let dirty_files = parse_porcelain_dirty_files(&porcelain);
     let local_dirty = !dirty_files.is_empty();
 
     // Gather recent git commits and release tags to form candidate rollback and release history
@@ -390,5 +423,25 @@ EMPTY_VAL=
         assert!(keys.contains("PORT"));
         assert!(keys.contains("DATABASE_URL"));
         assert!(keys.contains("EMPTY_VAL"));
+    }
+
+    #[test]
+    fn test_parse_porcelain_dirty_files() {
+        let raw = " M Dockerfile\nM  src/App.tsx\n?? test.txt\n M release-manifest.json\n";
+        let items = parse_porcelain_dirty_files(raw);
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].status, "M");
+        assert_eq!(items[0].path, "Dockerfile");
+        assert_eq!(items[1].status, "M");
+        assert_eq!(items[1].path, "src/App.tsx");
+        assert_eq!(items[2].status, "??");
+        assert_eq!(items[2].path, "test.txt");
+
+        // Also ensure pre-trimmed first line never truncates "Dockerfile" to "ockerfile"
+        let trimmed = raw.trim();
+        let trimmed_items = parse_porcelain_dirty_files(trimmed);
+        assert_eq!(trimmed_items.len(), 3);
+        assert_eq!(trimmed_items[0].status, "M");
+        assert_eq!(trimmed_items[0].path, "Dockerfile");
     }
 }

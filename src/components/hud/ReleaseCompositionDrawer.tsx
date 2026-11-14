@@ -206,6 +206,23 @@ export function ReleaseCompositionDrawer({ app, isOpen, onClose }: ReleaseCompos
             )}
           </div>
 
+          {/* Uncommitted Working Tree Files */}
+          {comp && comp.dirty_files && comp.dirty_files.length > 0 && (
+            <div>
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-amber-500 dark:text-amber-400 mb-2">
+                Uncommitted Working Tree Files ({comp.dirty_files.length})
+              </h4>
+              <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 p-3 font-mono text-xs max-h-48 overflow-y-auto space-y-1">
+                {comp.dirty_files.map((f, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <span className="text-amber-600 dark:text-amber-400 font-semibold w-5 shrink-0">{f.status}</span>
+                    <span className="truncate text-slate-800 dark:text-slate-200">{f.path}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Changed Files Since Prod */}
           <div>
             <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">

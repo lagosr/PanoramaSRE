@@ -1,6 +1,6 @@
 use crate::commands::git_ops::compute_app_composition;
 use crate::commands::ledger::read_backup_ledger;
-use crate::commands::monitor::detect_network_posture;
+use crate::commands::monitor::{detect_network_posture, probe_app_health};
 use crate::commands::smoke_ops::{get_smoke_test_history, run_smoke_tests_streaming};
 use crate::commands::ssl_ops::get_ssl_fleet_status;
 use crate::commands::workspace::{discover_suite_apps_internal, resolve_suite_workspace_root};
@@ -1120,25 +1120,76 @@ pub async fn process_ipc_message(
                 Err(e) => return IpcResponse::err(&req.id, "DISCOVERY_ERROR", e),
             };
 
-            let mut reports = Vec::new();
+            let mut handles = Vec::new();
             for app in apps {
                 if let Some(ref f) = filter_slug {
                     if f != "all" && !app.manifest.slug.eq_ignore_ascii_case(f) {
                         continue;
                     }
                 }
-                let app_id = app
-                    .manifest
-                    .app_id
-                    .clone()
-                    .unwrap_or_else(|| app.manifest.slug.clone());
-                if let Ok(rep) =
-                    compute_app_composition(app_id, app.workspace_path.clone(), None, None, false)
-                        .await
-                {
+                handles.push(tokio::spawn(async move {
+                    let app_id = app
+                        .manifest
+                        .app_id
+                        .clone()
+                        .unwrap_or_else(|| app.manifest.slug.clone());
+                    let health_url = format!(
+                        "https://wsh.panoramadr.com{}/api/health",
+                        app.manifest.base_path
+                    );
+                    let probed = probe_app_health(app_id.clone(), health_url, Some(3000)).await;
+                    let prod_sha = probed
+                        .health
+                        .as_ref()
+                        .and_then(|h| h.release.as_ref())
+                        .and_then(|r| r.get("commit_sha"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let prod_release_id = probed.health.as_ref().and_then(|h| {
+                        h.release
+                            .as_ref()
+                            .and_then(|r| r.get("release_id"))
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                            .or_else(|| h.version.as_ref().map(|v| format!("v{}", v)))
+                    });
+                    let prod_dirty = probed
+                        .health
+                        .as_ref()
+                        .and_then(|h| h.release.as_ref())
+                        .and_then(|r| r.get("dirty"))
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+
+                    compute_app_composition(
+                        app_id,
+                        app.workspace_path,
+                        prod_sha,
+                        prod_release_id,
+                        prod_dirty,
+                    )
+                    .await
+                    .ok()
+                }));
+            }
+
+            let mut reports = Vec::new();
+            for h in handles {
+                if let Ok(Some(rep)) = h.await {
                     reports.push(rep);
                 }
             }
+
+            let target_slug = filter_slug.as_deref().unwrap_or("all");
+            emit_ui_event(
+                app_handle,
+                "sre://agent-action",
+                json!({
+                    "action": "composition",
+                    "slug": target_slug,
+                    "message": format!("AI Agent queried git composition ({})", target_slug),
+                }),
+            );
 
             IpcResponse::success(&req.id, json!({ "reports": reports }))
         }

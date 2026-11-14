@@ -195,14 +195,16 @@ export function ReleasePipelineView({
     const fullText = lines.join('\n');
 
     // Stage 1: SemVer, Git & Pre-flight
-    if (fullText.includes('TypeScript') || fullText.includes('database backup')) {
+    if (/\[Stage 1\/5\]|Pre-build validation|Executing guided SemVer bump|TypeScript|database backup/i.test(fullText)) {
       maxStage = 1;
       label = 'Pre-flight & TypeScript Validation';
-      subStep = 'Compiling TypeScript (tsc --noEmit)';
+      subStep = /SemVer bump/i.test(fullText)
+        ? 'Executing SemVer Bump & Git Provenance'
+        : 'Compiling TypeScript (tsc --noEmit)';
     }
 
     // Stage 2: Multi-stage Docker Buildx build
-    if (/Building and packaging Docker image|docker buildx build|RUN apk|RUN npm|DONE|transferring context|CACHED/i.test(fullText)) {
+    if (/\[Stage 2\/5\]|Cross-compiling Docker image|Building and packaging Docker image|docker buildx build|RUN apk|RUN npm|DONE|transferring context|CACHED/i.test(fullText)) {
       maxStage = 2;
       label = 'Building Docker Image (Buildx)';
       const tail = lines.slice(-20).join(' ');
@@ -210,7 +212,7 @@ export function ReleasePipelineView({
         subStep = 'Next.js App Build (npm run build)';
       } else if (/npm (?:ci|install)|apk add/i.test(tail)) {
         subStep = 'Installing Dependencies (npm ci)';
-      } else if (/exporting to image|writing image|saving/i.test(tail)) {
+      } else if (/exporting to image|exporting to docker image format|writing image|saving/i.test(tail)) {
         subStep = 'Exporting Container Archive to Tar';
       } else if (/transferring context/i.test(tail)) {
         subStep = 'Transferring Build Context';
@@ -220,13 +222,13 @@ export function ReleasePipelineView({
     }
 
     // Stage 3: SSH staging & SCP image transfer
-    if (/Preparing remote environment|Uploading archive and configurations|Files staged on server|Invoke-PscpUpload|pscp|scp\.exe/i.test(fullText)) {
+    if (/\[Stage 3\/5\]|\[Stage 4\/5\]|Remote pre-flight|Staging image archive|Files staged at|Preparing remote environment|Uploading archive and configurations|Files staged on server|Invoke-PscpUpload|pscp|scp\.exe/i.test(fullText)) {
       maxStage = 3;
       label = 'Transferring Image to DietPi (SCP)';
       const tail = lines.slice(-20).join(' ');
-      if (/Uploading archive|tar|pscp|scp/i.test(tail)) {
+      if (/Uploading archive|Staging image archive|tar|pscp|scp/i.test(tail)) {
         subStep = 'Uploading Docker Tar via SCP to Host';
-      } else if (/lighttpd/i.test(tail)) {
+      } else if (/lighttpd|pre-flight/i.test(tail)) {
         subStep = 'Configuring Ingress Proxy (Lighttpd)';
       } else {
         subStep = 'Staging Artifacts on DietPi';
@@ -234,13 +236,15 @@ export function ReleasePipelineView({
     }
 
     // Stage 4: Rolling container swap & zero-downtime startup
-    if (/Executing deployment|Deploying container on remote server|docker load|docker compose up|container is live/i.test(fullText)) {
+    if (/\[Stage 5\/5\]|Executing transactional container deployment|Capturing pre-deploy SQLite snapshot|Pre-deploy snapshot secured|Container .* swapped to|Executing deployment|Deploying container on remote server|docker load|docker compose up|container is live/i.test(fullText)) {
       maxStage = 4;
       label = 'Rolling Container Swap';
       const tail = lines.slice(-20).join(' ');
-      if (/docker load/i.test(tail)) {
+      if (/pre-deploy.*snapshot/i.test(tail)) {
+        subStep = 'Capturing Pre-Deploy SQLite Snapshot';
+      } else if (/docker load/i.test(tail)) {
         subStep = 'Loading Tar into Docker Engine';
-      } else if (/docker compose up|Recreate/i.test(tail)) {
+      } else if (/docker compose up|Recreate|CONTAINER_STARTED|swapped to/i.test(tail)) {
         subStep = 'Starting New Container Instance';
       } else if (/retention|prune/i.test(tail)) {
         subStep = 'Pruning Old Tags (N-3 Retention)';
@@ -250,13 +254,15 @@ export function ReleasePipelineView({
     }
 
     // Stage 5: Post-deployment health verification & probes
-    if (/POST-DEPLOYMENT VERIFICATION|Checking Health Endpoint|Checking GEMINI_API_KEY|Checking Auth|Checking Write Permissions|Updated local git tag/i.test(fullText)) {
+    if (/POST-DEPLOYMENT VERIFICATION|SUITE SMOKE TEST VERIFICATION GATE|Checking Health Endpoint|Checking GEMINI_API_KEY|Checking Auth|Checking Write Permissions|Updated local git tag/i.test(fullText)) {
       maxStage = 5;
       label = 'Validating Health Probes';
       const tail = lines.slice(-20).join(' ');
-      if (/Checking Health Endpoint|curl.*\/api\/health/i.test(tail)) {
+      if (/SUITE SMOKE TEST VERIFICATION GATE|\[smoke/i.test(tail)) {
+        subStep = 'Running Suite Smoke Test Gate';
+      } else if (/Checking Health Endpoint|Health Endpoint Telemetry|curl.*\/api\/health/i.test(tail)) {
         subStep = 'Probing /api/health Endpoint';
-      } else if (/Checking Auth|Checking GEMINI|Write Permissions/i.test(tail)) {
+      } else if (/Checking Auth|Checking GEMINI|Write Permissions|Security Profile/i.test(tail)) {
         subStep = 'Verifying Runtime Configuration';
       } else if (/deployed\/prod/i.test(tail)) {
         subStep = 'Updating Local Git Provenance Tag';
@@ -266,10 +272,10 @@ export function ReleasePipelineView({
     }
 
     // Stage 6: Manifest sync with PanoramaAuth IdP
-    if (/Notifying PanoramaAuth to sync|Manifest synchronization triggered|Verify at: https/i.test(fullText) || isFinished) {
+    if (/Finalizing deployment transaction|Cleaned up pre-deploy database snapshot|Synchronizing application manifest|Manifest sync triggered|Live endpoint: https|Deployment run completed successfully|Notifying PanoramaAuth to sync|Manifest synchronization triggered|Verify at: https/i.test(fullText) || isFinished) {
       maxStage = 6;
       label = 'Syncing Manifest with IdP';
-      subStep = isFinished ? 'All 6 Release Stages Completed' : 'Triggering Manifest Webhook';
+      subStep = isFinished ? 'All 6 Release Stages Completed' : 'Finalizing & Syncing Manifest';
     }
 
     const icon =
@@ -303,15 +309,26 @@ export function ReleasePipelineView({
 
   const currentStageInfo = getDeploymentStage(displayedDeployJob);
 
-  // Auto-scroll terminal log internally when active, stick-to-bottom is enabled, and new lines arrive
+  // Reset stick-to-bottom when switching to a different deployment stream
   useEffect(() => {
-    if (!isStreamCollapsed && showLogTerminal && displayedDeployJob?.isRunning && isStickToBottomRef.current) {
+    isStickToBottomRef.current = true;
+  }, [displayedDeployJob?.id]);
+
+  // Auto-scroll terminal log internally when stick-to-bottom is enabled and lines arrive or job completes
+  useEffect(() => {
+    if (!isStreamCollapsed && showLogTerminal && displayedDeployJob && isStickToBottomRef.current) {
       const el = terminalScrollRef.current;
       if (el) {
         el.scrollTop = el.scrollHeight;
       }
     }
-  }, [displayedDeployJob?.lines?.length, displayedDeployJob?.isRunning, isStreamCollapsed, showLogTerminal]);
+  }, [
+    displayedDeployJob?.id,
+    displayedDeployJob?.lines?.length,
+    displayedDeployJob?.isRunning,
+    isStreamCollapsed,
+    showLogTerminal,
+  ]);
 
   const handleCopyLogs = async () => {
     if (!displayedDeployJob?.lines || displayedDeployJob.lines.length === 0) return;
@@ -474,6 +491,7 @@ export function ReleasePipelineView({
             const isSelected = selectedApp?.manifest.slug === app.manifest.slug;
             const isHealthy = app.health?.status === 'healthy';
             const isCritical = !isHealthy || app.provenanceState === 'PROD_UNREACHABLE' || app.provenanceState === 'DIRTY_PROD';
+            const isWipOnly = !isCritical && undeployedCount === 0 && isLocalDirty;
             const appIdent = app.manifest.containerName || app.manifest.slug || app.manifest.appId;
             const appResolvedTel = resolveActiveBuildTelemetry(app.health?.release, appComp);
             const appBuildBadge = evaluateBuildHealthBadge(appResolvedTel.telemetry, appIdent);
@@ -487,6 +505,10 @@ export function ReleasePipelineView({
                     ? isSelected
                       ? 'bg-rose-50 dark:bg-rose-950/40 border-rose-500 shadow-[0_0_18px_rgba(244,63,94,0.35)] ring-2 ring-rose-500'
                       : 'bg-rose-50/50 dark:bg-rose-950/20 hover:bg-rose-100 dark:hover:bg-rose-950/30 border-rose-500/60 shadow-[0_0_10px_rgba(244,63,94,0.15)]'
+                    : isWipOnly
+                    ? isSelected
+                      ? 'bg-amber-500/10 dark:bg-amber-950/30 border-amber-500 shadow-[0_0_18px_rgba(245,158,11,0.3)] ring-2 ring-amber-500/70'
+                      : 'bg-amber-500/[0.04] dark:bg-amber-950/20 hover:bg-amber-500/[0.08] dark:hover:bg-amber-950/30 border-amber-500/60 shadow-[0_0_12px_rgba(245,158,11,0.15)]'
                     : needsDeploy
                     ? isSelected
                       ? 'bg-rose-500/10 dark:bg-rose-950/30 border-rose-500 shadow-[0_0_20px_rgba(244,63,94,0.4)] ring-2 ring-rose-500/80'
@@ -517,6 +539,11 @@ export function ReleasePipelineView({
                     <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/40 flex items-center gap-1 shrink-0 animate-pulse">
                       <Loader2 className="w-2.5 h-2.5 animate-spin" />
                       DEPLOYING
+                    </span>
+                  ) : isWipOnly ? (
+                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/40 flex items-center gap-1 shrink-0">
+                      <AlertTriangle className="w-2.5 h-2.5 text-amber-500 dark:text-amber-400" />
+                      UNCOMMITTED WIP
                     </span>
                   ) : needsDeploy ? (
                     <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/50 shadow-[0_0_8px_rgba(244,63,94,0.25)] flex items-center gap-1 shrink-0 animate-pulse">
@@ -1221,7 +1248,15 @@ export function ReleasePipelineView({
                     <Eye className="w-3.5 h-3.5 text-emerald-500 dark:text-emerald-400" />
                     <span>Inspect Diff</span>
                   </button>
-                  <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30 font-mono">
+                  <span
+                    className={`px-2.5 py-1 rounded-full text-xs font-semibold border font-mono ${
+                      comp?.state === 'DIRTY_PROD' || comp?.state === 'PROD_UNREACHABLE' || comp?.state === 'DIVERGED'
+                        ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/30'
+                        : comp?.state === 'LOCAL_WIP' || comp?.state === 'AHEAD'
+                        ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30'
+                        : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
+                    }`}
+                  >
                     {comp?.state || 'IN_SYNC'}
                   </span>
                 </div>
@@ -1239,8 +1274,8 @@ export function ReleasePipelineView({
                 )}
               </div>
 
-              {/* Undeployed Commits List */}
-              <div className="space-y-2">
+              {/* Undeployed Commits & Dirty Working Tree Files */}
+              <div className="space-y-3">
                 <p className="text-xs font-semibold text-slate-400">
                   Pending Commits ({comp?.undeployed_commits.length || 0}):
                 </p>
@@ -1256,10 +1291,26 @@ export function ReleasePipelineView({
                       </div>
                     ))}
                   </div>
-                ) : (
+                ) : !comp?.local_dirty ? (
                   <div className="p-4 rounded-lg bg-slate-50 dark:bg-slate-950/60 border border-slate-100 dark:border-slate-800/80 text-center text-xs text-slate-500 font-mono flex items-center justify-center gap-2">
                     <CheckCircle2 className="w-4 h-4 text-emerald-400" />
                     Local working tree is clean and synchronized with production.
+                  </div>
+                ) : null}
+
+                {comp?.dirty_files && comp.dirty_files.length > 0 && (
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-semibold text-amber-600 dark:text-amber-400">
+                      Uncommitted Working Tree Files ({comp.dirty_files.length}):
+                    </p>
+                    <div className="space-y-1 max-h-36 overflow-y-auto font-mono text-xs">
+                      {comp.dirty_files.map((f, idx) => (
+                        <div key={idx} className="p-2 rounded bg-amber-500/10 border border-amber-500/20 flex items-center gap-2">
+                          <span className="text-amber-600 dark:text-amber-400 font-bold w-5 shrink-0">{f.status}</span>
+                          <span className="text-slate-800 dark:text-slate-200 truncate">{f.path}</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
