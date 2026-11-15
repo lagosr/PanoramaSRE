@@ -24,7 +24,7 @@ import {
 } from '../../lib/stream-utils';
 import { formatConsoleLine, stripAnsiCodes } from '../layout/ConsoleColorizer';
 import { useSmartAutoScroll } from '../../hooks/useSmartAutoScroll';
-import { formatLocalTime, formatRelativeTime } from '../../lib/formatters';
+import { formatLocalDateTime, formatLocalTime, formatRelativeTime } from '../../lib/formatters';
 
 export interface StreamStatusMeta {
   state: 'idle' | 'running' | 'completed' | 'failed';
@@ -102,6 +102,10 @@ export interface WorkStreamContainerProps {
   onClearTab?: (tabId: string) => void;
   defaultExpandedOnMount?: boolean;
   expandRequest?: { tabId?: string; nonce: number } | null;
+  selectedTabId?: string | null;
+  onSelectTab?: (tabId: string) => void;
+  unmatchedSelectionMessage?: string | null;
+  unmatchedSelectPlaceholder?: string;
   className?: string;
 }
 
@@ -119,6 +123,10 @@ export const WorkStreamContainer: React.FC<WorkStreamContainerProps> = ({
   onClearTab,
   defaultExpandedOnMount = false,
   expandRequest = null,
+  selectedTabId: controlledSelectedTabId,
+  onSelectTab,
+  unmatchedSelectionMessage = null,
+  unmatchedSelectPlaceholder,
   className = '',
 }) => {
   const scopedTabs = useMemo(
@@ -131,7 +139,8 @@ export const WorkStreamContainer: React.FC<WorkStreamContainerProps> = ({
     [scopedTabs]
   );
 
-  const [selectedTabId, setSelectedTabId] = useState<string | null>(
+  const isControlledSelection = controlledSelectedTabId !== undefined;
+  const [internalSelectedTabId, setInternalSelectedTabId] = useState<string | null>(
     () => runningScopedTab?.id ?? scopedTabs[0]?.id ?? null
   );
   const [isExpanded, setIsExpanded] = useState<boolean>(
@@ -146,6 +155,16 @@ export const WorkStreamContainer: React.FC<WorkStreamContainerProps> = ({
     id: runningScopedTab?.id ?? null,
   });
 
+  const handleSelectTab = useCallback(
+    (nextTabId: string) => {
+      if (!isControlledSelection) {
+        setInternalSelectedTabId(nextTabId);
+      }
+      onSelectTab?.(nextTabId);
+    },
+    [isControlledSelection, onSelectTab]
+  );
+
   useEffect(() => {
     return () => {
       if (copyTimerRef.current) {
@@ -157,7 +176,8 @@ export const WorkStreamContainer: React.FC<WorkStreamContainerProps> = ({
   useEffect(() => {
     if (!expandRequest) return;
     if (expandRequest.tabId && scopedTabs.some((t) => t.id === expandRequest.tabId)) {
-      setSelectedTabId(expandRequest.tabId);
+      setInternalSelectedTabId(expandRequest.tabId);
+      onSelectTab?.(expandRequest.tabId);
     }
     setIsExpanded(true);
   }, [expandRequest?.nonce]);
@@ -176,7 +196,7 @@ export const WorkStreamContainer: React.FC<WorkStreamContainerProps> = ({
       )
     ) {
       if (currentRunning) {
-        setSelectedTabId(currentRunning.id);
+        setInternalSelectedTabId(currentRunning.id);
       }
       setIsExpanded(true);
     }
@@ -186,7 +206,7 @@ export const WorkStreamContainer: React.FC<WorkStreamContainerProps> = ({
       id: currentRunning?.id ?? null,
     };
 
-    setSelectedTabId((prevSelected) => {
+    setInternalSelectedTabId((prevSelected) => {
       if (prevSelected && scopedTabs.some((t) => t.id === prevSelected)) {
         return prevSelected;
       }
@@ -196,8 +216,12 @@ export const WorkStreamContainer: React.FC<WorkStreamContainerProps> = ({
 
   const activeTab = useMemo(() => {
     if (scopedTabs.length === 0) return null;
-    return scopedTabs.find((t) => t.id === selectedTabId) ?? scopedTabs[0];
-  }, [scopedTabs, selectedTabId]);
+    if (isControlledSelection) {
+      if (!controlledSelectedTabId) return null;
+      return scopedTabs.find((t) => t.id === controlledSelectedTabId) ?? null;
+    }
+    return scopedTabs.find((t) => t.id === internalSelectedTabId) ?? scopedTabs[0];
+  }, [scopedTabs, isControlledSelection, controlledSelectedTabId, internalSelectedTabId]);
 
   const {
     containerRef,
@@ -240,7 +264,7 @@ export const WorkStreamContainer: React.FC<WorkStreamContainerProps> = ({
           label: `${prefix}${tab.title}`,
           description: `${tab.lines.length} lines${sourceTag}${
             tab.finishedAt || tab.createdAt
-              ? ` • ${formatLocalTime(tab.finishedAt || tab.createdAt)}`
+              ? ` • ${formatLocalDateTime(tab.finishedAt || tab.createdAt)}`
               : ''
           }`,
         };
@@ -333,7 +357,14 @@ export const WorkStreamContainer: React.FC<WorkStreamContainerProps> = ({
                   )}
                 </>
               ) : (
-                <span>{helperCaption}</span>
+                <>
+                  <span>{unmatchedSelectionMessage || helperCaption}</span>
+                  {scopedTabs.length > 1 && (
+                    <span className="font-mono text-[11px] text-slate-400 dark:text-slate-500">
+                      ({scopedTabs.length} sessions)
+                    </span>
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -345,8 +376,12 @@ export const WorkStreamContainer: React.FC<WorkStreamContainerProps> = ({
                 <CustomSelect
                   value={activeTab?.id ?? ''}
                   options={sessionOptions}
-                  onChange={(val) => setSelectedTabId(val)}
-                  placeholder="Select stream session..."
+                  onChange={(val) => handleSelectTab(val)}
+                  placeholder={
+                    activeTab === null && unmatchedSelectPlaceholder
+                      ? unmatchedSelectPlaceholder
+                      : 'Select stream session...'
+                  }
                 />
               </div>
             )}
@@ -536,7 +571,8 @@ export const WorkStreamContainer: React.FC<WorkStreamContainerProps> = ({
                 <div className="py-8 text-center text-xs font-mono text-slate-500 dark:text-slate-400">
                   {activeTab?.isRunning
                     ? 'Process running — awaiting stdout/stderr lines...'
-                    : 'No output captured for this workspace yet. Trigger an action above to stream live execution logs here.'}
+                    : unmatchedSelectionMessage ||
+                      'No output captured for this workspace yet. Trigger an action above to stream live execution logs here.'}
                 </div>
               )}
             </div>

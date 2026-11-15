@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   FlaskConical,
   Play,
@@ -15,6 +15,8 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import { SmokeTestRun, TerminalTab } from '../../lib/types';
+import { parseUtcDate } from '../../lib/formatters';
+import { filterTabsForScope, getTabFinishedDetails } from '../../lib/stream-utils';
 import { WorkStreamContainer } from '../ui/WorkStreamContainer';
 
 interface SmokeTestsViewProps {
@@ -33,8 +35,8 @@ interface SmokeTestsViewProps {
 }
 
 function formatRunTimestamp(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
+  const d = parseUtcDate(iso);
+  if (!d) return iso;
   return d.toLocaleString(undefined, {
     month: 'short',
     day: 'numeric',
@@ -73,6 +75,277 @@ export function getRunE2eSmsInfo(run: SmokeTestRun): { status: 'passed' | 'faile
   return null;
 }
 
+const SMOKE_UTILITY_TITLE_REGEX = /^(reload smoke test history|register .* smoke schedule)/i;
+const MIN_VALID_EPOCH_MS = 1_600_000_000_000;
+const MAX_SMOKE_DURATION_MS = 300_000;
+const MAX_FINISH_DRIFT_MS = 30_000;
+const START_CLOCK_TOLERANCE_MS = 2_500;
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
+function isUtilitySmokeTab(tab: TerminalTab): boolean {
+  return (
+    tab.id.startsWith('smoke-refresh-') ||
+    tab.id.startsWith('smoke-schedule-') ||
+    SMOKE_UTILITY_TITLE_REGEX.test(tab.title.trim())
+  );
+}
+
+/**
+ * Extracts the smoke test trigger label (e.g. "mcp-agent", "sre-scheduled:08:00")
+ * from a smoke-scoped stream session, excluding non-suite utility tabs.
+ */
+export function extractSmokeTabTrigger(tab: TerminalTab): string | null {
+  if (isUtilitySmokeTab(tab)) {
+    return null;
+  }
+
+  const titleMatch = tab.title.trim().match(/^Smoke Tests \((.+)\)$/i);
+  if (titleMatch?.[1]) {
+    return titleMatch[1].trim();
+  }
+
+  const headLines = (tab.lines || []).slice(0, 10);
+  for (const line of headLines) {
+    const bracketMatch = line.match(/\[trigger=([^\]]+)\]/);
+    if (bracketMatch?.[1]) {
+      return bracketMatch[1].trim();
+    }
+    const parenMatch = line.match(/\(trigger=([^)]+)\)/);
+    if (parenMatch?.[1]) {
+      return parenMatch[1].trim();
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Returns true if the stream tab represents an actual Production Smoke Suite execution
+ * rather than a UI utility action (such as history reload or OS schedule registration).
+ */
+export function isSmokeSuiteStreamTab(tab: TerminalTab): boolean {
+  if (isUtilitySmokeTab(tab)) {
+    return false;
+  }
+  return extractSmokeTabTrigger(tab) !== null || tab.id.startsWith('smoke-');
+}
+
+function getTabStartEpochMs(tab: TerminalTab): number | null {
+  const epochMatch = tab.id.match(/(?:^|-)(\d{13})$/);
+  if (epochMatch?.[1]) {
+    const parsedEpoch = Number(epochMatch[1]);
+    if (Number.isFinite(parsedEpoch) && parsedEpoch > MIN_VALID_EPOCH_MS) {
+      return parsedEpoch;
+    }
+  }
+  return parseUtcDate(tab.createdAt)?.getTime() ?? null;
+}
+
+function getRunEndEpochMs(run: SmokeTestRun): number | null {
+  const tsMs = parseUtcDate(run.timestamp)?.getTime();
+  if (tsMs !== undefined && !Number.isNaN(tsMs)) {
+    return tsMs;
+  }
+  const idMatch = run.id.match(/^smoke_(\d{13})$/);
+  if (idMatch?.[1]) {
+    const parsedEpoch = Number(idMatch[1]);
+    if (Number.isFinite(parsedEpoch)) {
+      return parsedEpoch;
+    }
+  }
+  return null;
+}
+
+/**
+ * Deterministically builds a 1-to-1 bidirectional mapping between historical smoke test
+ * runs (`smoke-history.jsonl`) and captured console stream sessions (`sre.sqlite`).
+ */
+export function correlateSmokeRunsAndStreams(
+  runs: SmokeTestRun[],
+  scopedTabs: TerminalTab[]
+): { runToTabId: Map<string, string>; tabToRunId: Map<string, string> } {
+  const runToTabId = new Map<string, string>();
+  const tabToRunId = new Map<string, string>();
+
+  const suiteTabs = scopedTabs.filter((t) => !t.isRunning && isSmokeSuiteStreamTab(t));
+  if (runs.length === 0 || suiteTabs.length === 0) {
+    return { runToTabId, tabToRunId };
+  }
+
+  interface CandidateMatch {
+    runId: string;
+    tabId: string;
+    scoreMs: number;
+    runEndMs: number;
+  }
+
+  const tabMeta = suiteTabs.map((tab) => {
+    const trig = extractSmokeTabTrigger(tab);
+    const startMs = getTabStartEpochMs(tab);
+    const finishedMs = parseUtcDate(tab.finishedAt)?.getTime() ?? null;
+    const fallbackMs = getTabFinishedDetails(tab).timestampMs;
+    const endMs = finishedMs ?? (fallbackMs > 0 ? fallbackMs : null);
+    return { tab, trig, startMs, endMs };
+  });
+
+  const candidates: CandidateMatch[] = [];
+
+  for (const run of runs) {
+    const runEndMs = getRunEndEpochMs(run);
+    if (runEndMs === null) continue;
+
+    for (const { tab, trig, startMs, endMs } of tabMeta) {
+      if (trig && trig !== run.triggeredBy) {
+        continue;
+      }
+
+      if (startMs !== null) {
+        const elapsedSinceStart = runEndMs - startMs;
+        if (elapsedSinceStart < -START_CLOCK_TOLERANCE_MS || elapsedSinceStart > MAX_SMOKE_DURATION_MS) {
+          continue;
+        }
+      }
+
+      if (endMs !== null && Math.abs(endMs - runEndMs) > MAX_FINISH_DRIFT_MS) {
+        continue;
+      }
+
+      const scoreMs =
+        endMs !== null
+          ? Math.abs(endMs - runEndMs)
+          : Math.abs(runEndMs - (startMs ?? runEndMs));
+
+      candidates.push({
+        runId: run.id,
+        tabId: tab.id,
+        scoreMs,
+        runEndMs,
+      });
+    }
+  }
+
+  candidates.sort((a, b) => {
+    if (a.scoreMs !== b.scoreMs) {
+      return a.scoreMs - b.scoreMs;
+    }
+    return b.runEndMs - a.runEndMs;
+  });
+
+  for (const candidate of candidates) {
+    if (runToTabId.has(candidate.runId) || tabToRunId.has(candidate.tabId)) {
+      continue;
+    }
+    runToTabId.set(candidate.runId, candidate.tabId);
+    tabToRunId.set(candidate.tabId, candidate.runId);
+  }
+
+  return { runToTabId, tabToRunId };
+}
+
+/**
+ * Computes the target history filter tab and 1-based page index needed to make
+ * `targetRunId` visible in the Recent Runs list when selected from a stream session.
+ */
+export function resolveRunSelectionView(
+  runs: SmokeTestRun[],
+  targetRunId: string,
+  currentHistoryMode: 'last10' | 'last7days',
+  pageSize = 10,
+  nowMs = Date.now()
+): { historyMode: 'last10' | 'last7days'; currentPage: number } | null {
+  const overallIndex = runs.findIndex((r) => r.id === targetRunId);
+  if (overallIndex === -1) {
+    return null;
+  }
+
+  if (currentHistoryMode === 'last10' && overallIndex < pageSize) {
+    return { historyMode: 'last10', currentPage: 1 };
+  }
+
+  const sevenDaysAgoMs = nowMs - SEVEN_DAYS_MS;
+  const recent7d = runs.filter((r) => {
+    const ts = parseUtcDate(r.timestamp)?.getTime() ?? NaN;
+    return !Number.isNaN(ts) && ts >= sevenDaysAgoMs;
+  });
+  const idx7d = recent7d.findIndex((r) => r.id === targetRunId);
+  const currentPage =
+    idx7d >= 0
+      ? Math.floor(idx7d / pageSize) + 1
+      : Math.floor(recent7d.length / pageSize) + 1;
+
+  return {
+    historyMode: 'last7days',
+    currentPage,
+  };
+}
+
+/**
+ * Resolves the effective controlled selection and unmatched contextual hints
+ * for the WorkStreamContainer anchored to SmokeTestsView.
+ */
+export function resolveEffectiveSmokeStreamState(params: {
+  selectedRun: SmokeTestRun | null;
+  scopedTabs: TerminalTab[];
+  runToTabId: Map<string, string>;
+  manualTabOverrideId: string | null;
+}): {
+  selectedTabId: string | null;
+  unmatchedSelectionMessage: string | null;
+  unmatchedSelectPlaceholder: string | undefined;
+} {
+  const { selectedRun, scopedTabs, runToTabId, manualTabOverrideId } = params;
+
+  const runningTab = scopedTabs.find((t) => t.isRunning) ?? null;
+  if (runningTab) {
+    return {
+      selectedTabId: runningTab.id,
+      unmatchedSelectionMessage: null,
+      unmatchedSelectPlaceholder: undefined,
+    };
+  }
+
+  if (manualTabOverrideId && scopedTabs.some((t) => t.id === manualTabOverrideId)) {
+    return {
+      selectedTabId: manualTabOverrideId,
+      unmatchedSelectionMessage: null,
+      unmatchedSelectPlaceholder: undefined,
+    };
+  }
+
+  if (!selectedRun) {
+    return {
+      selectedTabId: scopedTabs[0]?.id ?? null,
+      unmatchedSelectionMessage: null,
+      unmatchedSelectPlaceholder: undefined,
+    };
+  }
+
+  const matchedTabId = runToTabId.get(selectedRun.id) ?? null;
+  if (matchedTabId && scopedTabs.some((t) => t.id === matchedTabId)) {
+    return {
+      selectedTabId: matchedTabId,
+      unmatchedSelectionMessage: null,
+      unmatchedSelectPlaceholder: undefined,
+    };
+  }
+
+  if (selectedRun.triggeredBy.startsWith('deploy:')) {
+    return {
+      selectedTabId: null,
+      unmatchedSelectPlaceholder: `Ran in Release Pipeline (${selectedRun.triggeredBy})`,
+      unmatchedSelectionMessage: `Executed as post-deploy gate (${selectedRun.triggeredBy}) — full container build & smoke output lives in Releases & Drift. Select any session on the right to inspect standalone smoke streams.`,
+    };
+  }
+
+  return {
+    selectedTabId: null,
+    unmatchedSelectPlaceholder: 'No stream captured for selected run',
+    unmatchedSelectionMessage: `No standalone console stream was captured for ${formatRunTimestamp(
+      selectedRun.timestamp
+    )} (${selectedRun.triggeredBy}). Select any session on the right to inspect captured streams.`,
+  };
+}
+
 export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
   runs,
   isRunning,
@@ -87,11 +360,23 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
   lastError,
 }) => {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [manualTabOverrideId, setManualTabOverrideId] = useState<string | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [isRunDropdownOpen, setIsRunDropdownOpen] = useState<boolean>(false);
   const [historyMode, setHistoryMode] = useState<'last10' | 'last7days'>('last10');
   const [currentPage, setCurrentPage] = useState<number>(1);
   const PAGE_SIZE = 10;
+  const prevRunningTabIdRef = useRef<string | null>(null);
+
+  const scopedSmokeTabs = useMemo(
+    () => filterTabsForScope(terminalTabs, 'smoke'),
+    [terminalTabs]
+  );
+
+  const { runToTabId, tabToRunId } = useMemo(
+    () => correlateSmokeRunsAndStreams(runs, scopedSmokeTabs),
+    [runs, scopedSmokeTabs]
+  );
 
   const selectedRun = useMemo(() => {
     if (runs.length === 0) return null;
@@ -101,6 +386,44 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
     }
     return runs[0];
   }, [runs, selectedRunId]);
+
+  const effectiveStream = useMemo(
+    () =>
+      resolveEffectiveSmokeStreamState({
+        selectedRun,
+        scopedTabs: scopedSmokeTabs,
+        runToTabId,
+        manualTabOverrideId,
+      }),
+    [selectedRun, scopedSmokeTabs, runToTabId, manualTabOverrideId]
+  );
+
+  useEffect(() => {
+    const runningTab = scopedSmokeTabs.find((t) => t.isRunning) ?? null;
+    const runningId = runningTab?.id ?? null;
+    if (runningId && runningId !== prevRunningTabIdRef.current) {
+      setManualTabOverrideId(runningId);
+      if (runningTab && isSmokeSuiteStreamTab(runningTab)) {
+        setSelectedRunId(null);
+        setCurrentPage(1);
+      }
+    }
+    prevRunningTabIdRef.current = runningId;
+  }, [scopedSmokeTabs]);
+
+  useEffect(() => {
+    if (!manualTabOverrideId) return;
+    const overrideTab = scopedSmokeTabs.find((t) => t.id === manualTabOverrideId);
+    if (!overrideTab) {
+      setManualTabOverrideId(null);
+      return;
+    }
+    if (!overrideTab.isRunning && tabToRunId.has(manualTabOverrideId)) {
+      const matchedRunId = tabToRunId.get(manualTabOverrideId)!;
+      setSelectedRunId(matchedRunId);
+      setManualTabOverrideId(null);
+    }
+  }, [manualTabOverrideId, scopedSmokeTabs, tabToRunId]);
 
   const categories = useMemo(() => {
     if (!selectedRun) return ['all'];
@@ -116,14 +439,54 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
 
   const filteredRuns = useMemo(() => {
     if (historyMode === 'last10') {
-      return runs.slice(0, 10);
+      return runs.slice(0, PAGE_SIZE);
     }
-    const sevenDaysAgoMs = Date.now() - 7 * 24 * 60 * 60 * 1000;
-    return runs.filter((r) => {
-      const ts = new Date(r.timestamp).getTime();
+    const sevenDaysAgoMs = Date.now() - SEVEN_DAYS_MS;
+    const recent = runs.filter((r) => {
+      const ts = parseUtcDate(r.timestamp)?.getTime() ?? NaN;
       return !Number.isNaN(ts) && ts >= sevenDaysAgoMs;
     });
-  }, [runs, historyMode]);
+    if (selectedRunId && !recent.some((r) => r.id === selectedRunId)) {
+      const explicitRun = runs.find((r) => r.id === selectedRunId);
+      if (explicitRun) {
+        return [...recent, explicitRun];
+      }
+    }
+    return recent;
+  }, [runs, historyMode, selectedRunId]);
+
+  const handleSelectRun = (run: SmokeTestRun) => {
+    setSelectedRunId(run.id);
+    setManualTabOverrideId(null);
+    if (categoryFilter !== 'all' && !run.results.some((r) => r.category === categoryFilter)) {
+      setCategoryFilter('all');
+    }
+  };
+
+  const handleSelectStreamTab = (tabId: string) => {
+    const matchedRunId = tabToRunId.get(tabId);
+    if (matchedRunId) {
+      const matchedRun = runs.find((r) => r.id === matchedRunId);
+      if (matchedRun) {
+        setSelectedRunId(matchedRun.id);
+        setManualTabOverrideId(null);
+        if (categoryFilter !== 'all' && !matchedRun.results.some((r) => r.category === categoryFilter)) {
+          setCategoryFilter('all');
+        }
+        const nextView = resolveRunSelectionView(runs, matchedRun.id, historyMode, PAGE_SIZE);
+        if (nextView) {
+          if (nextView.historyMode !== historyMode) {
+            setHistoryMode(nextView.historyMode);
+          }
+          if (nextView.currentPage !== currentPage) {
+            setCurrentPage(nextView.currentPage);
+          }
+        }
+        return;
+      }
+    }
+    setManualTabOverrideId(tabId);
+  };
 
   const totalPages = Math.max(1, Math.ceil(filteredRuns.length / PAGE_SIZE));
   const safePage = Math.min(currentPage, totalPages);
@@ -324,6 +687,10 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
                 onClick={() => {
                   setHistoryMode('last10');
                   setCurrentPage(1);
+                  if (selectedRunId && !runs.slice(0, PAGE_SIZE).some((r) => r.id === selectedRunId)) {
+                    setSelectedRunId(null);
+                    setManualTabOverrideId(null);
+                  }
                 }}
                 className={`px-2 py-0.5 rounded-md text-[11px] font-medium transition-colors cursor-pointer whitespace-nowrap ${
                   historyMode === 'last10'
@@ -364,7 +731,7 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
                 return (
                   <button
                     key={run.id}
-                    onClick={() => setSelectedRunId(run.id)}
+                    onClick={() => handleSelectRun(run)}
                     className={`w-full text-left px-4 py-3 transition-colors cursor-pointer ${
                       isSelected
                         ? 'bg-indigo-500/10 border-l-2 border-indigo-500 dark:border-indigo-400'
@@ -509,6 +876,10 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
         title="Smoke Test Execution Stream"
         description="Live verification output for Production Smoke Tests, OS task scheduling, and MCP-triggered runs."
         tabs={terminalTabs}
+        selectedTabId={effectiveStream.selectedTabId}
+        onSelectTab={handleSelectStreamTab}
+        unmatchedSelectionMessage={effectiveStream.unmatchedSelectionMessage}
+        unmatchedSelectPlaceholder={effectiveStream.unmatchedSelectPlaceholder}
         onOpenInBottomConsole={onOpenInBottomConsole}
         onAbortJob={onAbortJob}
         onClearTab={onClearTab}
