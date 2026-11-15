@@ -266,6 +266,16 @@ describe('PanoramaSRE MCP Server & Zero-Trust Named Pipe Client', () => {
     expect(start2.category).toBe('DEV_SERVER_START');
     expect(start2.detectedSlug).toBe('spendy');
 
+    const start3 = classifyShellCommand('npm run preview', 'C:\\ParakithSite');
+    expect(start3.intercepted).toBe(true);
+    expect(start3.category).toBe('DEV_SERVER_START');
+    expect(start3.detectedSlug).toBe('parakith');
+
+    const start4 = classifyShellCommand('npx wrangler pages dev out --port 3500');
+    expect(start4.intercepted).toBe(true);
+    expect(start4.category).toBe('DEV_SERVER_START');
+    expect(start4.detectedSlug).toBe('parakith');
+
     // Blocked port/process kill commands
     const kill1 = classifyShellCommand(
       'Get-NetTCPConnection -LocalPort 3002 -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }'
@@ -273,6 +283,13 @@ describe('PanoramaSRE MCP Server & Zero-Trust Named Pipe Client', () => {
     expect(kill1.intercepted).toBe(true);
     expect(kill1.category).toBe('DEV_SERVER_KILL');
     expect(kill1.detectedSlug).toBe('biomed');
+
+    const kill3 = classifyShellCommand(
+      'Get-NetTCPConnection -LocalPort 3500 -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }'
+    );
+    expect(kill3.intercepted).toBe(true);
+    expect(kill3.category).toBe('DEV_SERVER_KILL');
+    expect(kill3.detectedSlug).toBe('parakith');
 
     const kill2 = classifyShellCommand('taskkill /F /IM node.exe');
     expect(kill2.intercepted).toBe(true);

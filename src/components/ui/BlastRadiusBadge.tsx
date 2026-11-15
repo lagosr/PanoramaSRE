@@ -6,6 +6,7 @@ import {
   Package,
   Container,
   Code2,
+  Globe,
   HelpCircle,
 } from 'lucide-react';
 
@@ -59,6 +60,27 @@ export const BLAST_RADIUS_CONFIG: Record<string, BlastRadiusMeta> = {
     icon: Code2,
     colorClasses: 'bg-slate-500/15 text-slate-800 dark:text-slate-300 border-slate-500/30 hover:border-slate-500/60',
     dotColor: 'bg-slate-400',
+  },
+  EDGE_FUNCTIONS: {
+    label: 'Edge Functions',
+    description: 'Modifies Cloudflare Pages Functions / Edge API endpoints.',
+    icon: Globe,
+    colorClasses: 'bg-sky-500/15 text-sky-900 dark:text-sky-300 border-sky-500/30 hover:border-sky-500/60',
+    dotColor: 'bg-sky-400',
+  },
+  D1_SCHEMA_INFRA: {
+    label: 'D1 & Wrangler Infra',
+    description: 'Updates Cloudflare D1 SQL schemas or wrangler.toml bindings.',
+    icon: Database,
+    colorClasses: 'bg-emerald-500/15 text-emerald-900 dark:text-emerald-300 border-emerald-500/30 hover:border-emerald-500/60',
+    dotColor: 'bg-emerald-400',
+  },
+  COMPLIANCE_POLICY: {
+    label: 'Compliance & Opt-In Policy',
+    description: 'Updates SMS opt-in disclosures, Terms of Service, Privacy, or Retention policies.',
+    icon: ShieldAlert,
+    colorClasses: 'bg-indigo-500/15 text-indigo-900 dark:text-indigo-300 border-indigo-500/30 hover:border-indigo-500/60',
+    dotColor: 'bg-indigo-400',
   },
 };
 

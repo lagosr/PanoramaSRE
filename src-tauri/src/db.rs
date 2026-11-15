@@ -15,6 +15,19 @@ pub struct SystemLogEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OptInCacheRow {
+    pub id: i64,
+    pub first_name: String,
+    pub last_name: String,
+    pub phone: String,
+    pub consent: String,
+    pub ip_address: String,
+    pub user_agent: String,
+    pub created_at: String,
+    pub synced_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConsoleSessionRecord {
     pub id: String,
     pub title: String,
@@ -104,6 +117,18 @@ impl SreDatabase {
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS parakith_opt_ins_cache (
+                id INTEGER PRIMARY KEY,
+                first_name TEXT NOT NULL,
+                last_name TEXT NOT NULL,
+                phone TEXT NOT NULL,
+                consent TEXT NOT NULL,
+                ip_address TEXT NOT NULL,
+                user_agent TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                synced_at TEXT NOT NULL
             );"
         )?;
 
@@ -298,6 +323,76 @@ impl SreDatabase {
         )?;
         Ok(())
     }
+
+    pub fn replace_parakith_opt_ins(&self, rows: &[OptInCacheRow]) -> Result<()> {
+        self.conn.execute_batch("BEGIN IMMEDIATE;")?;
+        let res = (|| -> Result<()> {
+            self.conn.execute("DELETE FROM parakith_opt_ins_cache", [])?;
+            let mut stmt = self.conn.prepare(
+                "INSERT INTO parakith_opt_ins_cache
+                 (id, first_name, last_name, phone, consent, ip_address, user_agent, created_at, synced_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            )?;
+            for row in rows {
+                stmt.execute(params![
+                    row.id,
+                    row.first_name,
+                    row.last_name,
+                    row.phone,
+                    row.consent,
+                    row.ip_address,
+                    row.user_agent,
+                    row.created_at,
+                    row.synced_at,
+                ])?;
+            }
+            Ok(())
+        })();
+
+        match res {
+            Ok(_) => {
+                self.conn.execute_batch("COMMIT;")?;
+                Ok(())
+            }
+            Err(err) => {
+                let _ = self.conn.execute_batch("ROLLBACK;");
+                Err(err)
+            }
+        }
+    }
+
+    pub fn get_parakith_opt_ins(&self) -> Result<Vec<OptInCacheRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, first_name, last_name, phone, consent, ip_address, user_agent, created_at, synced_at
+             FROM parakith_opt_ins_cache
+             ORDER BY id DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(OptInCacheRow {
+                id: row.get(0)?,
+                first_name: row.get(1)?,
+                last_name: row.get(2)?,
+                phone: row.get(3)?,
+                consent: row.get(4)?,
+                ip_address: row.get(5)?,
+                user_agent: row.get(6)?,
+                created_at: row.get(7)?,
+                synced_at: row.get(8)?,
+            })
+        })?;
+
+        let mut out = Vec::new();
+        for item in rows {
+            out.push(item?);
+        }
+        Ok(out)
+    }
+
+    pub fn delete_parakith_opt_in_cache(&self, id: i64) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM parakith_opt_ins_cache WHERE id = ?1", params![id])?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -355,5 +450,45 @@ mod tests {
         let after = db.get_saved_console_sessions().expect("read after restart");
         let stale = after.iter().find(|r| r.id == "smoke-stale-2").unwrap();
         assert!(!stale.is_running);
+    }
+
+    #[test]
+    fn test_parakith_opt_ins_cache_crud() {
+        let db = SreDatabase::new(":memory:").expect("init memory db");
+        let rows = vec![
+            OptInCacheRow {
+                id: 1,
+                first_name: "Alex".into(),
+                last_name: "Rivera".into(),
+                phone: "+15552345678".into(),
+                consent: "yes".into(),
+                ip_address: "198.51.100.1".into(),
+                user_agent: "Mozilla/5.0".into(),
+                created_at: "2026-11-14T18:00:00.000Z".into(),
+                synced_at: "2026-11-14T18:05:00Z".into(),
+            },
+            OptInCacheRow {
+                id: 2,
+                first_name: "Jordan".into(),
+                last_name: "Lee".into(),
+                phone: "+15559876543".into(),
+                consent: "no".into(),
+                ip_address: "198.51.100.2".into(),
+                user_agent: "Mozilla/5.0".into(),
+                created_at: "2026-11-14T19:00:00.000Z".into(),
+                synced_at: "2026-11-14T19:05:00Z".into(),
+            },
+        ];
+
+        db.replace_parakith_opt_ins(&rows).expect("replace cache");
+        let loaded = db.get_parakith_opt_ins().expect("load cache");
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].id, 2);
+        assert_eq!(loaded[1].first_name, "Alex");
+
+        db.delete_parakith_opt_in_cache(1).expect("delete row 1");
+        let remaining = db.get_parakith_opt_ins().expect("load after delete");
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, 2);
     }
 }

@@ -6,6 +6,7 @@ import {
   Network, 
   Server, 
   ShieldCheck, 
+  MessageSquare,
   HardDrive, 
   FlaskConical,
   Settings as SettingsIcon
@@ -26,6 +27,7 @@ interface SidebarRailProps {
   topologyAlertCount?: number;
   topologyAlertSeverity?: 'error' | 'warning' | null;
   smokeFailureCount?: number;
+  unreadOptInsCount?: number;
 }
 
 export const SidebarRail: React.FC<SidebarRailProps> = ({
@@ -39,6 +41,7 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
   topologyAlertCount,
   topologyAlertSeverity,
   smokeFailureCount = 0,
+  unreadOptInsCount = 0,
 }) => {
   const effectiveTopologyBadge =
     topologyAlertCount !== undefined ? topologyAlertCount : securityViolationCount;
@@ -74,6 +77,13 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
     },
     { id: 'dietpi', label: 'DietPi Host', icon: Server, badge: dietpiPackagesCount, severity: 'warning' },
     { id: 'edge', label: 'PKI & Certificates', icon: ShieldCheck },
+    {
+      id: 'opt-ins',
+      label: 'SMS Opt-Ins',
+      icon: MessageSquare,
+      badge: unreadOptInsCount > 0 ? unreadOptInsCount : undefined,
+      severity: 'warning',
+    },
     { id: 'backups', label: 'Database Backups & DR', icon: HardDrive, badge: backupFailureCount, severity: 'error' },
     { id: 'smoke', label: 'Smoke Tests', icon: FlaskConical, badge: smokeFailureCount > 0 ? smokeFailureCount : undefined, severity: 'error' },
     { id: 'settings', label: 'Settings', icon: SettingsIcon },

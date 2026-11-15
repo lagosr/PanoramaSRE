@@ -199,14 +199,85 @@ pub async fn probe_host_tcp(
     .unwrap_or(false)
 }
 
-/// Probes an app's /api/health endpoint asynchronously with latency tracking using the shared pooled client
+/// Parse a secret key from `<workspace_path>/.env.local.keys` (5-tier SSOT).
+pub fn load_env_key_from_workspace(workspace_path: &str, key_name: &str) -> Option<String> {
+    let trimmed_ws = workspace_path.trim();
+    if trimmed_ws.is_empty() {
+        return None;
+    }
+    let keys_path = std::path::Path::new(trimmed_ws).join(".env.local.keys");
+    let raw = std::fs::read_to_string(keys_path).ok()?;
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if let Some((k, v)) = trimmed.split_once('=') {
+            if k.trim() == key_name {
+                let unquoted = v.trim().trim_matches('"').trim_matches('\'').to_string();
+                if !unquoted.is_empty() {
+                    return Some(unquoted);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Extract URL pathname (e.g. "/api/health") for canonical request signing.
+pub fn extract_url_pathname(url: &str) -> String {
+    if let Some(scheme_idx) = url.find("://") {
+        let after_scheme = &url[scheme_idx + 3..];
+        if let Some(path_idx) = after_scheme.find('/') {
+            let raw_path = &after_scheme[path_idx..];
+            return raw_path.split('?').next().unwrap_or("/").to_string();
+        }
+        return "/".to_string();
+    }
+    url.split('?').next().unwrap_or("/").to_string()
+}
+
+/// Build time-bounded HMAC-SHA256 stealth headers expected by ParakithSite `functions/api/health.ts`.
+pub fn build_parakith_stealth_headers(
+    secret: &str,
+    pathname: &str,
+    ts_override: Option<i64>,
+    nonce_override: Option<&str>,
+) -> Vec<(String, String)> {
+    let ts = ts_override
+        .unwrap_or_else(|| chrono::Utc::now().timestamp())
+        .to_string();
+    let nonce = nonce_override
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| crate::ipc_security::hex_encode(uuid::Uuid::new_v4().as_bytes()));
+    let canonical = format!("{}.{}.GET.{}", ts, nonce, pathname);
+    let mac = crate::ipc_security::hmac_sha256(secret.trim().as_bytes(), canonical.as_bytes());
+    let sig = crate::ipc_security::hex_encode(&mac);
+    vec![
+        ("X-Parakith-Probe-Ts".to_string(), ts),
+        ("X-Parakith-Probe-Nonce".to_string(), nonce),
+        ("X-Parakith-Probe-Sig".to_string(), sig),
+    ]
+}
+
+/// Probes an app's /api/health endpoint asynchronously with latency tracking using the shared pooled client.
+/// Supports optional stealth HMAC-SHA256 authentication for public Cloudflare Pages edge apps.
 #[tauri::command]
 pub async fn probe_app_health(
     app_id: String,
     url: String,
     timeout_ms: Option<u64>,
+    auth_mode: Option<String>,
+    workspace_path: Option<String>,
 ) -> ProbedAppHealth {
-    let client = match shared_lan_client() {
+    let use_stealth_hmac = auth_mode.as_deref() == Some("hmac-sha256-stealth");
+    let client = if use_stealth_hmac {
+        shared_github_client()
+    } else {
+        shared_lan_client()
+    };
+
+    let client = match client {
         Some(c) => c,
         None => {
             return ProbedAppHealth {
@@ -220,8 +291,40 @@ pub async fn probe_app_health(
     };
 
     let req_timeout = Duration::from_millis(timeout_ms.unwrap_or(4000));
+    let mut req = client.get(&url).timeout(req_timeout);
+
+    if use_stealth_hmac {
+        let secret = workspace_path
+            .as_deref()
+            .and_then(|ws| load_env_key_from_workspace(ws, "PARAKITH_PROBE_SECRET"))
+            .or_else(|| {
+                std::env::var("PARAKITH_PROBE_SECRET")
+                    .ok()
+                    .filter(|s| !s.trim().is_empty())
+            });
+
+        let Some(secret_val) = secret else {
+            return ProbedAppHealth {
+                app_id,
+                status: "unhealthy".into(),
+                latency_ms: 0,
+                health: None,
+                raw_error: Some(
+                    "PARAKITH_PROBE_SECRET not found in .env.local.keys".to_string(),
+                ),
+            };
+        };
+
+        let pathname = extract_url_pathname(&url);
+        for (header_name, header_val) in
+            build_parakith_stealth_headers(&secret_val, &pathname, None, None)
+        {
+            req = req.header(&header_name, &header_val);
+        }
+    }
+
     let start = Instant::now();
-    match client.get(&url).timeout(req_timeout).send().await {
+    match req.send().await {
         Ok(resp) => {
             let latency_ms = start.elapsed().as_millis() as u64;
             if resp.status().is_success() {
@@ -831,5 +934,36 @@ mod tests {
         let evaluated = apply_running_version(unknown_latest, None);
         assert_eq!(evaluated.is_up_to_date, None);
         assert!(!evaluated.update_available);
+    }
+
+    #[test]
+    fn computes_deterministic_stealth_hmac_probe_headers() {
+        let secret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let headers = build_parakith_stealth_headers(
+            secret,
+            "/api/health",
+            Some(1794690000),
+            Some("abcdef1234567890abcdef1234567890"),
+        );
+        assert_eq!(headers.len(), 3);
+        assert_eq!(headers[0].0, "X-Parakith-Probe-Ts");
+        assert_eq!(headers[0].1, "1794690000");
+        assert_eq!(headers[1].0, "X-Parakith-Probe-Nonce");
+        assert_eq!(headers[2].0, "X-Parakith-Probe-Sig");
+        assert_eq!(headers[2].1.len(), 64);
+
+        // Must change signature when path or timestamp changes
+        let altered = build_parakith_stealth_headers(
+            secret,
+            "/api/other",
+            Some(1794690000),
+            Some("abcdef1234567890abcdef1234567890"),
+        );
+        assert_ne!(headers[2].1, altered[2].1);
+
+        assert_eq!(
+            extract_url_pathname("https://www.parakith.com/api/health?x=1"),
+            "/api/health"
+        );
     }
 }

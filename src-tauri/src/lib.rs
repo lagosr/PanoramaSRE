@@ -1,10 +1,12 @@
 pub mod commands {
+    pub mod cloudflare_ops;
     pub mod dietpi_ops;
     pub mod git_ops;
     pub mod ledger;
     pub mod local_backups;
     pub mod log_ops;
     pub mod monitor;
+    pub mod optin_ops;
     pub mod runner;
     pub mod smoke_ops;
     pub mod ssl_ops;
@@ -20,12 +22,14 @@ pub mod scheduler;
 pub mod scrubber;
 pub mod tray;
 
+use commands::cloudflare_ops::*;
 use commands::dietpi_ops::*;
 use commands::git_ops::*;
 use commands::ledger::*;
 use commands::local_backups::*;
 use commands::log_ops::*;
 use commands::monitor::*;
+use commands::optin_ops::*;
 use commands::runner::*;
 use commands::smoke_ops::*;
 use commands::ssl_ops::*;
@@ -131,6 +135,12 @@ pub fn run() {
             exit_app_completely,
             get_smoke_test_history,
             run_smoke_tests_now,
+            list_cloudflare_deployments,
+            get_cached_parakith_opt_ins,
+            sync_parakith_opt_ins,
+            mark_parakith_opt_ins_seen,
+            export_parakith_opt_ins,
+            delete_parakith_opt_in,
             control_server::get_mcp_bridge_status
         ])
         .setup(move |app| {

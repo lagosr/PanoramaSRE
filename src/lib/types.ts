@@ -5,9 +5,22 @@ export type NavSectionId =
   | 'topology'
   | 'dietpi'
   | 'edge'
+  | 'opt-ins'
   | 'backups'
   | 'smoke'
   | 'settings';
+
+export type HostingTarget = 'wsh-docker' | 'cloudflare-pages';
+
+export interface CloudflareAppConfig {
+  pagesProject: string;
+  primaryUrl: string;
+  domains: string[];
+  d1Binding?: string;
+  d1DatabaseName?: string;
+  d1DatabaseId?: string;
+  deployMode?: string;
+}
 
 export type WorkStreamSource = 'ui' | 'mcp' | 'scheduled' | 'supervisor';
 
@@ -29,6 +42,7 @@ export interface AppManifest {
   schemaVersion: number;
   appId: string;
   slug: string;
+  hostingTarget?: HostingTarget;
   displayName: string;
   portalTitle: string;
   description: string;
@@ -44,6 +58,7 @@ export interface AppManifest {
   hasDatabase?: boolean;
   portalOrder: number;
   roles: string[];
+  cloudflare?: CloudflareAppConfig;
   auth?: {
     slug: string;
     basePath: string;
@@ -53,8 +68,10 @@ export interface AppManifest {
     deployScript: string;
     dbScript: string;
     devCommand: string;
+    previewCommand?: string;
     healthEndpoint: string;
-    manifestEndpoint: string;
+    healthAuthMode?: string;
+    manifestEndpoint?: string;
     testCommand: string;
     typecheckCommand: string;
     requiresAuthInDev: boolean;
@@ -526,5 +543,43 @@ export interface CloudflareTunnelVersionStatus {
   checkedAtEpoch: number;
   source: string;
   error?: string | null;
+}
+
+export interface CloudflareDeployment {
+  id: string;
+  short_id: string;
+  environment: string;
+  url: string;
+  created_on: string;
+  branch?: string | null;
+  commit_hash?: string | null;
+  commit_message?: string | null;
+  is_active: boolean;
+}
+
+export interface ParakithOptInRecord {
+  id: number;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  consent: string;
+  ipAddress: string;
+  userAgent: string;
+  createdAt: string;
+  syncedAt?: string | null;
+}
+
+export interface OptInComplianceSnapshot {
+  records: ParakithOptInRecord[];
+  totalCount: number;
+  consentedCount: number;
+  declinedCount: number;
+  last7dCount: number;
+  maxId: number;
+  lastSeenId: number;
+  unreadCount: number;
+  lastSyncedAt?: string | null;
+  databaseName: string;
+  syncError?: string | null;
 }
 

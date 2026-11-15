@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { DiscoveredApp } from '../../lib/types';
 
 interface DevServerCardProps {
@@ -17,10 +18,19 @@ export function DevServerCard({
   onRestart,
   isActionPending = false,
 }: DevServerCardProps) {
+  const [devMode, setDevMode] = useState<'dev' | 'preview'>('dev');
   const dev = app.devServer;
   const isManaged = dev?.status === 'RUNNING_MANAGED';
   const isExternal = dev?.status === 'RUNNING_EXTERNAL';
   const isRunning = isManaged || isExternal;
+  const hasPreviewMode = Boolean(app.manifest.sre.previewCommand);
+  const activeDevCommand =
+    devMode === 'preview' && app.manifest.sre.previewCommand
+      ? app.manifest.sre.previewCommand
+      : app.manifest.sre.devCommand;
+  const cleanBasePath = app.manifest.basePath === '/' ? '' : app.manifest.basePath;
+  const normalizedHref = dev?.local_url || `http://localhost:${app.manifest.port}${cleanBasePath}`;
+  const isEdgePages = app.manifest.hostingTarget === 'cloudflare-pages';
 
   const formatBytes = (bytes: number | null | undefined) => {
     if (!bytes) return '0 B';
@@ -44,12 +54,12 @@ export function DevServerCard({
                 {app.manifest.displayName}
               </h3>
               <a
-                href={dev?.local_url || `http://localhost:${app.manifest.port}${app.manifest.basePath}`}
+                href={normalizedHref}
                 target="_blank"
                 rel="noreferrer"
                 className="text-xs text-emerald-500 hover:text-emerald-400 font-mono hover:underline truncate block"
               >
-                :{app.manifest.port}{app.manifest.basePath}
+                :{app.manifest.port}{cleanBasePath || '/'}
               </a>
             </div>
           </div>
@@ -79,7 +89,7 @@ export function DevServerCard({
         {/* Database & Workspace Metrics */}
         <div className="rounded-lg bg-slate-50 dark:bg-slate-950/60 border border-slate-100 dark:border-slate-800/80 p-3 mb-4 space-y-1.5 text-xs font-mono">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-slate-500 shrink-0">Local SQLite:</span>
+            <span className="text-slate-500 shrink-0">{isEdgePages ? 'Local D1:' : 'Local SQLite:'}</span>
             <span className="text-slate-800 dark:text-slate-300 truncate">
               {dev?.sqlite_size_bytes ? formatBytes(dev.sqlite_size_bytes) : 'Not found'}
             </span>
@@ -95,9 +105,38 @@ export function DevServerCard({
           <div className="flex items-center justify-between gap-2">
             <span className="text-slate-500 shrink-0">Command:</span>
             <span className="text-slate-600 dark:text-slate-400 truncate text-right">
-              {app.manifest.sre.devCommand}
+              {activeDevCommand}
             </span>
           </div>
+          {hasPreviewMode && (
+            <div className="pt-1.5 flex items-center justify-between gap-2 border-t border-slate-200/70 dark:border-slate-800/70 font-sans">
+              <span className="text-[11px] text-slate-500">Runtime Mode:</span>
+              <div className="inline-flex rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setDevMode('dev')}
+                  className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-colors whitespace-nowrap ${
+                    devMode === 'dev'
+                      ? 'bg-emerald-600 text-white'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                  }`}
+                >
+                  UI Dev
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDevMode('preview')}
+                  className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-colors whitespace-nowrap ${
+                    devMode === 'preview'
+                      ? 'bg-sky-600 text-white'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                  }`}
+                >
+                  Edge + D1
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -110,7 +149,7 @@ export function DevServerCard({
                 onStart(
                   app.manifest.appId,
                   app.workspacePath,
-                  app.manifest.sre.devCommand,
+                  activeDevCommand,
                   app.manifest.port
                 )
               }
@@ -119,13 +158,13 @@ export function DevServerCard({
             >
               Start
             </button>
-            {app.manifest.slug !== 'auth' && (
+            {app.manifest.slug !== 'auth' && app.manifest.sre.requiresAuthInDev !== false && (
               <button
                 onClick={() =>
                   onStartAuthAndApp(
                     app.manifest.appId,
                     app.workspacePath,
-                    app.manifest.sre.devCommand,
+                    activeDevCommand,
                     app.manifest.port
                   )
                 }
@@ -145,7 +184,7 @@ export function DevServerCard({
                 onRestart(
                   app.manifest.appId,
                   app.workspacePath,
-                  app.manifest.sre.devCommand,
+                  activeDevCommand,
                   app.manifest.port
                 )
               }
@@ -174,7 +213,7 @@ export function DevServerCard({
                 onRestart(
                   app.manifest.appId,
                   app.workspacePath,
-                  app.manifest.sre.devCommand,
+                  activeDevCommand,
                   app.manifest.port
                 )
               }

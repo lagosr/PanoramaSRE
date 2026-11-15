@@ -1,20 +1,33 @@
-import { DiscoveredApp, AppBackupDetail } from '../../lib/types';
+import { DiscoveredApp, AppBackupDetail, OptInComplianceSnapshot } from '../../lib/types';
 import { ProvenanceBadge } from '../ui/ProvenanceBadge';
 import { BlastRadiusBadge } from '../ui/BlastRadiusBadge';
-import { AlertCircle, HardDriveDownload, XCircle } from 'lucide-react';
+import { AlertCircle, HardDriveDownload, XCircle, Globe, MessageSquare } from 'lucide-react';
 
 interface FleetAppCardProps {
   app: DiscoveredApp;
   backupStatus?: AppBackupDetail | null;
+  optInSnapshot?: OptInComplianceSnapshot | null;
   onOpenApp: (url: string) => void;
   onInspectComposition: (app: DiscoveredApp) => void;
+  onNavigateToOptIns?: () => void;
 }
 
-export function FleetAppCard({ app, backupStatus, onOpenApp, onInspectComposition }: FleetAppCardProps) {
+export function FleetAppCard({
+  app,
+  backupStatus,
+  optInSnapshot,
+  onOpenApp,
+  onInspectComposition,
+  onNavigateToOptIns,
+}: FleetAppCardProps) {
+  const isEdgePages = app.manifest.hostingTarget === 'cloudflare-pages';
+  const appPublicUrl = isEdgePages
+    ? app.manifest.cloudflare?.primaryUrl || 'https://www.parakith.com'
+    : `https://wsh.panoramadr.com${app.manifest.basePath}`;
   const isHealthy = app.health?.status === 'healthy';
   const release = app.health?.release;
   const latency = app.latencyMs ?? 0;
-  const isBackupFailed = backupStatus?.status?.toLowerCase() === 'failed';
+  const isBackupFailed = !isEdgePages && backupStatus?.status?.toLowerCase() === 'failed';
   const isCritical = !isHealthy || app.provenanceState === 'PROD_UNREACHABLE' || app.provenanceState === 'DIRTY_PROD';
 
   return (
@@ -70,7 +83,13 @@ export function FleetAppCard({ app, backupStatus, onOpenApp, onInspectCompositio
             </div>
             <div className="min-w-0">
               <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm truncate flex items-center gap-1.5">
-                <span>{app.manifest.displayName}</span>
+                <span className="truncate">{app.manifest.displayName}</span>
+                {isEdgePages && (
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-mono font-bold uppercase tracking-wider bg-sky-500/15 text-sky-700 dark:text-sky-300 border border-sky-500/30 shrink-0">
+                    <Globe className="w-2.5 h-2.5" />
+                    EDGE • CF PAGES
+                  </span>
+                )}
                 {isCritical && (
                   <span className="inline-block w-2 h-2 rounded-full bg-rose-500 animate-ping shrink-0" title="Unhealthy" />
                 )}
@@ -79,7 +98,9 @@ export function FleetAppCard({ app, backupStatus, onOpenApp, onInspectCompositio
                 )}
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 font-mono truncate">
-                Port {app.manifest.port} • {app.manifest.basePath}
+                {isEdgePages
+                  ? `Port ${app.manifest.port} (dev) • ${app.manifest.cloudflare?.domains?.[0] || 'Cloudflare Pages'}`
+                  : `Port ${app.manifest.port} • ${app.manifest.basePath}`}
               </p>
             </div>
           </div>
@@ -139,7 +160,7 @@ export function FleetAppCard({ app, backupStatus, onOpenApp, onInspectCompositio
             </span>
           </div>
 
-          {backupStatus && (
+          {!isEdgePages && backupStatus && (
             <div className="flex items-center justify-between gap-2">
               <span className="text-slate-500 shrink-0">DB Backup:</span>
               <span
@@ -156,6 +177,28 @@ export function FleetAppCard({ app, backupStatus, onOpenApp, onInspectCompositio
                   <span>Success</span>
                 )}
               </span>
+            </div>
+          )}
+
+          {isEdgePages && optInSnapshot && (
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-slate-500 shrink-0">SMS Opt-Ins (D1):</span>
+              {onNavigateToOptIns ? (
+                <button
+                  type="button"
+                  onClick={onNavigateToOptIns}
+                  className="font-mono text-right text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 hover:underline flex items-center gap-1 truncate cursor-pointer"
+                >
+                  <MessageSquare className="w-3 h-3 shrink-0" />
+                  <span>
+                    {optInSnapshot.totalCount} total ({optInSnapshot.consentedCount} yes)
+                  </span>
+                </button>
+              ) : (
+                <span className="font-mono text-right text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 truncate">
+                  {optInSnapshot.totalCount} total ({optInSnapshot.consentedCount} yes)
+                </span>
+              )}
             </div>
           )}
 
@@ -178,9 +221,7 @@ export function FleetAppCard({ app, backupStatus, onOpenApp, onInspectCompositio
           Inspect Drift
         </button>
         <button
-          onClick={() =>
-            onOpenApp(`https://wsh.panoramadr.com${app.manifest.basePath}`)
-          }
+          onClick={() => onOpenApp(appPublicUrl)}
           className={`py-1.5 px-3 rounded-lg text-xs font-medium text-white transition-colors whitespace-nowrap flex items-center gap-1 ${
             isCritical
               ? 'bg-rose-600 hover:bg-rose-500'

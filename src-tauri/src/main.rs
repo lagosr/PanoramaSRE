@@ -6,11 +6,18 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use panorama_sre_lib::commands::cloudflare_ops::parse_wrangler_deployments_json;
+    use panorama_sre_lib::commands::git_ops::classify_blast_radius;
     use panorama_sre_lib::commands::monitor::{
-        extract_cloudflared_version, is_latest_version_newer,
+        build_parakith_stealth_headers, extract_cloudflared_version, extract_url_pathname,
+        is_latest_version_newer,
     };
-    use panorama_sre_lib::db::SreDatabase;
-    use panorama_sre_lib::dev_supervisor::is_dev_server_ready_line;
+    use panorama_sre_lib::commands::optin_ops::{
+        format_opt_ins_csv, mask_phone_number, parse_wrangler_d1_opt_ins_json,
+    };
+    use panorama_sre_lib::db::{OptInCacheRow, SreDatabase};
+    use panorama_sre_lib::dev_supervisor::{is_dev_server_ready_line, DevSupervisor};
+    use panorama_sre_lib::ipc_security::validate_dev_command;
     use panorama_sre_lib::scheduler::{evaluate_due_tiers, TelemetryScheduler};
 
     #[test]
@@ -158,5 +165,129 @@ mod tests {
         assert!(!is_latest_version_newer("2026.10.7", "2026.10.7"));
         assert!(!is_latest_version_newer("2026.10.8", "2026.10.7"));
         assert!(is_latest_version_newer("2026.10.7", "2026.11.0"));
+    }
+
+    #[test]
+    fn test_parakith_edge_integrations_and_optin_cache() {
+        assert_eq!(
+            validate_dev_command("npm run preview").unwrap(),
+            "npm run preview"
+        );
+        assert!(validate_dev_command("npm run preview && whoami").is_err());
+
+        assert_eq!(
+            DevSupervisor::normalize_local_url(3500, "/"),
+            "http://localhost:3500"
+        );
+        assert!(is_dev_server_ready_line(
+            "[wrangler:inf] Ready on http://localhost:3500"
+        ));
+
+        assert_eq!(
+            extract_url_pathname("https://www.parakith.com/api/health?probe=1"),
+            "/api/health"
+        );
+        let h1 = build_parakith_stealth_headers(
+            "0123456789abcdef0123456789abcdef",
+            "/api/health",
+            Some(1762897000),
+            Some("deadbeefdeadbeefdeadbeefdeadbeef"),
+        );
+        let h2 = build_parakith_stealth_headers(
+            "0123456789abcdef0123456789abcdef",
+            "/api/health",
+            Some(1762897000),
+            Some("deadbeefdeadbeefdeadbeefdeadbeef"),
+        );
+        assert_eq!(h1, h2);
+        assert_eq!(h1.len(), 3);
+        assert_eq!(h1[2].0, "X-Parakith-Probe-Sig");
+        assert_eq!(h1[2].1.len(), 64);
+
+        let badges = classify_blast_radius(
+            &[
+                "functions/api/health.ts".to_string(),
+                "schema/001_opt_ins.sql".to_string(),
+                "src/app/opt-in/page.tsx".to_string(),
+            ],
+            false,
+        );
+        assert!(badges.contains(&"EDGE_FUNCTIONS".to_string()));
+        assert!(badges.contains(&"D1_SCHEMA_INFRA".to_string()));
+        assert!(badges.contains(&"COMPLIANCE_POLICY".to_string()));
+
+        let deps = parse_wrangler_deployments_json(
+            r#"[
+              {
+                "id": "11111111-2222-3333-4444-555555555555",
+                "environment": "Production",
+                "url": "https://parakith-site.pages.dev",
+                "created_on": "2026-11-14T20:00:00Z",
+                "deployment_trigger": { "metadata": { "branch": "main", "commit_hash": "abcdef1234567", "commit_message": "feat: stealth health" } }
+              },
+              {
+                "id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                "environment": "Preview",
+                "url": "https://prev.parakith-site.pages.dev",
+                "created_on": "2026-11-14T19:00:00Z"
+              }
+            ]"#,
+        )
+        .expect("parse wrangler deployments");
+        assert_eq!(deps.len(), 2);
+        assert_eq!(deps[0].short_id, "11111111");
+        assert!(deps[0].is_active);
+        assert!(!deps[1].is_active);
+
+        let parsed_records = parse_wrangler_d1_opt_ins_json(
+            r#"[{
+              "results": [
+                { "id": 1, "first_name": "Alex", "last_name": "Rivera", "phone": "+15552345678", "consent": "yes", "ip_address": "198.51.100.1", "user_agent": "Mozilla/5.0", "created_at": "2026-11-14T18:00:00Z" },
+                { "id": 2, "first_name": "Jordan", "last_name": "Lee", "phone": "+15559876543", "consent": "no", "ip_address": "198.51.100.2", "user_agent": "Mozilla/5.0", "created_at": "2026-11-14T19:00:00Z" }
+              ]
+            }]"#,
+            "2026-11-14T20:00:00Z",
+        )
+        .expect("parse wrangler d1 opt-ins");
+        assert_eq!(parsed_records.len(), 2);
+        assert_eq!(parsed_records[0].id, 2);
+        assert_eq!(mask_phone_number("+1 (555) 234-5678"), "***-***-5678");
+        let csv = format_opt_ins_csv(&parsed_records);
+        assert!(csv.contains("id,first_name,last_name,phone,consent"));
+        assert!(csv.contains("Alex"));
+
+        let unique = format!(
+            "panorama_sre_optin_test_{}_{}.sqlite",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        );
+        let db_path = std::env::temp_dir().join(unique);
+        {
+            let db = SreDatabase::new(&db_path).expect("create optin temp sqlite");
+            let rows: Vec<OptInCacheRow> = parsed_records
+                .iter()
+                .map(|r| OptInCacheRow {
+                    id: r.id,
+                    first_name: r.first_name.clone(),
+                    last_name: r.last_name.clone(),
+                    phone: r.phone.clone(),
+                    consent: r.consent.clone(),
+                    ip_address: r.ip_address.clone(),
+                    user_agent: r.user_agent.clone(),
+                    created_at: r.created_at.clone(),
+                    synced_at: r.synced_at.clone(),
+                })
+                .collect();
+            db.replace_parakith_opt_ins(&rows).expect("replace optins cache");
+            let loaded = db.get_parakith_opt_ins().expect("read optins cache");
+            assert_eq!(loaded.len(), 2);
+            db.delete_parakith_opt_in_cache(1).expect("delete optin row");
+            let remaining = db.get_parakith_opt_ins().expect("read remaining optin row");
+            assert_eq!(remaining.len(), 1);
+            assert_eq!(remaining[0].id, 2);
+        }
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_file(db_path.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(db_path.with_extension("sqlite-shm"));
     }
 }

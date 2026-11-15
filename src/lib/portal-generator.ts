@@ -24,7 +24,11 @@ export function renderPortalHtml(
   mode: 'local' | 'remote'
 ): string {
   const filtered = [...apps]
-    .filter((a) => (mode === 'remote' ? a.sre.exposeInRemotePortal : true))
+    .filter(
+      (a) =>
+        a.hostingTarget !== 'cloudflare-pages' &&
+        (mode === 'remote' ? a.sre.exposeInRemotePortal : true)
+    )
     .sort((a, b) => a.portalOrder - b.portalOrder || a.port - b.port);
 
   const indent = mode === 'local' ? '          ' : '      ';

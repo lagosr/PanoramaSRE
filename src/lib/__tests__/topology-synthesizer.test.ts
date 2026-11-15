@@ -407,4 +407,90 @@ describe('synthesizeTopology', () => {
     expect(preSnapshotBadges.tabs.rules.count).toBe(0);
     expect(preSnapshotBadges.tabs.tunnel).toEqual({ count: 1, severity: 'warning' });
   });
+
+  it('excludes cloudflare-pages apps from WSH Lighttpd routes and container alerts', () => {
+    const cleanSnapshot: WshSnapshot = {
+      mode: '--fast',
+      hostname: 'wsh-test',
+      kernel: '6.6.20+rpt-rpi-v8',
+      uptime_secs: 42000,
+      dietpi_version: '9.3.0',
+      dietpi_update_available: '',
+      reboot_required: false,
+      rpi_throttled: '0x0',
+      services: { lighttpd: 'active', docker: 'active', ssh: 'active' },
+      listening_ports: [80, 443, 3000, 3001],
+      lighttpd_routes_raw: 'auth:3000,spendy:3001',
+      containers: [
+        { Names: 'panorama-auth', State: 'running', Ports: '127.0.0.1:3000->3000/tcp' },
+        { Names: 'spendy-ledger', State: 'running', Ports: '127.0.0.1:3001->3001/tcp' },
+      ],
+      container_stats: [],
+      images: [],
+      cloudflared: {
+        version_raw: 'cloudflared version 2026.10.7',
+        recent_logs: 'Registered tunnel connection',
+      },
+      apt_upgradable_raw: '',
+      data_volumes_raw: '',
+      docker_df: [],
+      release_ledgers: {},
+      firewall_rules_raw:
+        '-N DOCKER-USER\n-A DOCKER-USER -d 10.0.0.0/8 -o eth0 -j DROP\n-A DOCKER-USER -d 172.16.0.0/12 -o eth0 -j DROP\n-A DOCKER-USER -d 192.168.0.0/16 -o eth0 -j DROP\n-N PANORAMA-INPUT\n-A PANORAMA-INPUT -i br-+ -p tcp -m tcp --dport 22 -j DROP\n',
+      network_interfaces: [{ ifname: 'eth0', flags: ['BROADCAST', 'MULTICAST'], mtu: 1500, operstate: 'UP' }],
+    };
+
+    const withEdgeApp: DiscoveredApp[] = [
+      ...mockApps,
+      {
+        manifest: {
+          schemaVersion: 1,
+          appId: 'parakith-site',
+          slug: 'parakith',
+          hostingTarget: 'cloudflare-pages',
+          displayName: 'ParakithSite',
+          portalTitle: 'Parakith LLC',
+          description: 'Cloudflare Pages site',
+          basePath: '/',
+          port: 3500,
+          containerName: '',
+          composeProject: '',
+          remoteAppRoot: '',
+          dataVolume: '',
+          localSqlitePath: '',
+          themeColor: 'slate',
+          icon: 'ShieldCheck',
+          portalOrder: 99,
+          roles: ['admin'],
+          cloudflare: {
+            pagesProject: 'parakith-site',
+            primaryUrl: 'https://www.parakith.com',
+            domains: ['parakith.com', 'www.parakith.com'],
+          },
+          sre: {
+            deployScript: './deploy-cloudflare-pages.ps1',
+            dbScript: '',
+            devCommand: 'npm run dev',
+            previewCommand: 'npm run preview',
+            healthEndpoint: '/api/health',
+            healthAuthMode: 'hmac-sha256-stealth',
+            testCommand: 'npm test',
+            typecheckCommand: 'npm run typecheck',
+            requiresAuthInDev: false,
+            automatedBackupDefault: false,
+            exposeInRemotePortal: false,
+          },
+        },
+        workspacePath: 'c:\\test\\parakith',
+        provenanceState: 'IN_SYNC',
+      },
+    ];
+
+    const topo = synthesizeTopology(withEdgeApp, cleanSnapshot);
+    expect(topo.routes).toHaveLength(2);
+    expect(topo.routes.some((r) => r.slug === 'parakith')).toBe(false);
+    const badges = computeTopologyBadges(topo, true);
+    expect(badges.tabs.matrix.count).toBe(0);
+    expect(badges.errorCount).toBe(0);
+  });
 });

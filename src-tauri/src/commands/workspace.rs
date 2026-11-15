@@ -49,10 +49,66 @@ pub fn open_in_file_manager(path: String) -> Result<(), String> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudflareConfigDto {
+    pub pages_project: String,
+    pub primary_url: String,
+    #[serde(default)]
+    pub domains: Vec<String>,
+    #[serde(default)]
+    pub d1_binding: Option<String>,
+    #[serde(default)]
+    pub d1_database_name: Option<String>,
+    #[serde(default)]
+    pub d1_database_id: Option<String>,
+    #[serde(default)]
+    pub deploy_mode: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SreConfigDto {
+    #[serde(default)]
+    pub deploy_script: Option<String>,
+    #[serde(default)]
+    pub db_script: Option<String>,
+    #[serde(default)]
+    pub dev_command: Option<String>,
+    #[serde(default)]
+    pub preview_command: Option<String>,
+    #[serde(default)]
+    pub health_endpoint: Option<String>,
+    #[serde(default)]
+    pub health_auth_mode: Option<String>,
+    #[serde(default)]
+    pub manifest_endpoint: Option<String>,
+    #[serde(default)]
+    pub test_command: Option<String>,
+    #[serde(default)]
+    pub typecheck_command: Option<String>,
+    #[serde(default)]
+    pub requires_auth_in_dev: bool,
+    #[serde(default)]
+    pub automated_backup_default: bool,
+    #[serde(default = "default_true")]
+    pub expose_in_remote_portal: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_hosting_target() -> String {
+    "wsh-docker".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppManifestDto {
     pub schema_version: Option<i32>,
     pub app_id: Option<String>,
     pub slug: String,
+    #[serde(rename = "hostingTarget", default = "default_hosting_target")]
+    pub hosting_target: String,
     pub display_name: String,
     pub portal_title: Option<String>,
     pub description: Option<String>,
@@ -66,10 +122,16 @@ pub struct AppManifestDto {
     pub icon: Option<String>,
     #[serde(rename = "hasDatabase")]
     pub has_database: bool,
+    #[serde(rename = "portalOrder")]
+    pub portal_order: Option<u32>,
     #[serde(default)]
     pub dev_command: Option<String>,
     #[serde(default)]
     pub requires_auth_in_dev: bool,
+    #[serde(default)]
+    pub cloudflare: Option<CloudflareConfigDto>,
+    #[serde(default)]
+    pub sre: Option<SreConfigDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -251,20 +313,41 @@ pub fn discover_suite_apps_internal(
                         }
 
                         if !slug.is_empty() {
-                            let sre_block = manifest_val.get("sre");
-                            let dev_command = sre_block
-                                .and_then(|s| s.get("devCommand"))
+                            let hosting_target = manifest_val
+                                .get("hostingTarget")
                                 .and_then(|v| v.as_str())
-                                .map(|s| s.to_string());
+                                .unwrap_or("wsh-docker")
+                                .to_string();
+                            let sre_block = manifest_val.get("sre");
+                            let sre_dto = sre_block
+                                .and_then(|v| serde_json::from_value::<SreConfigDto>(v.clone()).ok());
+                            let cloudflare_dto = manifest_val
+                                .get("cloudflare")
+                                .and_then(|v| serde_json::from_value::<CloudflareConfigDto>(v.clone()).ok());
+
+                            let dev_command = sre_dto
+                                .as_ref()
+                                .and_then(|s| s.dev_command.clone())
+                                .or_else(|| {
+                                    sre_block
+                                        .and_then(|s| s.get("devCommand"))
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string())
+                                });
                             let requires_auth_in_dev = sre_block
                                 .and_then(|s| s.get("requiresAuthInDev"))
                                 .and_then(|v| v.as_bool())
-                                .unwrap_or(slug != "auth" && slug != "res");
+                                .unwrap_or(
+                                    hosting_target != "cloudflare-pages"
+                                        && slug != "auth"
+                                        && slug != "res",
+                                );
 
                             let dto = AppManifestDto {
                                 schema_version: manifest_val["schemaVersion"].as_i64().map(|v| v as i32),
                                 app_id: manifest_val["appId"].as_str().map(|s| s.to_string()),
                                 slug,
+                                hosting_target,
                                 display_name,
                                 portal_title: manifest_val["portalTitle"].as_str().map(|s| s.to_string()),
                                 description: manifest_val["description"].as_str().map(|s| s.to_string()),
@@ -277,8 +360,11 @@ pub fn discover_suite_apps_internal(
                                 theme_color: manifest_val["themeColor"].as_str().map(|s| s.to_string()),
                                 icon: manifest_val["icon"].as_str().map(|s| s.to_string()),
                                 has_database: manifest_val.get("hasDatabase").and_then(|v| v.as_bool()).unwrap_or(true),
+                                portal_order: manifest_val.get("portalOrder").and_then(|v| v.as_u64()).map(|v| v as u32),
                                 dev_command,
                                 requires_auth_in_dev,
+                                cloudflare: cloudflare_dto,
+                                sre: sre_dto,
                             };
 
                             apps.push(DiscoveredAppDto {

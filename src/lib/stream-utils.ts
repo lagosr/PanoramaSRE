@@ -10,6 +10,7 @@ export const PAGE_SCOPE_BADGE_LABELS: Record<NavSectionId, string> = {
   edge: 'SSL',
   backups: 'DR',
   smoke: 'SMOKE',
+  'opt-ins': 'OPTIN',
   settings: 'CFG',
 };
 
@@ -55,6 +56,7 @@ export function inferPageScopeFromJob(
     return 'backups';
   }
   if (lowerId.startsWith('smoke-')) return 'smoke';
+  if (lowerId.startsWith('optin-') || lowerId.startsWith('opt-in')) return 'opt-ins';
   if (lowerId.startsWith('settings-') || lowerId.startsWith('workspace-')) return 'settings';
 
   const lowerTitle = (title || '').toLowerCase();

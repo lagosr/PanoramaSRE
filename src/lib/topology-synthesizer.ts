@@ -131,6 +131,8 @@ export function synthesizeTopology(
   snapshot: WshSnapshot | null,
   tunnelVersionStatus?: CloudflareTunnelVersionStatus | null
 ): SynthesizedTopology {
+  const wshApps = apps.filter((a) => a.manifest.hostingTarget !== 'cloudflare-pages');
+
   // 1. Parse raw Lighttpd routes
   const rawRoutePairs = (snapshot?.lighttpd_routes_raw || '')
     .split(',')
@@ -140,17 +142,17 @@ export function synthesizeTopology(
       return { slug: slug.trim().replace(/^\//, ''), port: parseInt(portStr.trim(), 10) || 0 };
     });
 
-  // If no routes in snapshot (e.g. offline/mock), synthesize from discovered apps
+  // If no routes in snapshot (e.g. offline/mock), synthesize from discovered WSH apps
   const activeRoutePairs =
     rawRoutePairs.length > 0
       ? rawRoutePairs
-      : apps.map((a) => ({ slug: a.manifest.slug, port: a.manifest.port }));
+      : wshApps.map((a) => ({ slug: a.manifest.slug, port: a.manifest.port }));
 
   const containers = snapshot?.containers || [];
 
   // 2. Build rich Route Items
   const routes: TopologyRouteItem[] = activeRoutePairs.map((rt, idx) => {
-    const matchedApp = apps.find((a) => a.manifest.slug === rt.slug || a.manifest.port === rt.port);
+    const matchedApp = wshApps.find((a) => a.manifest.slug === rt.slug || a.manifest.port === rt.port);
     const containerName = matchedApp?.manifest.containerName || `panorama-${rt.slug}`;
 
     const containerInfo = containers.find((c) => {
@@ -244,7 +246,7 @@ export function synthesizeTopology(
   // 5. Security & Isolation Audit
   // Audit all suite application containers (Next.js apps) for strict 127.0.0.1 loopback binding
   const appContainerNames = new Set(
-    apps.map((a) => (a.manifest.containerName || `panorama-${a.manifest.slug}`).toLowerCase())
+    wshApps.map((a) => (a.manifest.containerName || `panorama-${a.manifest.slug}`).toLowerCase())
   );
   const appContainers = containers.filter((c) => {
     const name = (c.Names || c.ID || '').replace(/^\//, '').toLowerCase();

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildDeployCommand,
+  buildCloudflarePagesDeployCommand,
   buildDbManagerCommand,
   buildSslCertCommand,
   buildCloudflareTunnelCommand,
@@ -81,5 +82,36 @@ describe('script-adapters CLI builders', () => {
       'root@wsh.panoramadr.com',
       'apt-get update',
     ]);
+  });
+
+  it('correctly constructs deploy-cloudflare-pages arguments for GitCi, Wrangler, and rollback', () => {
+    const gitCiCmd = buildCloudflarePagesDeployCommand('C:\\AG Projects\\ParakithSite', {
+      mode: 'GitCi',
+      bumpVersion: 'patch',
+      allowDirty: true,
+    });
+    expect(gitCiCmd.command).toBe('pwsh.exe');
+    expect(gitCiCmd.lockType).toBe('None');
+    expect(gitCiCmd.args).toContain('.\\deploy-cloudflare-pages.ps1');
+    expect(gitCiCmd.args).toContain('-Mode');
+    expect(gitCiCmd.args).toContain('GitCi');
+    expect(gitCiCmd.args).toContain('-BumpVersion');
+    expect(gitCiCmd.args).toContain('patch');
+    expect(gitCiCmd.args).toContain('-AllowDirty');
+
+    const wranglerCmd = buildCloudflarePagesDeployCommand('C:\\AG Projects\\ParakithSite', {
+      mode: 'Wrangler',
+    });
+    expect(wranglerCmd.lockType).toBe('None');
+    expect(wranglerCmd.args).toContain('Wrangler');
+    expect(wranglerCmd.args).not.toContain('-BumpVersion');
+
+    const rollbackCmd = buildCloudflarePagesDeployCommand('C:\\AG Projects\\ParakithSite', {
+      rollbackDeploymentId: 'cf-dep-987654',
+    });
+    expect(rollbackCmd.lockType).toBe('None');
+    expect(rollbackCmd.args).toContain('-RollbackDeploymentId');
+    expect(rollbackCmd.args).toContain('cf-dep-987654');
+    expect(rollbackCmd.args).not.toContain('-Mode');
   });
 });

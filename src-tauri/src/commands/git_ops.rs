@@ -123,8 +123,21 @@ pub fn classify_blast_radius(paths: &[String], has_new_env_keys: bool) -> Vec<St
     }
     for p in paths {
         let norm = p.replace('\\', "/");
-        if norm.contains("migrations/") || norm.ends_with(".sql") {
+        if norm.contains("migrations/") || (norm.ends_with(".sql") && !norm.starts_with("schema/")) {
             badges.insert("DB_MIGRATION".to_string());
+        } else if norm == "wrangler.toml"
+            || norm.starts_with("schema/")
+            || norm.contains("/schema/") && norm.ends_with(".sql")
+        {
+            badges.insert("D1_SCHEMA_INFRA".to_string());
+        } else if norm.starts_with("functions/") || norm.contains("/functions/") {
+            badges.insert("EDGE_FUNCTIONS".to_string());
+        } else if norm.contains("terms-of-service")
+            || norm.contains("privacy-policy")
+            || norm.contains("data-retention")
+            || norm.contains("/opt-in")
+        {
+            badges.insert("COMPLIANCE_POLICY".to_string());
         } else if norm.contains("lib/auth")
             || norm.contains("route-guards")
             || norm.ends_with("middleware.ts")
@@ -137,6 +150,7 @@ pub fn classify_blast_radius(paths: &[String], has_new_env_keys: bool) -> Vec<St
             || norm == "docker-compose.yml"
             || norm.starts_with("next.config")
             || norm == "deploy-docker.ps1"
+            || norm == "deploy-cloudflare-pages.ps1"
         {
             badges.insert("DOCKER_INFRA".to_string());
         } else if norm.starts_with(".env") {
@@ -400,6 +414,9 @@ mod tests {
             "package.json".to_string(),
             "src/components/App.tsx".to_string(),
             "Dockerfile".to_string(),
+            "functions/api/health.ts".to_string(),
+            "schema/opt_ins.sql".to_string(),
+            "src/app/privacy-policy/page.tsx".to_string(),
         ];
         let badges = classify_blast_radius(&files, true);
         assert!(badges.contains(&"DB_MIGRATION".to_string()));
@@ -407,6 +424,9 @@ mod tests {
         assert!(badges.contains(&"APP_LOGIC_UI".to_string()));
         assert!(badges.contains(&"DOCKER_INFRA".to_string()));
         assert!(badges.contains(&"ENV_CONTRACT".to_string()));
+        assert!(badges.contains(&"EDGE_FUNCTIONS".to_string()));
+        assert!(badges.contains(&"D1_SCHEMA_INFRA".to_string()));
+        assert!(badges.contains(&"COMPLIANCE_POLICY".to_string()));
     }
 
     #[test]

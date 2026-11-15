@@ -139,8 +139,10 @@ export function BackupsRecoveryView({
   onClearTab,
   isApplying = false,
 }: BackupsRecoveryViewProps) {
-  // Filter only applications backed by an operational database (declarative via panorama.app.json hasDatabase)
-  const dbApps = apps.filter((a) => a.manifest.hasDatabase !== false);
+  // Filter only DietPi WSH applications backed by an operational SQLite database (exclude Cloudflare Pages / D1 apps)
+  const dbApps = apps.filter(
+    (a) => a.manifest.hasDatabase !== false && a.manifest.hostingTarget !== 'cloudflare-pages'
+  );
   const [expandedRunIdx, setExpandedRunIdx] = useState<number | null>(null);
   const [selectedAppId, setSelectedAppId] = useState<string>(dbApps[0]?.manifest.appId || '');
   const [archives, setArchives] = useState<LocalBackupArchive[]>([]);

@@ -7,6 +7,7 @@ import {
   BackupLedgerSummary,
   SecurityPostureInvariant,
   TerminalTab,
+  OptInComplianceSnapshot,
 } from '../../lib/types';
 import { FleetAppCard } from './FleetAppCard';
 import { ApplianceStatusStrip } from './ApplianceStatusStrip';
@@ -19,9 +20,11 @@ interface CommandCenterViewProps {
   appliances: ApplianceStatus[];
   sslFleet?: SslFleetSummary | null;
   backupLedger?: BackupLedgerSummary | null;
+  optInSnapshot?: OptInComplianceSnapshot | null;
   terminalTabs?: TerminalTab[];
   isLoading: boolean;
   onNavigateToBackups?: () => void;
+  onNavigateToOptIns?: () => void;
   onTriggerFullGfsBackup?: () => void;
   securityViolationCount?: number;
   failingInvariants?: SecurityPostureInvariant[];
@@ -38,9 +41,11 @@ export function CommandCenterView({
   appliances, 
   sslFleet, 
   backupLedger,
+  optInSnapshot,
   terminalTabs = [],
   isLoading,
   onNavigateToBackups,
+  onNavigateToOptIns,
   onTriggerFullGfsBackup,
   securityViolationCount = 0,
   failingInvariants = [],
@@ -311,8 +316,12 @@ export function CommandCenterView({
                 key={app.manifest.slug}
                 app={app}
                 backupStatus={appBackup}
+                optInSnapshot={
+                  app.manifest.hostingTarget === 'cloudflare-pages' ? optInSnapshot : undefined
+                }
                 onOpenApp={handleOpenApp}
                 onInspectComposition={handleInspectComposition}
+                onNavigateToOptIns={onNavigateToOptIns}
               />
             );
           })}

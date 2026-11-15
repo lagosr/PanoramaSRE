@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { ask } from '@tauri-apps/plugin-dialog';
+import { ask, save } from '@tauri-apps/plugin-dialog';
 import { runStreamJob } from './lib/process-runner';
 import { SidebarRail, NavItem } from './components/layout/SidebarRail';
 import { TopLiveSyncBar } from './components/layout/TopLiveSyncBar';
@@ -16,9 +16,12 @@ import { EdgePkiView } from './components/edge/EdgePkiView';
 import { ReleasePipelineView } from './components/releases/ReleasePipelineView';
 import { BackupsRecoveryView } from './components/backups/BackupsRecoveryView';
 import { SmokeTestsView } from './components/smoke/SmokeTestsView';
+import { OptInComplianceView } from './components/optins/OptInComplianceView';
 import { synthesizeTopology, computeTopologyBadges } from './lib/topology-synthesizer';
 import {
   DiscoveredApp,
+  AppManifest,
+  HostingTarget,
   NetworkPosture,
   ApplianceStatus,
   AppCompositionReport,
@@ -30,12 +33,20 @@ import {
   McpBridgeStatus,
   SmokeTestRun,
   CloudflareTunnelVersionStatus,
+  OptInComplianceSnapshot,
+  ParakithOptInRecord,
   NavSectionId,
   WorkStreamSource,
   isAppDeployCandidate,
 } from './lib/types';
 import { inferPageScopeFromJob } from './lib/stream-utils';
-import { buildSslCertCommand, buildCloudflareTunnelCommand, buildRemoteSshCommand } from './lib/script-adapters';
+import {
+  buildSslCertCommand,
+  buildCloudflareTunnelCommand,
+  buildRemoteSshCommand,
+  buildCloudflarePagesDeployCommand,
+  ScriptActionExecution,
+} from './lib/script-adapters';
 
 const DEFAULT_APPLIANCES = [
   { key: 'ui', name: 'UniFi CloudKey', host: 'ui.panoramadr.com' },
@@ -66,6 +77,8 @@ export const App: React.FC = () => {
   const [sslFleet, setSslFleet] = useState<SslFleetSummary | null>(null);
   const [mcpStatus, setMcpStatus] = useState<McpBridgeStatus | null>(null);
   const [smokeRuns, setSmokeRuns] = useState<SmokeTestRun[]>([]);
+  const [optInSnapshot, setOptInSnapshot] = useState<OptInComplianceSnapshot | null>(null);
+  const [isSyncingOptIns, setIsSyncingOptIns] = useState<boolean>(false);
   const [isSmokeRunning, setIsSmokeRunning] = useState<boolean>(false);
   const [activeSmokeJobId, setActiveSmokeJobId] = useState<string>('');
   const [smokeError, setSmokeError] = useState<string | null>(null);
@@ -81,6 +94,8 @@ export const App: React.FC = () => {
   const [trackedDeployJobIds, setTrackedDeployJobIds] = useState<Record<string, string>>({});
   const haltDeploymentsRef = useRef<boolean>(false);
   const currentRunningDeployJobIdRef = useRef<string | null>(null);
+  const lastOptInSyncMsRef = useRef<number>(0);
+  const parakithAppRef = useRef<DiscoveredApp | null>(null);
 
   // Load saved console sessions from SQLite database on mount
   useEffect(() => {
@@ -345,6 +360,51 @@ export const App: React.FC = () => {
     }
   }, []);
 
+  // Load cached Parakith D1 SMS Opt-In records from local SQLite
+  const loadCachedOptIns = useCallback(async (databaseName?: string) => {
+    try {
+      const snapshot = await invoke<OptInComplianceSnapshot>('get_cached_parakith_opt_ins', {
+        databaseName: databaseName ?? null,
+      });
+      setOptInSnapshot(snapshot);
+      return snapshot;
+    } catch (err) {
+      console.warn('[PanoramaSRE] Failed loading cached Parakith opt-ins:', err);
+      return null;
+    }
+  }, []);
+
+  // Synchronize Parakith D1 SMS Opt-In records via Wrangler CLI
+  const refreshOptIns = useCallback(
+    async (workspacePath?: string, databaseName?: string, notifyOnNew = true) => {
+      const targetApp = parakithAppRef.current;
+      const resolvedWorkspace = workspacePath || targetApp?.workspacePath;
+      const resolvedDatabase =
+        databaseName || targetApp?.manifest.cloudflare?.d1DatabaseName || 'parakith-opt-ins';
+      if (!resolvedWorkspace) {
+        return null;
+      }
+      setIsSyncingOptIns(true);
+      try {
+        const snapshot = await invoke<OptInComplianceSnapshot>('sync_parakith_opt_ins', {
+          workspacePath: resolvedWorkspace,
+          databaseName: resolvedDatabase,
+          notifyOnNew,
+        });
+        setOptInSnapshot(snapshot);
+        lastOptInSyncMsRef.current = Date.now();
+        return snapshot;
+      } catch (err) {
+        console.warn('[PanoramaSRE] Parakith D1 opt-in sync warning:', err);
+        await loadCachedOptIns(resolvedDatabase);
+        return null;
+      } finally {
+        setIsSyncingOptIns(false);
+      }
+    },
+    [loadCachedOptIns]
+  );
+
   // Refresh Upstream Cloudflare Tunnel Release Status (non-SSH, ETag cached)
   const refreshTunnelVersion = useCallback(async (force = false, explicitRunningRaw?: string) => {
     setIsCheckingTunnelVersion(true);
@@ -434,41 +494,80 @@ export const App: React.FC = () => {
       // 3. For each discovered app, probe /api/health and compute git provenance
       const enrichedApps: DiscoveredApp[] = await Promise.all(
         rawDiscovered.map(async (item) => {
-          const appManifest = {
+          const hostingTarget: HostingTarget =
+            item.manifest.hostingTarget === 'cloudflare-pages' ? 'cloudflare-pages' : 'wsh-docker';
+          const rawSre = item.manifest.sre || {};
+          const appManifest: AppManifest = {
             ...item.manifest,
             appId: item.manifest.app_id || item.manifest.slug,
+            slug: item.manifest.slug,
+            hostingTarget,
             displayName: item.manifest.display_name,
             portalTitle: item.manifest.portal_title || item.manifest.display_name,
+            description: item.manifest.description || '',
             basePath: item.manifest.base_path,
-            containerName: item.manifest.container_name || item.manifest.slug,
-            composeProject: item.manifest.slug,
-            remoteAppRoot: item.manifest.remote_app_root || `/var/data/${item.manifest.slug}`,
-            dataVolume: item.manifest.data_volume || `/var/data/${item.manifest.slug}/data`,
+            port: item.manifest.port,
+            containerName:
+              item.manifest.container_name ||
+              (hostingTarget === 'cloudflare-pages' ? '' : item.manifest.slug),
+            composeProject: hostingTarget === 'cloudflare-pages' ? '' : item.manifest.slug,
+            remoteAppRoot:
+              item.manifest.remote_app_root ||
+              (hostingTarget === 'cloudflare-pages' ? '' : `/var/data/${item.manifest.slug}`),
+            dataVolume:
+              item.manifest.data_volume ||
+              (hostingTarget === 'cloudflare-pages' ? '' : `/var/data/${item.manifest.slug}/data`),
             localSqlitePath: item.manifest.local_sqlite_path || '',
             themeColor: item.manifest.theme_color || 'emerald',
             icon: item.manifest.icon || 'Layers',
             hasDatabase: item.manifest.hasDatabase ?? item.manifest.has_database ?? true,
-            portalOrder: 1,
-            roles: ['admin'],
+            portalOrder:
+              item.manifest.portalOrder ??
+              item.manifest.portal_order ??
+              (hostingTarget === 'cloudflare-pages' ? 99 : 1),
+            roles: item.manifest.roles || ['admin'],
+            cloudflare: item.manifest.cloudflare || undefined,
             sre: {
-              deployScript: './deploy-docker.ps1',
-              dbScript: './db-manager.ps1',
-              devCommand: 'npm run dev',
-              healthEndpoint: `${item.manifest.base_path}/api/health`,
-              manifestEndpoint: `${item.manifest.base_path}/api/auth/manifest`,
-              testCommand: 'npm test',
-              typecheckCommand: 'npx tsc --noEmit',
-              requiresAuthInDev: false,
-              automatedBackupDefault: true,
-              exposeInRemotePortal: true,
+              deployScript:
+                rawSre.deployScript ||
+                (hostingTarget === 'cloudflare-pages'
+                  ? './deploy-cloudflare-pages.ps1'
+                  : './deploy-docker.ps1'),
+              dbScript:
+                rawSre.dbScript ||
+                (hostingTarget === 'cloudflare-pages' ? '' : './db-manager.ps1'),
+              devCommand: rawSre.devCommand || item.manifest.dev_command || 'npm run dev',
+              previewCommand: rawSre.previewCommand,
+              healthEndpoint:
+                rawSre.healthEndpoint ||
+                (hostingTarget === 'cloudflare-pages'
+                  ? '/api/health'
+                  : `${item.manifest.base_path}/api/health`),
+              healthAuthMode: rawSre.healthAuthMode,
+              manifestEndpoint:
+                rawSre.manifestEndpoint ??
+                (hostingTarget === 'cloudflare-pages'
+                  ? undefined
+                  : `${item.manifest.base_path}/api/auth/manifest`),
+              testCommand: rawSre.testCommand || 'npm test',
+              typecheckCommand: rawSre.typecheckCommand || 'npx tsc --noEmit',
+              requiresAuthInDev:
+                rawSre.requiresAuthInDev ?? item.manifest.requires_auth_in_dev ?? false,
+              automatedBackupDefault:
+                rawSre.automatedBackupDefault ?? hostingTarget !== 'cloudflare-pages',
+              exposeInRemotePortal:
+                rawSre.exposeInRemotePortal ?? hostingTarget !== 'cloudflare-pages',
             },
           };
 
-          // Probe /api/health on WSH
+          // Probe /api/health (WSH or Cloudflare Pages stealth HMAC probe)
           let probedHealth: AppHealth | undefined;
           let latencyMs = 0;
           try {
-            const healthUrl = `https://wsh.panoramadr.com${item.manifest.base_path}/api/health`;
+            const healthUrl =
+              hostingTarget === 'cloudflare-pages'
+                ? `${(appManifest.cloudflare?.primaryUrl || 'https://www.parakith.com').replace(/\/+$/, '')}${appManifest.sre.healthEndpoint || '/api/health'}`
+                : `https://wsh.panoramadr.com${item.manifest.base_path}/api/health`;
             const res = await invoke<{
               status: string;
               latency_ms: number;
@@ -477,6 +576,8 @@ export const App: React.FC = () => {
               appId: appManifest.appId,
               url: healthUrl,
               timeoutMs: 4000,
+              authMode: appManifest.sre.healthAuthMode ?? null,
+              workspacePath: item.workspace_path,
             });
             latencyMs = res.latency_ms;
             if (res.health) {
@@ -534,6 +635,21 @@ export const App: React.FC = () => {
       }
 
       setApps(enrichedApps);
+      const discoveredParakith =
+        enrichedApps.find(
+          (a) => a.manifest.hostingTarget === 'cloudflare-pages' && a.manifest.cloudflare?.d1DatabaseName
+        ) ||
+        enrichedApps.find((a) => a.manifest.slug === 'parakith') ||
+        null;
+      parakithAppRef.current = discoveredParakith;
+      if (discoveredParakith && (lastOptInSyncMsRef.current === 0 || isUserInitiated)) {
+        refreshOptIns(
+          discoveredParakith.workspacePath,
+          discoveredParakith.manifest.cloudflare?.d1DatabaseName || 'parakith-opt-ins',
+          !isUserInitiated
+        );
+      }
+
       const healthyCount = enrichedApps.filter((a) => a.health?.status === 'healthy').length;
       pushSyncTrace(
         `[INFO] Discovered ${enrichedApps.length} suite apps (${healthyCount}/${enrichedApps.length} production healthy).`
@@ -613,13 +729,36 @@ export const App: React.FC = () => {
         setIsManualSyncing(false);
       }
     }
-  }, [refreshAppliances, refreshBackupLedger, refreshSslStatus, refreshTunnelVersion, saveTabToDb]);
+  }, [refreshAppliances, refreshBackupLedger, refreshSslStatus, refreshTunnelVersion, refreshOptIns, saveTabToDb]);
 
-  // Initial sync on mount (all tiers once on startup)
+  // Initial sync on mount (all tiers once on startup + cached opt-ins hydration)
   useEffect(() => {
+    loadCachedOptIns();
     syncFullTelemetry(false, true, 'hud', true);
     refreshMcpStatus();
-  }, [syncFullTelemetry, refreshMcpStatus]);
+  }, [loadCachedOptIns, syncFullTelemetry, refreshMcpStatus]);
+
+  // Background 15-minute D1 SMS Opt-In sync with new-record desktop notification
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      refreshOptIns(undefined, undefined, true);
+    }, 15 * 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, [refreshOptIns]);
+
+  // Clear unread badge count whenever operator opens the SMS Opt-Ins view
+  useEffect(() => {
+    if (activeTab !== 'opt-ins') return;
+    invoke('mark_parakith_opt_ins_seen')
+      .then(() => {
+        setOptInSnapshot((prev) =>
+          prev ? { ...prev, unreadCount: 0, lastSeenId: prev.maxId } : prev
+        );
+      })
+      .catch((err) => {
+        console.warn('[PanoramaSRE] Failed marking opt-ins seen:', err);
+      });
+  }, [activeTab]);
 
   // Synchronize configurable Tier 1 & Tier 3 intervals to Rust TelemetryScheduler
   useEffect(() => {
@@ -914,8 +1053,10 @@ export const App: React.FC = () => {
       }
     }
 
-    // 2. Start all other remaining child web servers in parallel
-    const childApps = apps.filter((a) => a.manifest.slug !== 'auth');
+    // 2. Start all other remaining WSH child web servers in parallel (exclude external Cloudflare Pages)
+    const childApps = apps.filter(
+      (a) => a.manifest.slug !== 'auth' && a.manifest.hostingTarget !== 'cloudflare-pages'
+    );
     await Promise.all(
       childApps.map(async (child) => {
         if (child.devServer?.status !== 'RUNNING_MANAGED' && child.devServer?.status !== 'RUNNING_EXTERNAL') {
@@ -1234,21 +1375,78 @@ export const App: React.FC = () => {
     });
   };
 
+  // Parakith D1 SMS Opt-In Compliance Handlers
+  const handleExportOptIns = useCallback(
+    async (records: ParakithOptInRecord[], format: 'csv' | 'json') => {
+      try {
+        const targetPath = await save({
+          title: `Export Parakith SMS Opt-Ins (${format.toUpperCase()})`,
+          defaultPath: `parakith-opt-ins-${new Date().toISOString().slice(0, 10)}.${format}`,
+          filters: [{ name: format.toUpperCase(), extensions: [format] }],
+        });
+        if (!targetPath) return;
+        const count = await invoke<number>('export_parakith_opt_ins', {
+          records,
+          format,
+          targetPath,
+        });
+        showActionFeedback(
+          `Exported ${count} SMS opt-in record(s) to ${targetPath}`,
+          'success',
+          5000
+        );
+      } catch (err) {
+        showActionFeedback(`Failed to export opt-in records: ${err}`, 'error', 6000);
+      }
+    },
+    [showActionFeedback]
+  );
+
+  const handleDeleteOptIn = useCallback(
+    async (recordId: number) => {
+      const targetApp =
+        parakithAppRef.current || apps.find((a) => a.manifest.slug === 'parakith') || null;
+      if (!targetApp) {
+        throw new Error('ParakithSite workspace is not discovered in active suite apps.');
+      }
+      const updated = await invoke<OptInComplianceSnapshot>('delete_parakith_opt_in', {
+        workspacePath: targetApp.workspacePath,
+        databaseName: targetApp.manifest.cloudflare?.d1DatabaseName || 'parakith-opt-ins',
+        recordId,
+      });
+      setOptInSnapshot(updated);
+      showActionFeedback(
+        `Deleted opt-in record #${recordId} from D1 & local cache`,
+        'success',
+        5000
+      );
+    },
+    [apps, showActionFeedback]
+  );
+
   // Deployment Execution Helpers
   const executeAppDeploy = (
     app: DiscoveredApp,
     bump: string,
     allowDirty: boolean,
-    skipSmoke = false
+    skipSmoke = false,
+    edgeMode: 'GitCi' | 'Wrangler' = 'GitCi'
   ): Promise<number> => {
     const jobId = `deploy-${app.manifest.slug}-${Date.now()}`;
     currentRunningDeployJobIdRef.current = jobId;
     setSelectedReleaseAppSlug(app.manifest.slug);
     setTrackedDeployJobIds((prev) => ({ ...prev, [app.manifest.slug]: jobId }));
+    const isEdgeApp = app.manifest.hostingTarget === 'cloudflare-pages';
     const newTab: TerminalTab = {
       id: jobId,
-      title: `Deploy: ${app.manifest.displayName}`,
-      lines: [`[PanoramaSRE] Initiating release pipeline for ${app.manifest.displayName}...`],
+      title: isEdgeApp
+        ? `Edge Publish: ${app.manifest.displayName}`
+        : `Deploy: ${app.manifest.displayName}`,
+      lines: [
+        isEdgeApp
+          ? `[PanoramaSRE] Initiating Cloudflare Pages publish (${edgeMode}) for ${app.manifest.displayName}...`
+          : `[PanoramaSRE] Initiating release pipeline for ${app.manifest.displayName}...`,
+      ],
       isRunning: true,
       createdAt: new Date().toISOString(),
       pageScope: 'releases',
@@ -1260,24 +1458,44 @@ export const App: React.FC = () => {
     setActiveTerminalTabId(jobId);
     saveTabToDb(newTab);
 
-    const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', './deploy-docker.ps1'];
-    if (bump !== 'none') {
-      args.push('-BumpVersion', bump);
-    }
-    if (allowDirty) {
-      args.push('-AllowDirty');
-    }
-    if (skipSmoke) {
-      args.push('-SkipSmoke');
+    let command = 'pwsh.exe';
+    let args: string[];
+    let lockType: ScriptActionExecution['lockType'] = 'WshRemoteMutation';
+    let workingDir = app.workspacePath;
+
+    if (isEdgeApp) {
+      const cfExec = buildCloudflarePagesDeployCommand(app.workspacePath, {
+        mode: edgeMode,
+        bumpVersion: (bump as 'none' | 'patch' | 'minor' | 'major') || 'none',
+        allowDirty,
+        skipSmoke,
+      });
+      command = cfExec.command;
+      args = cfExec.args;
+      lockType = cfExec.lockType;
+      workingDir = cfExec.workingDir || app.workspacePath;
+    } else {
+      args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', './deploy-docker.ps1'];
+      if (bump !== 'none') {
+        args.push('-BumpVersion', bump);
+      }
+      if (allowDirty) {
+        args.push('-AllowDirty');
+      }
+      if (skipSmoke) {
+        args.push('-SkipSmoke');
+      }
     }
 
     return runStreamJob({
       jobId,
-      label: `Deploy: ${app.manifest.displayName}`,
-      command: 'pwsh.exe',
+      label: isEdgeApp
+        ? `Edge Publish: ${app.manifest.displayName}`
+        : `Deploy: ${app.manifest.displayName}`,
+      command,
       args,
-      workingDir: app.workspacePath,
-      lockType: 'WshRemoteMutation',
+      workingDir,
+      lockType,
       onLine: (line) => {
         appendTerminalLine(jobId, line);
       },
@@ -1308,8 +1526,10 @@ export const App: React.FC = () => {
     haltDeploymentsRef.current = false;
 
     try {
-      // Respect the user's explicit deployment order (caller passes already-ordered slice)
-      const sortedApps = [...appsToDeploy];
+      // Respect the user's explicit deployment order and isolate external Cloudflare Pages apps from WSH Docker batching
+      const sortedApps = appsToDeploy.filter(
+        (a) => a.manifest.hostingTarget !== 'cloudflare-pages'
+      );
 
       for (let i = 0; i < sortedApps.length; i++) {
         // Check if user clicked Halt
@@ -2170,6 +2390,7 @@ export const App: React.FC = () => {
           topologyAlertCount={topologyBadges.totalCount}
           topologyAlertSeverity={topologyBadges.severity}
           smokeFailureCount={smokeFailureCount}
+          unreadOptInsCount={optInSnapshot?.unreadCount ?? 0}
         />
 
         <main className="flex-1 flex flex-col h-full overflow-hidden relative">
@@ -2198,9 +2419,11 @@ export const App: React.FC = () => {
               appliances={appliances}
               sslFleet={sslFleet}
               backupLedger={backupLedger}
+              optInSnapshot={optInSnapshot}
               terminalTabs={terminalTabs}
               isLoading={apps.length === 0}
               onNavigateToBackups={() => setActiveTab('backups')}
+              onNavigateToOptIns={() => setActiveTab('opt-ins')}
               onTriggerFullGfsBackup={() => handleTriggerFullGfsBackup('hud')}
               securityViolationCount={securityViolationCount}
               failingInvariants={failingInvariants}
@@ -2379,7 +2602,9 @@ export const App: React.FC = () => {
               onAbortJob={handleAbortJob}
               onCloseTab={handleCloseTab}
               onClearTab={handleClearTab}
-              onTriggerDeploy={executeAppDeploy}
+              onTriggerDeploy={(app, bump, allowDirty, edgeMode) =>
+                executeAppDeploy(app, bump, allowDirty, false, edgeMode)
+              }
               onTriggerDeployAll={handleDeployAllApps}
               isDeployingAll={isDeployingAll}
               onHaltDeployments={handleHaltDeployments}
@@ -2387,10 +2612,17 @@ export const App: React.FC = () => {
                 const jobId = `rollback-${app.manifest.slug}-${Date.now()}`;
                 setSelectedReleaseAppSlug(app.manifest.slug);
                 setTrackedDeployJobIds((prev) => ({ ...prev, [app.manifest.slug]: jobId }));
+                const isEdgeApp = app.manifest.hostingTarget === 'cloudflare-pages';
                 const newTab: TerminalTab = {
                   id: jobId,
-                  title: `Rollback: ${app.manifest.displayName}`,
-                  lines: [`[PanoramaSRE] Swapping container to image tag ${tag}...`],
+                  title: isEdgeApp
+                    ? `Edge Rollback: ${app.manifest.displayName}`
+                    : `Rollback: ${app.manifest.displayName}`,
+                  lines: [
+                    isEdgeApp
+                      ? `[PanoramaSRE] Rolling back Cloudflare Pages deployment to ${tag}...`
+                      : `[PanoramaSRE] Swapping container to image tag ${tag}...`,
+                  ],
                   isRunning: true,
                   createdAt: new Date().toISOString(),
                   pageScope: 'releases',
@@ -2402,13 +2634,23 @@ export const App: React.FC = () => {
                 setActiveTerminalTabId(jobId);
                 saveTabToDb(newTab);
 
+                const cfExec = isEdgeApp
+                  ? buildCloudflarePagesDeployCommand(app.workspacePath, {
+                      rollbackDeploymentId: tag,
+                    })
+                  : null;
+
                 runStreamJob({
                   jobId,
-                  label: `Rollback: ${app.manifest.displayName}`,
-                  command: 'pwsh.exe',
-                  args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', './deploy-docker.ps1', '-RollbackToTag', tag],
-                  workingDir: app.workspacePath,
-                  lockType: 'WshRemoteMutation',
+                  label: isEdgeApp
+                    ? `Edge Rollback: ${app.manifest.displayName}`
+                    : `Rollback: ${app.manifest.displayName}`,
+                  command: cfExec ? cfExec.command : 'pwsh.exe',
+                  args: cfExec
+                    ? cfExec.args
+                    : ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', './deploy-docker.ps1', '-RollbackToTag', tag],
+                  workingDir: cfExec?.workingDir || app.workspacePath,
+                  lockType: cfExec ? cfExec.lockType : 'WshRemoteMutation',
                   onLine: (line) => {
                     appendTerminalLine(jobId, line);
                   },
@@ -2498,6 +2740,28 @@ export const App: React.FC = () => {
             />
           )}
 
+          {activeTab === 'opt-ins' && (() => {
+            const parakithApp =
+              apps.find((a) => a.manifest.slug === 'parakith') || parakithAppRef.current;
+            return (
+              <OptInComplianceView
+                snapshot={optInSnapshot}
+                isSyncing={isSyncingOptIns}
+                workspacePath={parakithApp?.workspacePath}
+                d1DatabaseId={parakithApp?.manifest.cloudflare?.d1DatabaseId}
+                onSyncNow={() =>
+                  refreshOptIns(
+                    parakithApp?.workspacePath,
+                    parakithApp?.manifest.cloudflare?.d1DatabaseName,
+                    false
+                  )
+                }
+                onExport={handleExportOptIns}
+                onDeleteRecord={handleDeleteOptIn}
+              />
+            );
+          })()}
+
           {activeTab !== 'hud' &&
             activeTab !== 'local-dev' &&
             activeTab !== 'releases' &&
@@ -2506,6 +2770,7 @@ export const App: React.FC = () => {
             activeTab !== 'edge' &&
             activeTab !== 'backups' &&
             activeTab !== 'smoke' &&
+            activeTab !== 'opt-ins' &&
             activeTab !== 'settings' && (
               <div className="flex-1 flex items-center justify-center p-12 text-slate-500 text-sm">
                 Module <span className="font-mono text-emerald-400 mx-1">{activeTab}</span> will hydrate in subsequent milestones.

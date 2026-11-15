@@ -75,7 +75,14 @@ export const devServersDomain: SreToolDomain = {
           slug: {
             type: 'string',
             description:
-              'Application slug to start ("auth", "spendy", "biomed", "water", "basket", "res", or "all").',
+              'Application slug to start ("auth", "spendy", "biomed", "water", "basket", "res", "parakith", or "all"). Note: Cloudflare Pages sites like "parakith" are only started when explicitly targeted, not on "all".',
+          },
+          mode: {
+            type: 'string',
+            description:
+              'Optional dev server mode: "dev" (default Next.js UI server) or "preview" (Wrangler Pages + local D1 edge preview when previewCommand is declared in panorama.app.json).',
+            enum: ['dev', 'preview'],
+            default: 'dev',
           },
           withAuth: {
             type: 'boolean',
@@ -110,6 +117,9 @@ export const devServersDomain: SreToolDomain = {
         }
 
         const params: Record<string, unknown> = { slug };
+        if (typeof args.mode === 'string' && args.mode.trim() !== '') {
+          params.mode = args.mode.trim();
+        }
         if (typeof args.withAuth === 'boolean') {
           params.withAuth = args.withAuth;
         }
@@ -209,7 +219,14 @@ export const devServersDomain: SreToolDomain = {
           slug: {
             type: 'string',
             description:
-              'Application slug to restart ("auth", "spendy", "biomed", "water", "basket", "res").',
+              'Application slug to restart ("auth", "spendy", "biomed", "water", "basket", "res", "parakith").',
+          },
+          mode: {
+            type: 'string',
+            description:
+              'Optional dev server mode: "dev" (default Next.js UI server) or "preview" (Wrangler Pages + local D1 edge preview when previewCommand is declared in panorama.app.json).',
+            enum: ['dev', 'preview'],
+            default: 'dev',
           },
           waitForReady: {
             type: 'boolean',
@@ -238,13 +255,18 @@ export const devServersDomain: SreToolDomain = {
           );
         }
 
+        const restartParams: Record<string, unknown> = { slug };
+        if (typeof args.mode === 'string' && args.mode.trim() !== '') {
+          restartParams.mode = args.mode.trim();
+        }
+
         const restartResult = await callSrePipe<{
           slug: string;
           appId: string;
           pid: number;
           port: number;
           managedApps: string[];
-        }>(ensured.instance.lease, 'dev.restart', { slug }, { timeoutMs: 15000 });
+        }>(ensured.instance.lease, 'dev.restart', restartParams, { timeoutMs: 15000 });
 
         const portListening = waitForReady
           ? await waitForAppPortReady(restartResult.port, 15000)

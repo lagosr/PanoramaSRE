@@ -52,21 +52,24 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
 
   const wasOpenRef = useRef(false);
 
+  const wshApps = apps.filter((a) => a.manifest.hostingTarget !== 'cloudflare-pages');
+
   useEffect(() => {
+    const deployableApps = apps.filter((a) => a.manifest.hostingTarget !== 'cloudflare-pages');
     if (isOpen && !wasOpenRef.current) {
       // First time the modal opens: initialize state
       wasOpenRef.current = true;
       const initialSorted = [
-        ...apps.filter((a) => a.manifest.slug === 'auth'),
-        ...apps.filter((a) => a.manifest.slug !== 'auth'),
+        ...deployableApps.filter((a) => a.manifest.slug === 'auth'),
+        ...deployableApps.filter((a) => a.manifest.slug !== 'auth'),
       ];
       setOrderedApps(initialSorted);
 
-      const drifted = apps.filter(isAppDeployCandidate);
+      const drifted = deployableApps.filter(isAppDeployCandidate);
       if (drifted.length > 0) {
         setSelectedSlugs(new Set(drifted.map((a) => a.manifest.slug)));
       } else {
-        setSelectedSlugs(new Set(apps.map((a) => a.manifest.slug)));
+        setSelectedSlugs(new Set(deployableApps.map((a) => a.manifest.slug)));
       }
       setConfirmText('');
     } else if (!isOpen && wasOpenRef.current) {
@@ -77,11 +80,11 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
       // Update app data inside orderedApps preserving custom sequence
       setOrderedApps((prev) => {
         const updated = prev.map((oldApp) => {
-          const fresh = apps.find((a) => a.manifest.slug === oldApp.manifest.slug);
+          const fresh = deployableApps.find((a) => a.manifest.slug === oldApp.manifest.slug);
           return fresh || oldApp;
         });
         const existingSlugs = new Set(prev.map((a) => a.manifest.slug));
-        const newlyAdded = apps.filter((a) => !existingSlugs.has(a.manifest.slug));
+        const newlyAdded = deployableApps.filter((a) => !existingSlugs.has(a.manifest.slug));
         return [...updated, ...newlyAdded];
       });
       // CRITICAL: Preserve user's checkboxes and confirmText without disruption
@@ -104,7 +107,7 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
   };
 
   const selectAll = () => {
-    setSelectedSlugs(new Set(apps.map((a) => a.manifest.slug)));
+    setSelectedSlugs(new Set(wshApps.map((a) => a.manifest.slug)));
   };
 
   const selectNone = () => {
@@ -112,7 +115,7 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
   };
 
   const selectOnlyDrifted = () => {
-    const drifted = apps.filter(isAppDeployCandidate);
+    const drifted = wshApps.filter(isAppDeployCandidate);
     setSelectedSlugs(new Set(drifted.map((a) => a.manifest.slug)));
   };
 

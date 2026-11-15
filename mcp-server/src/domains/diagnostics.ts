@@ -10,15 +10,15 @@ export const diagnosticsDomain: SreToolDomain = {
     {
       name: 'sre_ops_telemetry',
       description:
-        'Retrieves operational telemetry or triggers production smoke tests via PanoramaSRE: scrubbed system/audit logs ("logs"), network posture ("posture"), GFS database backup ledger ("backups"), 5-domain SSL certificate drift status ("ssl"), smoke test history ("smoke"), or live smoke test execution ("smoke_run").',
+        'Retrieves operational telemetry or triggers production smoke tests via PanoramaSRE: scrubbed system/audit logs ("logs"), network posture ("posture"), GFS database backup ledger ("backups"), multi-domain SSL certificate drift status ("ssl"), Parakith SMS opt-in compliance counts ("opt_ins"), smoke test history ("smoke"), or live smoke test execution ("smoke_run").',
       inputSchema: {
         type: 'object',
         properties: {
           domain: {
             type: 'string',
             description:
-              'Telemetry domain to query: "logs" | "posture" | "backups" | "ssl" | "smoke" (recent smoke test runs) | "smoke_run" (trigger live smoke test suite inside PanoramaSRE).',
-            enum: ['logs', 'posture', 'backups', 'ssl', 'smoke', 'smoke_run'],
+              'Telemetry domain to query: "logs" | "posture" | "backups" | "ssl" | "opt_ins" (Parakith D1 SMS opt-in counts & masked recent entries) | "smoke" (recent smoke test runs) | "smoke_run" (trigger live smoke test suite inside PanoramaSRE).',
+            enum: ['logs', 'posture', 'backups', 'ssl', 'opt_ins', 'smoke', 'smoke_run'],
             default: 'logs',
           },
           limit: {
@@ -30,6 +30,11 @@ export const diagnosticsDomain: SreToolDomain = {
             type: 'string',
             description:
               'Optional log category filter when domain="logs" (e.g., "DEV_SUPERVISOR", "AGENT_IPC", "SECURITY_ALERT", "SYSTEM").',
+          },
+          sync: {
+            type: 'boolean',
+            description:
+              'When domain="opt_ins", set sync=true to force an immediate live Wrangler D1 query before returning counts (default reads local cache).',
           },
           instance: {
             type: 'string',
@@ -57,6 +62,9 @@ export const diagnosticsDomain: SreToolDomain = {
         }
         if (typeof args.category === 'string' && args.category.trim() !== '') {
           params.category = args.category.trim();
+        }
+        if (typeof args.sync === 'boolean') {
+          params.sync = args.sync;
         }
 
         const telemetry = await callSrePipe<unknown>(

@@ -23,6 +23,7 @@ const SUITE_PATH_TO_SLUG: Array<{ pattern: RegExp; slug: string }> = [
   { pattern: /WaterAnalyzer/i, slug: 'water' },
   { pattern: /TastyBasket/i, slug: 'basket' },
   { pattern: /PanoramaResources/i, slug: 'res' },
+  { pattern: /ParakithSite/i, slug: 'parakith' },
 ];
 
 const PORT_TO_SLUG: Record<string, string> = {
@@ -32,6 +33,7 @@ const PORT_TO_SLUG: Record<string, string> = {
   '3003': 'water',
   '3004': 'basket',
   '3005': 'res',
+  '3500': 'parakith',
   '4000': 'res',
 };
 
@@ -42,7 +44,7 @@ function inferTargetSlug(cmd: string, cwd?: string): string | undefined {
       return slug;
     }
   }
-  const portMatch = cmd.match(/\b(300[0-5]|4000)\b/);
+  const portMatch = cmd.match(/\b(300[0-5]|3500|4000)\b/);
   if (portMatch && PORT_TO_SLUG[portMatch[1]]) {
     return PORT_TO_SLUG[portMatch[1]];
   }
@@ -76,9 +78,9 @@ export function classifyShellCommand(
     return { intercepted: false };
   }
 
-  // 2. Intercept direct Next.js / web application dev server startup commands
+  // 2. Intercept direct Next.js / Wrangler Pages / web application dev server startup commands
   const devStartRegex =
-    /(?:^|[;&|]\s*|\b)(?:npm(?:\.cmd)?\s+(?:run\s+dev|start)|pnpm\s+(?:run\s+)?(?:dev|start)|yarn\s+(?:dev|start)|npx(?:\.cmd)?\s+next\s+(?:dev|start)|next\s+(?:dev|start)|node(?:\.exe)?\s+[^\r\n]*next[^\r\n]*(?:dev|start))\b/i;
+    /(?:^|[;&|]\s*|\b)(?:npm(?:\.cmd)?\s+(?:run\s+(?:dev|preview)|start)|pnpm\s+(?:run\s+)?(?:dev|preview|start)|yarn\s+(?:dev|preview|start)|npx(?:\.cmd)?\s+(?:next\s+(?:dev|start)|wrangler\s+pages\s+dev)|next\s+(?:dev|start)|wrangler\s+pages\s+dev|node(?:\.exe)?\s+[^\r\n]*next[^\r\n]*(?:dev|start))\b/i;
 
   if (devStartRegex.test(trimmed)) {
     const slug = inferTargetSlug(trimmed, cwd);
@@ -92,7 +94,7 @@ export function classifyShellCommand(
 
   // 3. Intercept manual port-killing or blanket node process termination targeting suite dev servers
   const portKillRegex =
-    /\b(?:Get-NetTCPConnection[^\r\n]*(?:300[0-9]|4000)[^\r\n]*Stop-Process|Stop-Process[^\r\n]*(?:-Name\s+['"]?node|300[0-9]|4000)|taskkill(?:\.exe)?[^\r\n]*(?:\/IM\s+node(?:\.exe)?|300[0-9]|4000)|npx(?:\.cmd)?\s+kill-port\s+(?:300[0-9]|4000))\b/i;
+    /\b(?:Get-NetTCPConnection[^\r\n]*(?:300[0-9]|3500|4000)[^\r\n]*Stop-Process|Stop-Process[^\r\n]*(?:-Name\s+['"]?node|300[0-9]|3500|4000)|taskkill(?:\.exe)?[^\r\n]*(?:\/IM\s+node(?:\.exe)?|300[0-9]|3500|4000)|npx(?:\.cmd)?\s+kill-port\s+(?:300[0-9]|3500|4000))\b/i;
 
   if (portKillRegex.test(trimmed)) {
     const slug = inferTargetSlug(trimmed, cwd);
@@ -118,7 +120,7 @@ export function classifyShellCommand(
 
   // 5. Intercept background process / daemon spawning in conversation threads
   const bgProcessRegex =
-    /\b(?:Start-Process|Start-Job)\b[^\r\n]*\b(?:npm|npx|node|next|dev)\b/i;
+    /\b(?:Start-Process|Start-Job)\b[^\r\n]*\b(?:npm|npx|node|next|wrangler|dev|preview)\b/i;
 
   if (isDaemon === true || bgProcessRegex.test(trimmed)) {
     const slug = inferTargetSlug(trimmed, cwd);

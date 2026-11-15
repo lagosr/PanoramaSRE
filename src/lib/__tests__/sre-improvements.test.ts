@@ -11,9 +11,12 @@ describe('PanoramaSRE Application Improvements & Architecture', () => {
       'DEPENDENCY_DELTA',
       'DOCKER_INFRA',
       'APP_LOGIC_UI',
+      'EDGE_FUNCTIONS',
+      'D1_SCHEMA_INFRA',
+      'COMPLIANCE_POLICY',
     ];
 
-    it('has user-friendly definitions for all 6 blast radius categories', () => {
+    it('has user-friendly definitions for all 9 blast radius categories', () => {
       expectedKeys.forEach((key) => {
         const config = BLAST_RADIUS_CONFIG[key];
         expect(config).toBeDefined();
@@ -31,6 +34,9 @@ describe('PanoramaSRE Application Improvements & Architecture', () => {
       expect(BLAST_RADIUS_CONFIG.DEPENDENCY_DELTA.label).toBe('Dependencies');
       expect(BLAST_RADIUS_CONFIG.DOCKER_INFRA.label).toBe('Docker & Infra');
       expect(BLAST_RADIUS_CONFIG.APP_LOGIC_UI.label).toBe('App Logic & UI');
+      expect(BLAST_RADIUS_CONFIG.EDGE_FUNCTIONS.label).toBe('Edge Functions');
+      expect(BLAST_RADIUS_CONFIG.D1_SCHEMA_INFRA.label).toBe('D1 & Wrangler Infra');
+      expect(BLAST_RADIUS_CONFIG.COMPLIANCE_POLICY.label).toBe('Compliance & Opt-In Policy');
     });
   });
 

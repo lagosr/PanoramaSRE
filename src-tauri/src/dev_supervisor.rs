@@ -3,7 +3,7 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read};
 use std::net::TcpStream;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -53,6 +53,65 @@ impl DevSupervisor {
         } else {
             false
         }
+    }
+
+    /// Normalize a local dev URL so root basePath ("/") does not duplicate slashes.
+    pub fn normalize_local_url(port: u16, base_path: &str) -> String {
+        let trimmed = base_path.trim();
+        if trimmed.is_empty() || trimmed == "/" {
+            format!("http://localhost:{}", port)
+        } else {
+            format!("http://localhost:{}{}", port, trimmed)
+        }
+    }
+
+    /// Inspect Wrangler's Miniflare D1 local sqlite file when `localSqlitePath` is omitted.
+    pub fn discover_wrangler_d1_sqlite(workspace_path: &str) -> Option<(String, PathBuf)> {
+        let d1_dir = Path::new(workspace_path)
+            .join(".wrangler")
+            .join("state")
+            .join("v3")
+            .join("d1")
+            .join("miniflare-D1DatabaseObject");
+        let entries = std::fs::read_dir(&d1_dir).ok()?;
+        let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.extension().and_then(|s| s.to_str()) == Some("sqlite") {
+                if let Ok(meta) = entry.metadata() {
+                    let modified = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+                    if newest.as_ref().map(|(t, _)| modified > *t).unwrap_or(true) {
+                        newest = Some((modified, p));
+                    }
+                }
+            }
+        }
+        newest.map(|(_, p)| {
+            let rel = p
+                .strip_prefix(workspace_path)
+                .map(|r| r.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_else(|_| p.to_string_lossy().to_string());
+            (rel, p)
+        })
+    }
+
+    /// Inspect local SQLite file (either explicit path or Wrangler Miniflare D1 state)
+    pub fn inspect_app_sqlite(
+        workspace_path: &str,
+        local_sqlite_rel: &str,
+    ) -> (Option<String>, Option<u64>, Option<u32>) {
+        if !local_sqlite_rel.is_empty() && !workspace_path.is_empty() {
+            let db_path = Path::new(workspace_path).join(local_sqlite_rel);
+            let (size, version) = DevSupervisor::inspect_sqlite(&db_path);
+            return (Some(local_sqlite_rel.to_string()), size, version);
+        }
+        if !workspace_path.is_empty() {
+            if let Some((rel, full_path)) = DevSupervisor::discover_wrangler_d1_sqlite(workspace_path) {
+                let (size, version) = DevSupervisor::inspect_sqlite(&full_path);
+                return (Some(rel), size, version);
+            }
+        }
+        (None, None, None)
     }
 
     /// Inspect local SQLite file for size and PRAGMA user_version
@@ -175,7 +234,7 @@ impl DevSupervisor {
                 .as_deref()
                 .unwrap_or("");
 
-            let local_url = format!("http://localhost:{}{}", port, base_path);
+            let local_url = DevSupervisor::normalize_local_url(port, &base_path);
             let managed_pid = managed_map.get(&app_id).map(|c| c.id());
             let is_open = DevSupervisor::is_port_listening(port);
 
@@ -187,13 +246,8 @@ impl DevSupervisor {
                 DevServerStatus::Stopped
             };
 
-            let (sqlite_size, sqlite_version) =
-                if !local_sqlite_rel.is_empty() && !workspace_path.is_empty() {
-                    let db_path = Path::new(workspace_path).join(local_sqlite_rel);
-                    DevSupervisor::inspect_sqlite(&db_path)
-                } else {
-                    (None, None)
-                };
+            let (sqlite_path, sqlite_size, sqlite_version) =
+                DevSupervisor::inspect_app_sqlite(workspace_path, local_sqlite_rel);
 
             results.push(DevServerInfo {
                 app_id,
@@ -202,11 +256,7 @@ impl DevSupervisor {
                 port,
                 base_path,
                 local_url,
-                sqlite_path: if local_sqlite_rel.is_empty() {
-                    None
-                } else {
-                    Some(local_sqlite_rel.to_string())
-                },
+                sqlite_path,
                 sqlite_size_bytes: sqlite_size,
                 sqlite_user_version: sqlite_version,
             });
@@ -256,6 +306,8 @@ fn strip_ansi_basic(input: &str) -> String {
 pub fn is_dev_server_ready_line(raw_line: &str) -> bool {
     let clean = strip_ansi_basic(raw_line).to_ascii_lowercase();
     clean.contains("ready in ")
+        || clean.contains("ready on http")
+        || clean.contains("[wrangler:inf] ready on")
         || clean.contains("started server")
         || clean.contains("listening on")
         || (clean.contains("local:") && clean.contains("http"))
@@ -784,7 +836,7 @@ pub async fn get_dev_servers_status(
         let workspace_path = app["workspacePath"].as_str().unwrap_or("");
         let local_sqlite_rel = app["localSqlitePath"].as_str().unwrap_or("");
 
-        let local_url = format!("http://localhost:{}{}", port, base_path);
+        let local_url = DevSupervisor::normalize_local_url(port, &base_path);
 
         // Check managed map
         let managed_pid = managed_map.get(&app_id).map(|c| c.id());
@@ -809,13 +861,9 @@ pub async fn get_dev_servers_status(
             DevServerStatus::Stopped
         };
 
-        // SQLite inspection
-        let (sqlite_size, sqlite_version) = if !local_sqlite_rel.is_empty() && !workspace_path.is_empty() {
-            let db_path = Path::new(workspace_path).join(local_sqlite_rel);
-            DevSupervisor::inspect_sqlite(&db_path)
-        } else {
-            (None, None)
-        };
+        // SQLite inspection (supports both WSH localSqlitePath and Wrangler Miniflare D1 state)
+        let (sqlite_path, sqlite_size, sqlite_version) =
+            DevSupervisor::inspect_app_sqlite(workspace_path, local_sqlite_rel);
 
         results.push(DevServerInfo {
             app_id,
@@ -824,7 +872,7 @@ pub async fn get_dev_servers_status(
             port,
             base_path,
             local_url,
-            sqlite_path: if local_sqlite_rel.is_empty() { None } else { Some(local_sqlite_rel.to_string()) },
+            sqlite_path,
             sqlite_size_bytes: sqlite_size,
             sqlite_user_version: sqlite_version,
         });
@@ -878,6 +926,17 @@ mod tests {
             "  - Local:        \x1b[36mhttp://localhost:3002/biomed\x1b[39m"
         ));
         assert!(is_dev_server_ready_line("started server on 0.0.0.0:3000"));
+        assert!(is_dev_server_ready_line(
+            "[wrangler:inf] Ready on http://localhost:3500"
+        ));
+        assert_eq!(
+            DevSupervisor::normalize_local_url(3500, "/"),
+            "http://localhost:3500"
+        );
+        assert_eq!(
+            DevSupervisor::normalize_local_url(3002, "/biomed"),
+            "http://localhost:3002/biomed"
+        );
         assert!(!is_dev_server_ready_line(" ○ Compiling /page ..."));
         assert!(!is_dev_server_ready_line("GET /biomed/api/health 200 in 18ms"));
     }

@@ -282,8 +282,8 @@ pub fn validate_dev_command(cmd: &str) -> Result<String, String> {
         }
     }
 
-    // Allow only standard npm / npx dev scripts
-    let allowed_prefixes = ["npm run dev", "npx next dev"];
+    // Allow only standard npm / npx dev scripts (including Cloudflare Pages Functions local preview)
+    let allowed_prefixes = ["npm run dev", "npx next dev", "npm run preview"];
     if !allowed_prefixes.iter().any(|p| trimmed.starts_with(p)) {
         return Err(format!(
             "Security violation: dev command '{}' is not in the approved allowlist",
@@ -695,7 +695,12 @@ mod tests {
             validate_dev_command("npm run dev").unwrap(),
             "npm run dev"
         );
+        assert_eq!(
+            validate_dev_command("npm run preview").unwrap(),
+            "npm run preview"
+        );
         assert!(validate_dev_command("npm run dev & calc.exe").is_err());
+        assert!(validate_dev_command("npm run preview; calc.exe").is_err());
         assert!(validate_dev_command("npm run dev; whoami").is_err());
         assert!(validate_dev_command("powershell -enc AAA").is_err());
     }

@@ -54,4 +54,62 @@ describe('portal-generator', () => {
     expect(result).toContain("id: 'auth'");
     expect(result).not.toContain('old card');
   });
+
+  it('excludes cloudflare-pages apps from generated WSH portal cards and probes', () => {
+    const mixedApps: AppManifest[] = [
+      ...dummyApps,
+      {
+        schemaVersion: 1,
+        appId: 'parakith-site',
+        slug: 'parakith',
+        hostingTarget: 'cloudflare-pages',
+        displayName: 'ParakithSite',
+        portalTitle: 'Parakith LLC',
+        description: 'Public compliance website hosted on Cloudflare Pages',
+        basePath: '/',
+        port: 3500,
+        containerName: '',
+        composeProject: '',
+        remoteAppRoot: '',
+        dataVolume: '',
+        localSqlitePath: '',
+        themeColor: 'slate',
+        icon: 'ShieldCheck',
+        portalOrder: 99,
+        roles: ['admin'],
+        cloudflare: {
+          pagesProject: 'parakith-site',
+          primaryUrl: 'https://www.parakith.com',
+          domains: ['parakith.com', 'www.parakith.com'],
+        },
+        sre: {
+          deployScript: './deploy-cloudflare-pages.ps1',
+          dbScript: '',
+          devCommand: 'npm run dev',
+          previewCommand: 'npm run preview',
+          healthEndpoint: '/api/health',
+          healthAuthMode: 'hmac-sha256-stealth',
+          testCommand: 'npm test',
+          typecheckCommand: 'npm run typecheck',
+          requiresAuthInDev: false,
+          automatedBackupDefault: false,
+          exposeInRemotePortal: false,
+        },
+      },
+    ];
+
+    const inputHtml = `
+      <!-- PANORAMA_APP_CARDS_START -->
+      <!-- PANORAMA_APP_CARDS_END -->
+      <script>
+      /* PANORAMA_APP_PROBES_START */
+      /* PANORAMA_APP_PROBES_END */
+      </script>
+    `;
+
+    const result = renderPortalHtml(inputHtml, mixedApps, 'remote');
+    expect(result).toContain('Panorama Auth');
+    expect(result).not.toContain('Parakith LLC');
+    expect(result).not.toContain("id: 'parakith-site'");
+  });
 });

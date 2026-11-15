@@ -4,6 +4,9 @@ use crate::commands::monitor::{
     check_cloudflare_tunnel_version_internal, detect_network_posture,
     get_cached_tunnel_version_status, probe_app_health,
 };
+use crate::commands::optin_ops::{
+    mask_phone_number, read_cached_snapshot, sync_parakith_opt_ins_internal,
+};
 use crate::commands::smoke_ops::{get_smoke_test_history, run_smoke_tests_streaming};
 use crate::commands::ssl_ops::get_ssl_fleet_status;
 use crate::commands::workspace::{discover_suite_apps_internal, resolve_suite_workspace_root};
@@ -780,7 +783,10 @@ pub async fn process_ipc_message(
                     }
                 }
 
-                for app in apps.iter().filter(|a| a.manifest.slug != "auth") {
+                for app in apps
+                    .iter()
+                    .filter(|a| a.manifest.slug != "auth" && a.manifest.hosting_target != "cloudflare-pages")
+                {
                     let app_id = app
                         .manifest
                         .app_id
@@ -871,11 +877,21 @@ pub async fn process_ipc_message(
                     .app_id
                     .clone()
                     .unwrap_or_else(|| target_app.manifest.slug.clone());
-                let raw_cmd = target_app
-                    .manifest
-                    .dev_command
-                    .as_deref()
-                    .unwrap_or("npm run dev");
+                let requested_mode = req.params.get("mode").and_then(|v| v.as_str()).unwrap_or("dev");
+                let raw_cmd = if requested_mode == "preview" {
+                    target_app
+                        .manifest
+                        .sre
+                        .as_ref()
+                        .and_then(|s| s.preview_command.as_deref())
+                        .unwrap_or("npm run preview")
+                } else {
+                    target_app
+                        .manifest
+                        .dev_command
+                        .as_deref()
+                        .unwrap_or("npm run dev")
+                };
                 let clean_cmd = match validate_dev_command(raw_cmd) {
                     Ok(c) => c,
                     Err(e) => return IpcResponse::err(&req.id, "UNSAFE_DEV_COMMAND", e),
@@ -1062,11 +1078,21 @@ pub async fn process_ipc_message(
                 .app_id
                 .clone()
                 .unwrap_or_else(|| target_app.manifest.slug.clone());
-            let raw_cmd = target_app
-                .manifest
-                .dev_command
-                .as_deref()
-                .unwrap_or("npm run dev");
+            let requested_mode = req.params.get("mode").and_then(|v| v.as_str()).unwrap_or("dev");
+            let raw_cmd = if requested_mode == "preview" {
+                target_app
+                    .manifest
+                    .sre
+                    .as_ref()
+                    .and_then(|s| s.preview_command.as_deref())
+                    .unwrap_or("npm run preview")
+            } else {
+                target_app
+                    .manifest
+                    .dev_command
+                    .as_deref()
+                    .unwrap_or("npm run dev")
+            };
             let clean_cmd = match validate_dev_command(raw_cmd) {
                 Ok(c) => c,
                 Err(e) => return IpcResponse::err(&req.id, "UNSAFE_DEV_COMMAND", e),
@@ -1152,11 +1178,37 @@ pub async fn process_ipc_message(
                         .app_id
                         .clone()
                         .unwrap_or_else(|| app.manifest.slug.clone());
-                    let health_url = format!(
-                        "https://wsh.panoramadr.com{}/api/health",
-                        app.manifest.base_path
-                    );
-                    let probed = probe_app_health(app_id.clone(), health_url, Some(3000)).await;
+                    let is_cf = app.manifest.hosting_target == "cloudflare-pages";
+                    let health_url = if is_cf {
+                        let base_origin = app
+                            .manifest
+                            .cloudflare
+                            .as_ref()
+                            .map(|c| c.primary_url.trim_end_matches('/').to_string())
+                            .unwrap_or_else(|| "https://www.parakith.com".to_string());
+                        let ep = app
+                            .manifest
+                            .sre
+                            .as_ref()
+                            .and_then(|s| s.health_endpoint.clone())
+                            .unwrap_or_else(|| "/api/health".to_string());
+                        format!("{}{}", base_origin, ep)
+                    } else {
+                        format!("https://wsh.panoramadr.com{}/api/health", app.manifest.base_path)
+                    };
+                    let auth_mode = app
+                        .manifest
+                        .sre
+                        .as_ref()
+                        .and_then(|s| s.health_auth_mode.clone());
+                    let probed = probe_app_health(
+                        app_id.clone(),
+                        health_url,
+                        Some(3000),
+                        auth_mode,
+                        Some(app.workspace_path.clone()),
+                    )
+                    .await;
                     let prod_sha = probed
                         .health
                         .as_ref()
@@ -1329,6 +1381,71 @@ pub async fn process_ipc_message(
                             );
                             IpcResponse::err(&req.id, "SMOKE_RUN_ERROR", e)
                         }
+                    }
+                }
+                "opt_ins" => {
+                    let should_sync = req.params["sync"].as_bool().unwrap_or(false);
+                    let discovered_cf = discover_suite_apps_internal(sre_db, None)
+                        .ok()
+                        .and_then(|apps| {
+                            apps.into_iter()
+                                .find(|a| a.manifest.hosting_target == "cloudflare-pages")
+                        });
+
+                    let db_name = discovered_cf
+                        .as_ref()
+                        .and_then(|a| a.manifest.cloudflare.as_ref())
+                        .and_then(|c| c.d1_database_name.clone())
+                        .unwrap_or_else(|| "parakith-opt-ins".to_string());
+
+                    let snap_res = if should_sync {
+                        if let Some(ref cf_app) = discovered_cf {
+                            sync_parakith_opt_ins_internal(
+                                app_handle.as_ref(),
+                                sre_db,
+                                &cf_app.workspace_path,
+                                &db_name,
+                                false,
+                            )
+                            .await
+                        } else {
+                            read_cached_snapshot(sre_db, Some(&db_name), None)
+                        }
+                    } else {
+                        read_cached_snapshot(sre_db, Some(&db_name), None)
+                    };
+
+                    match snap_res {
+                        Ok(snap) => {
+                            let recent_redacted: Vec<Value> = snap
+                                .records
+                                .iter()
+                                .take(10)
+                                .map(|r| {
+                                    json!({
+                                        "id": r.id,
+                                        "phoneMasked": mask_phone_number(&r.phone),
+                                        "consent": r.consent,
+                                        "createdAt": r.created_at,
+                                    })
+                                })
+                                .collect();
+                            IpcResponse::success(
+                                &req.id,
+                                json!({
+                                    "databaseName": snap.database_name,
+                                    "totalCount": snap.total_count,
+                                    "consentedCount": snap.consented_count,
+                                    "declinedCount": snap.declined_count,
+                                    "last7dCount": snap.last_7d_count,
+                                    "maxId": snap.max_id,
+                                    "unreadCount": snap.unread_count,
+                                    "lastSyncedAt": snap.last_synced_at,
+                                    "recentEvents": recent_redacted,
+                                }),
+                            )
+                        }
+                        Err(e) => IpcResponse::err(&req.id, "OPT_INS_TELEMETRY_ERROR", e),
                     }
                 }
                 other => IpcResponse::err(

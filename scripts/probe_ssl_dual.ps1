@@ -148,6 +148,46 @@ if ($DeviceDefinitions.Count -eq 0) {
     )
 }
 
+# 3b. Append Cloudflare Edge / Pages managed TLS domains (remote-only probes)
+$CfDomains = @("www.parakith.com", "parakith.com")
+$ParakithManifestCandidates = @(
+    (Join-Path $PSScriptRoot "..\..\ParakithSite\panorama.app.json"),
+    "$env:USERPROFILE\Documents\AG Projects\ParakithSite\panorama.app.json",
+    "C:\Users\rodrigo\Documents\AG Projects\ParakithSite\panorama.app.json"
+)
+foreach ($mp in $ParakithManifestCandidates) {
+    if (Test-Path $mp) {
+        try {
+            $pm = Get-Content -Path $mp -Raw | ConvertFrom-Json
+            if ($pm.cloudflare -and $pm.cloudflare.domains -and $pm.cloudflare.domains.Count -gt 0) {
+                $CfDomains = @($pm.cloudflare.domains)
+            }
+        } catch {
+            # Fallback to default Parakith domains
+        }
+        break
+    }
+}
+
+$ExistingDomainSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+foreach ($d in $DeviceDefinitions) {
+    if ($d.Domain) { [void]$ExistingDomainSet.Add([string]$d.Domain) }
+}
+foreach ($cfDom in $CfDomains) {
+    $domStr = ([string]$cfDom).Trim()
+    if (-not $domStr -or $ExistingDomainSet.Contains($domStr)) { continue }
+    [void]$ExistingDomainSet.Add($domStr)
+    $isWww = $domStr.StartsWith("www.", [System.StringComparison]::OrdinalIgnoreCase)
+    $DeviceDefinitions += @{
+        Key               = if ($isWww) { "ParakithWww" } else { "ParakithApex" }
+        DisplayName       = if ($isWww) { "Parakith Edge (www)" } else { "Parakith Edge (Apex)" }
+        Domain            = $domStr
+        LocalSubdir       = ""
+        LocalTargetFolder = ""
+        DeployTargetType  = "CLOUDFLARE_EDGE (Managed Universal SSL)"
+    }
+}
+
 $Now = Get-Date
 $Items = [System.Collections.Generic.List[PSObject]]::new()
 $MinDays = 99999
@@ -173,7 +213,8 @@ foreach ($dev in $DeviceDefinitions) {
         error = $null
     }
 
-    if (Test-Path $localFile) {
+    $isCloudflareEdge = $dev.DeployTargetType -like "CLOUDFLARE_EDGE*"
+    if (-not $isCloudflareEdge -and (Test-Path $localFile)) {
         try {
             $bytes = [System.IO.File]::ReadAllBytes($localFile)
             $c = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($bytes)
@@ -299,6 +340,12 @@ foreach ($dev in $DeviceDefinitions) {
     if ($liveCert.reachable -and $liveCert.status -eq "SELF_SIGNED") {
         $driftStatus = "SELF_SIGNED"
         $DriftCount++
+    } elseif ($isCloudflareEdge) {
+        if ($liveCert.reachable) {
+            $driftStatus = "IN_SYNC"
+        } else {
+            $driftStatus = "UNREACHABLE"
+        }
     } elseif ($localCert.exists -and $liveCert.reachable) {
         if ($localCert.thumbprint -eq $liveCert.thumbprint) {
             $driftStatus = "IN_SYNC"

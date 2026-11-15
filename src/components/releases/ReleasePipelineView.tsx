@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { DiscoveredApp, TerminalTab } from '../../lib/types';
+import { invoke } from '@tauri-apps/api/core';
+import { DiscoveredApp, TerminalTab, CloudflareDeployment } from '../../lib/types';
 import { 
   GitBranch, 
   Rocket, 
@@ -48,7 +49,12 @@ interface ReleasePipelineViewProps {
   onAbortJob?: (jobId: string) => void;
   onCloseTab?: (id: string) => void;
   onClearTab?: (id: string) => void;
-  onTriggerDeploy: (app: DiscoveredApp, bump: string, allowDirty: boolean) => void;
+  onTriggerDeploy: (
+    app: DiscoveredApp,
+    bump: string,
+    allowDirty: boolean,
+    edgeMode?: 'GitCi' | 'Wrangler'
+  ) => void;
   onTriggerDeployAll: (apps: DiscoveredApp[], bump: string, allowDirty: boolean) => void;
   onTriggerRollback: (app: DiscoveredApp, tag: string) => void;
   isDeployingAll?: boolean;
@@ -77,7 +83,11 @@ export function ReleasePipelineView({
   const [localTrackedJobIds, setLocalTrackedJobIds] = useState<Record<string, string>>({});
   const [bumpVersion, setBumpVersion] = useState<string>('none');
   const [allowDirty, setAllowDirty] = useState<boolean>(false);
+  const [edgeDeployMode, setEdgeDeployMode] = useState<'GitCi' | 'Wrangler'>('GitCi');
   const [rollbackTag, setRollbackTag] = useState<string>('');
+  const [cfDeployments, setCfDeployments] = useState<CloudflareDeployment[]>([]);
+  const [cfDeploymentsLoading, setCfDeploymentsLoading] = useState<boolean>(false);
+  const [cfDeploymentsError, setCfDeploymentsError] = useState<string | null>(null);
   const [showDeployAllModal, setShowDeployAllModal] = useState<boolean>(false);
   const [inspectApp, setInspectApp] = useState<DiscoveredApp | null>(null);
   const [streamExpandRequest, setStreamExpandRequest] = useState<{ tabId?: string; nonce: number } | null>(null);
@@ -158,7 +168,38 @@ export function ReleasePipelineView({
   }, [terminalTabs, apps]);
 
   const selectedApp = apps.find((a) => a.manifest.slug === effectiveSelectedSlug) || apps[0];
+  const isEdgeApp = selectedApp?.manifest.hostingTarget === 'cloudflare-pages';
   const comp = selectedApp?.composition;
+
+  useEffect(() => {
+    if (!selectedApp || !isEdgeApp) {
+      setCfDeployments([]);
+      setCfDeploymentsError(null);
+      return;
+    }
+    let cancelled = false;
+    setCfDeploymentsLoading(true);
+    setCfDeploymentsError(null);
+    invoke<CloudflareDeployment[]>('list_cloudflare_deployments', {
+      workspacePath: selectedApp.workspacePath,
+      projectName: selectedApp.manifest.cloudflare?.pagesProject || 'parakith-site',
+    })
+      .then((list) => {
+        if (!cancelled) setCfDeployments(list || []);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setCfDeployments([]);
+          setCfDeploymentsError(String(err));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setCfDeploymentsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedApp?.manifest.slug, selectedApp?.workspacePath, isEdgeApp]);
   const prodRelease = selectedApp?.health?.release;
   const isHealthy = selectedApp?.health?.status === 'healthy';
   const selectedAppIdent = selectedApp
@@ -179,12 +220,64 @@ export function ReleasePipelineView({
     const isFinished = !tab.isRunning && tab.exitCode === 0;
     const isFailed = !tab.isRunning && tab.exitCode !== undefined && tab.exitCode !== 0;
 
+    const lines = tab.lines;
+    const fullText = lines.join('\n');
+    const isEdgeTab = isEdgeApp || /\[STAGE \d\/4\]|deploy-cloudflare-pages\.ps1|Cloudflare Pages/i.test(fullText);
+
+    if (isEdgeTab) {
+      let maxStage = 1;
+      let label = 'Typecheck & Tests';
+      let subStep = 'Running tsc & Vitest compliance checks';
+
+      if (/\[STAGE 1\/4\]|Pre-flight Typecheck|npm run typecheck|npm test|Validating Cloudflare Pages rollback/i.test(fullText)) {
+        maxStage = 1;
+        label = 'Typecheck & Tests';
+        subStep = /rollback/i.test(fullText)
+          ? 'Validating Cloudflare Pages rollback target'
+          : 'Executing TypeScript & Vitest compliance gate';
+      }
+
+      if (/\[STAGE 2\/4\]|Static Export|Release Provenance Stamp|npm run build|Skipping rebuild/i.test(fullText)) {
+        maxStage = 2;
+        label = 'Static Build & Stamp';
+        subStep = /Skipping rebuild/i.test(fullText)
+          ? 'Skipping rebuild for instant edge rollback'
+          : 'Building static out/ & release-info.json';
+      }
+
+      if (/\[STAGE 3\/4\]|Cloudflare Pages Edge Publish|wrangler pages deploy|Rolling back Cloudflare Pages/i.test(fullText)) {
+        maxStage = 3;
+        label = 'Cloudflare Publish';
+        subStep = /rollback/i.test(fullText)
+          ? 'Re-promoting immutable Cloudflare deployment'
+          : 'Publishing bundle to Cloudflare Pages edge';
+      }
+
+      if (/\[STAGE 4\/4\]|Stealth Edge Health|5-Route Verification|Verifying public routes|\[PASS\] Cloudflare Pages/i.test(fullText) || isFinished) {
+        maxStage = 4;
+        label = 'Stealth & Route Gate';
+        subStep = isFinished ? 'All 4 Edge Stages Completed' : 'Verifying Stealth 404 & HMAC Probe';
+      }
+
+      const icon =
+        maxStage === 1 ? Loader2 :
+        maxStage === 2 ? Layers :
+        maxStage === 3 ? Rocket :
+        Activity;
+
+      return {
+        stage: maxStage,
+        label,
+        subStep,
+        icon,
+        isFinished,
+        isFailed,
+      };
+    }
+
     let maxStage = 1;
     let label = 'Preparing Pre-flight & Git State';
     let subStep = 'Initializing pre-flight environment';
-
-    const lines = tab.lines;
-    const fullText = lines.join('\n');
 
     // Stage 1: SemVer, Git & Pre-flight
     if (/\[Stage 1\/5\]|Pre-build validation|Executing guided SemVer bump|TypeScript|database backup/i.test(fullText)) {
@@ -361,10 +454,14 @@ export function ReleasePipelineView({
         <div>
           <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
             <GitBranch className="w-5 h-5 text-emerald-400" />
-            6-Stage Release Pipeline & Instant Rollback Engine
+            {isEdgeApp
+              ? '4-Stage Edge Release Pipeline & Rollback Engine'
+              : '6-Stage Release Pipeline & Instant Rollback Engine'}
           </h2>
           <p className="text-sm text-slate-500 mt-0.5">
-            Deploy cryptographic git-backed releases or execute sub-5-second container rollbacks
+            {isEdgeApp
+              ? 'Publish verified static edge builds or re-promote immutable Cloudflare Pages deployments'
+              : 'Deploy cryptographic git-backed releases or execute sub-5-second container rollbacks'}
           </p>
         </div>
 
@@ -937,11 +1034,27 @@ export function ReleasePipelineView({
               const stageInfo = getDeploymentStage(stageTab);
               if (!stageTab || !stageInfo) return null;
 
+              const stageSteps = isEdgeApp
+                ? [
+                    { num: 1, name: 'Typecheck & Tests', key: 'tests' },
+                    { num: 2, name: 'Static Build & Stamp', key: 'build' },
+                    { num: 3, name: 'Cloudflare Publish', key: 'publish' },
+                    { num: 4, name: 'Stealth & Route Gate', key: 'verify' },
+                  ]
+                : [
+                    { num: 1, name: 'SemVer & Git', key: 'semver' },
+                    { num: 2, name: 'Docker Buildx', key: 'build' },
+                    { num: 3, name: 'SSH & SCP', key: 'scp' },
+                    { num: 4, name: 'Rolling Swap', key: 'swap' },
+                    { num: 5, name: 'Health Probe', key: 'health' },
+                    { num: 6, name: 'Manifest Sync', key: 'sync' },
+                  ];
+
               return (
                 <div className="space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                     <span className="text-slate-600 dark:text-slate-300 font-medium">
-                      Stage {stageInfo.stage} of 6:{' '}
+                      Stage {stageInfo.stage} of {stageSteps.length}:{' '}
                       <span className="font-semibold text-emerald-600 dark:text-emerald-400">
                         {stageInfo.label}
                       </span>
@@ -961,15 +1074,8 @@ export function ReleasePipelineView({
                     )}
                   </div>
 
-                  <div className="grid grid-cols-2 md:grid-cols-6 gap-2 text-xs font-mono">
-                    {[
-                      { num: 1, name: 'SemVer & Git', key: 'semver' },
-                      { num: 2, name: 'Docker Buildx', key: 'build' },
-                      { num: 3, name: 'SSH & SCP', key: 'scp' },
-                      { num: 4, name: 'Rolling Swap', key: 'swap' },
-                      { num: 5, name: 'Health Probe', key: 'health' },
-                      { num: 6, name: 'Manifest Sync', key: 'sync' },
-                    ].map((st) => {
+                  <div className={`grid grid-cols-2 ${isEdgeApp ? 'md:grid-cols-4' : 'md:grid-cols-6'} gap-2 text-xs font-mono`}>
+                    {stageSteps.map((st) => {
                       const currentStageNum = stageInfo.stage || 1;
                       const isDone = stageInfo.isFinished || currentStageNum > st.num;
                       const isActive = !stageInfo.isFinished && !stageInfo.isFailed && currentStageNum === st.num;
@@ -1014,7 +1120,11 @@ export function ReleasePipelineView({
                 </div>
               );
             }}
-            emptyHint={`Trigger Deploy or Rollback on ${selectedApp.manifest.displayName} to stream live Buildx and SSH progress.`}
+            emptyHint={
+              isEdgeApp
+                ? `Trigger Edge Publish or Cloudflare Rollback on ${selectedApp.manifest.displayName} to stream live Wrangler and Git CI progress.`
+                : `Trigger Deploy or Rollback on ${selectedApp.manifest.displayName} to stream live Buildx and SSH progress.`
+            }
           />
 
           {/* Position 6: Release Composition & Rollback Grid */}
@@ -1113,7 +1223,9 @@ export function ReleasePipelineView({
               <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <h4 className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider">
-                    Stage 6: Orchestrate Production Deployment
+                    {isEdgeApp
+                      ? 'Stage 4: Orchestrate Cloudflare Pages Release'
+                      : 'Stage 6: Orchestrate Production Deployment'}
                   </h4>
                   <div className="flex items-center gap-2">
                     {latestAvailableDeployJob && !displayedDeployJob && (
@@ -1136,11 +1248,29 @@ export function ReleasePipelineView({
                         <span>Open in Console Drawer</span>
                       </button>
                     )}
-                    <span className="text-[11px] text-slate-500 font-mono">Triggers deploy-docker.ps1</span>
+                    <span className="text-[11px] text-slate-500 font-mono">
+                      Triggers {isEdgeApp ? 'deploy-cloudflare-pages.ps1' : 'deploy-docker.ps1'}
+                    </span>
                   </div>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-4 text-xs">
+                  {isEdgeApp && (
+                    <div className="flex items-center gap-2 min-w-[260px]">
+                      <span className="text-slate-400 whitespace-nowrap">Deploy Mode:</span>
+                      <div className="flex-1">
+                        <CustomSelect
+                          value={edgeDeployMode}
+                          options={[
+                            { value: 'GitCi', label: 'Git CI Push (origin/main)' },
+                            { value: 'Wrangler', label: 'Direct Wrangler Upload' },
+                          ]}
+                          onChange={(val) => setEdgeDeployMode(val as 'GitCi' | 'Wrangler')}
+                        />
+                      </div>
+                    </div>
+                  )}
+
                   <div className="flex items-center gap-2 min-w-[240px]">
                     <span className="text-slate-400 whitespace-nowrap">SemVer Bump:</span>
                     <div className="flex-1">
@@ -1170,7 +1300,14 @@ export function ReleasePipelineView({
                 </div>
 
                 <button
-                  onClick={() => onTriggerDeploy(selectedApp, bumpVersion, allowDirty)}
+                  onClick={() =>
+                    onTriggerDeploy(
+                      selectedApp,
+                      bumpVersion,
+                      allowDirty,
+                      isEdgeApp ? edgeDeployMode : undefined
+                    )
+                  }
                   disabled={!!activeSelectedDeployJob}
                   className={`w-full py-2.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 shadow-lg ${
                     activeSelectedDeployJob
@@ -1186,7 +1323,11 @@ export function ReleasePipelineView({
                   ) : (
                     <>
                       <Rocket className="w-4 h-4" />
-                      <span>Buildx & Deploy to Production (deploy-docker.ps1)</span>
+                      <span>
+                        {isEdgeApp
+                          ? 'Publish to Cloudflare Pages (deploy-cloudflare-pages.ps1)'
+                          : 'Buildx & Deploy to Production (deploy-docker.ps1)'}
+                      </span>
                     </>
                   )}
                 </button>
@@ -1196,98 +1337,211 @@ export function ReleasePipelineView({
 
             {/* Instant Rollback Panel */}
             <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-sm flex flex-col justify-between space-y-4">
-              <div className="space-y-4">
-                <div>
-                  <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm flex items-center gap-2">
-                    <RotateCcw className="w-4 h-4 text-rose-400" />
-                    Instant Rollback Panel
-                  </h3>
-                  <p className="text-xs text-slate-500 mt-1">
-                    Instantly swaps the running WSH container to a previous N-3 cached image tag in under 5 seconds.
-                  </p>
-                </div>
-
-                <div className="space-y-2">
-                  <label className="block text-xs font-medium text-slate-400">Rollback Target Tag:</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. 1.0.0-7bae144"
-                    value={rollbackTag}
-                    onChange={(e) => setRollbackTag(e.target.value)}
-                    className="w-full px-3 py-1.5 rounded-lg text-xs font-mono bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-200 placeholder:text-slate-400 dark:placeholder:text-slate-600 focus:outline-none focus:border-rose-500"
-                  />
-                  
-                  {/* Candidate Quick-Fill Tags with Date and Status */}
-                  {rollbackTagList.length > 0 && (
-                    <div className="pt-2">
-                      <span className="text-[10px] text-slate-500 uppercase block mb-1.5 font-semibold">
-                        Known Release & Rollback Tags:
-                      </span>
-                      <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-                        {rollbackTagList.map((entry) => (
-                          <button
-                            key={entry.tag}
-                            type="button"
-                            onClick={() => setRollbackTag(entry.tag)}
-                            className={`w-full text-left p-2 rounded text-xs font-mono border transition-all flex items-start justify-between gap-2 ${
-                              rollbackTag === entry.tag
-                                ? 'bg-rose-500/15 border-rose-500/40 text-rose-700 dark:text-rose-200 ring-1 ring-rose-500/50'
-                                : 'bg-slate-50 dark:bg-slate-950/80 hover:bg-slate-100 dark:hover:bg-slate-800/80 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300'
-                            }`}
-                          >
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-1.5 font-bold truncate">
-                                <ArrowRight className="w-3 h-3 text-rose-400 shrink-0" />
-                                <span className="truncate">{entry.tag}</span>
-                                {entry.isDeployed && (
-                                  <span className="px-1 py-0.2 rounded text-[9px] font-mono bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 shrink-0">
-                                    LIVE
-                                  </span>
-                                )}
-                              </div>
-                              {entry.subject && (
-                                <p className="text-[10px] text-slate-400 truncate mt-0.5">
-                                  {entry.subject}
-                                </p>
-                              )}
-                            </div>
-
-                            {entry.committedAt && (
-                              <div className="text-right shrink-0">
-                                <span className="text-[10px] text-slate-400 block font-sans">
-                                  {formatRelativeTime(entry.committedAt)}
-                                </span>
-                                <span className="text-[9px] text-slate-500 block">
-                                  {formatLocalDateTime(entry.committedAt)}
-                                </span>
-                              </div>
-                            )}
-                          </button>
-                        ))}
-                      </div>
+              {isEdgeApp ? (
+                <>
+                  <div className="space-y-4">
+                    <div>
+                      <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm flex items-center gap-2">
+                        <RotateCcw className="w-4 h-4 text-rose-400" />
+                        Cloudflare Deployment History & Rollback
+                      </h3>
+                      <p className="text-xs text-slate-500 mt-1">
+                        Re-promotes an immutable Cloudflare Pages deployment ID across the global edge via Wrangler.
+                      </p>
                     </div>
-                  )}
-                </div>
 
-                <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-xs text-rose-700 dark:text-rose-300 space-y-1">
-                  <div className="flex items-center gap-1.5 font-semibold text-rose-800 dark:text-rose-400">
-                    <AlertTriangle className="w-4 h-4 shrink-0" />
-                    Schema Safety Gate
+                    <div className="space-y-2">
+                      <label className="block text-xs font-medium text-slate-400">Target Cloudflare Deployment ID:</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. a1b2c3d4-5678-90ef-..."
+                        value={rollbackTag}
+                        onChange={(e) => setRollbackTag(e.target.value)}
+                        className="w-full px-3 py-1.5 rounded-lg text-xs font-mono bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-200 placeholder:text-slate-400 dark:placeholder:text-slate-600 focus:outline-none focus:border-rose-500"
+                      />
+
+                      {cfDeploymentsLoading ? (
+                        <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs text-slate-500 flex items-center gap-2">
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-500" />
+                          <span>Loading Cloudflare Pages deployments...</span>
+                        </div>
+                      ) : cfDeploymentsError ? (
+                        <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-700 dark:text-amber-300 font-mono">
+                          Unable to fetch deployments via Wrangler: {cfDeploymentsError}
+                        </div>
+                      ) : cfDeployments.length > 0 ? (
+                        <div className="pt-2">
+                          <span className="text-[10px] text-slate-500 uppercase block mb-1.5 font-semibold">
+                            Recent Edge Deployments ({cfDeployments.length}):
+                          </span>
+                          <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
+                            {cfDeployments.map((dep) => (
+                              <button
+                                key={dep.id}
+                                type="button"
+                                onClick={() => setRollbackTag(dep.id)}
+                                className={`w-full text-left p-2 rounded text-xs font-mono border transition-all flex items-start justify-between gap-2 ${
+                                  rollbackTag === dep.id
+                                    ? 'bg-rose-500/15 border-rose-500/40 text-rose-700 dark:text-rose-200 ring-1 ring-rose-500/50'
+                                    : 'bg-slate-50 dark:bg-slate-950 hover:bg-slate-100 dark:hover:bg-slate-800 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300'
+                                }`}
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-1.5 font-bold truncate">
+                                    <ArrowRight className="w-3 h-3 text-rose-400 shrink-0" />
+                                    <span className="truncate">{dep.short_id || dep.id.slice(0, 8)}</span>
+                                    <span className="px-1 py-0.2 rounded text-[9px] font-mono bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 shrink-0">
+                                      {dep.environment}
+                                    </span>
+                                    {dep.is_active && (
+                                      <span className="px-1 py-0.2 rounded text-[9px] font-mono bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 shrink-0">
+                                        LIVE
+                                      </span>
+                                    )}
+                                  </div>
+                                  {(dep.commit_message || dep.branch) && (
+                                    <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                                      {dep.branch ? `[${dep.branch}] ` : ''}{dep.commit_message || dep.url}
+                                    </p>
+                                  )}
+                                </div>
+                                {dep.created_on && (
+                                  <div className="text-right shrink-0">
+                                    <span className="text-[10px] text-slate-400 block font-sans">
+                                      {formatRelativeTime(dep.created_on)}
+                                    </span>
+                                    <span className="text-[9px] text-slate-500 block">
+                                      {formatLocalDateTime(dep.created_on)}
+                                    </span>
+                                  </div>
+                                )}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-[11px] text-slate-500 font-mono">
+                          No deployments returned yet for {selectedApp.manifest.cloudflare?.pagesProject || 'parakith-site'}.
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/25 text-xs text-amber-800 dark:text-amber-300 space-y-1">
+                      <div className="flex items-center gap-1.5 font-semibold text-amber-900 dark:text-amber-400">
+                        <ShieldAlert className="w-4 h-4 shrink-0" />
+                        Edge Rollback & Stealth Secret Notice
+                      </div>
+                      <p className="text-[11px] leading-relaxed">
+                        Cloudflare Pages rollbacks re-promote the selected build immediately; D1 schema changes are not reverted automatically and require <code className="font-mono">PARAKITH_PROBE_SECRET</code> to remain configured.
+                      </p>
+                    </div>
                   </div>
-                  <p className="text-[11px] leading-relaxed">
-                    Rollbacks that downgrade SQLite schema versions are automatically blocked to prevent data corruption.
-                  </p>
-                </div>
-              </div>
 
-              <button
-                onClick={() => onTriggerRollback(selectedApp, rollbackTag)}
-                disabled={!rollbackTag.trim()}
-                className="w-full py-2.5 rounded-lg text-xs font-bold bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white transition-colors flex items-center justify-center gap-2 mt-auto shadow-md"
-              >
-                <RotateCcw className="w-4 h-4" />
-                Swap Container Tag Now
-              </button>
+                  <button
+                    onClick={() => onTriggerRollback(selectedApp, rollbackTag)}
+                    disabled={!rollbackTag.trim() || !!activeSelectedDeployJob}
+                    className="w-full py-2.5 rounded-lg text-xs font-bold bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white transition-colors flex items-center justify-center gap-2 mt-auto shadow-md"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                    Rollback Cloudflare Deployment
+                  </button>
+                </>
+              ) : (
+                <>
+                  <div className="space-y-4">
+                    <div>
+                      <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm flex items-center gap-2">
+                        <RotateCcw className="w-4 h-4 text-rose-400" />
+                        Instant Rollback Panel
+                      </h3>
+                      <p className="text-xs text-slate-500 mt-1">
+                        Instantly swaps the running WSH container to a previous N-3 cached image tag in under 5 seconds.
+                      </p>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="block text-xs font-medium text-slate-400">Rollback Target Tag:</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. 1.0.0-7bae144"
+                        value={rollbackTag}
+                        onChange={(e) => setRollbackTag(e.target.value)}
+                        className="w-full px-3 py-1.5 rounded-lg text-xs font-mono bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-200 placeholder:text-slate-400 dark:placeholder:text-slate-600 focus:outline-none focus:border-rose-500"
+                      />
+
+                      {/* Candidate Quick-Fill Tags with Date and Status */}
+                      {rollbackTagList.length > 0 && (
+                        <div className="pt-2">
+                          <span className="text-[10px] text-slate-500 uppercase block mb-1.5 font-semibold">
+                            Known Release & Rollback Tags:
+                          </span>
+                          <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                            {rollbackTagList.map((entry) => (
+                              <button
+                                key={entry.tag}
+                                type="button"
+                                onClick={() => setRollbackTag(entry.tag)}
+                                className={`w-full text-left p-2 rounded text-xs font-mono border transition-all flex items-start justify-between gap-2 ${
+                                  rollbackTag === entry.tag
+                                    ? 'bg-rose-500/15 border-rose-500/40 text-rose-700 dark:text-rose-200 ring-1 ring-rose-500/50'
+                                    : 'bg-slate-50 dark:bg-slate-950/80 hover:bg-slate-100 dark:hover:bg-slate-800/80 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300'
+                                }`}
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-1.5 font-bold truncate">
+                                    <ArrowRight className="w-3 h-3 text-rose-400 shrink-0" />
+                                    <span className="truncate">{entry.tag}</span>
+                                    {entry.isDeployed && (
+                                      <span className="px-1 py-0.2 rounded text-[9px] font-mono bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 shrink-0">
+                                        LIVE
+                                      </span>
+                                    )}
+                                  </div>
+                                  {entry.subject && (
+                                    <p className="text-[10px] text-slate-400 truncate mt-0.5">
+                                      {entry.subject}
+                                    </p>
+                                  )}
+                                </div>
+
+                                {entry.committedAt && (
+                                  <div className="text-right shrink-0">
+                                    <span className="text-[10px] text-slate-400 block font-sans">
+                                      {formatRelativeTime(entry.committedAt)}
+                                    </span>
+                                    <span className="text-[9px] text-slate-500 block">
+                                      {formatLocalDateTime(entry.committedAt)}
+                                    </span>
+                                  </div>
+                                )}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-xs text-rose-700 dark:text-rose-300 space-y-1">
+                      <div className="flex items-center gap-1.5 font-semibold text-rose-800 dark:text-rose-400">
+                        <AlertTriangle className="w-4 h-4 shrink-0" />
+                        Schema Safety Gate
+                      </div>
+                      <p className="text-[11px] leading-relaxed">
+                        Rollbacks that downgrade SQLite schema versions are automatically blocked to prevent data corruption.
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => onTriggerRollback(selectedApp, rollbackTag)}
+                    disabled={!rollbackTag.trim()}
+                    className="w-full py-2.5 rounded-lg text-xs font-bold bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white transition-colors flex items-center justify-center gap-2 mt-auto shadow-md"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                    Swap Container Tag Now
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>

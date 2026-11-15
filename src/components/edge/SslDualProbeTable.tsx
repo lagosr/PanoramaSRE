@@ -262,6 +262,10 @@ export const SslDualProbeTable: React.FC<SslDualProbeTableProps> = ({
                           </button>
                         </div>
                       </div>
+                    ) : item.deploy_target_type.startsWith('CLOUDFLARE_EDGE') ? (
+                      <span className="text-sky-600 dark:text-sky-400 text-[11px] font-sans">
+                        Cloudflare Edge Universal SSL (No Local PEM)
+                      </span>
                     ) : (
                       <span className="text-slate-500 text-[11px] italic font-sans">
                         {item.local_cert.error || 'No staging file on disk'}
@@ -322,7 +326,11 @@ export const SslDualProbeTable: React.FC<SslDualProbeTableProps> = ({
                   {/* Actions */}
                   <td className="py-3.5 pr-1 text-right">
                     <div className="flex items-center justify-end gap-1.5 flex-nowrap">
-                      {isItemBusy ? (
+                      {item.deploy_target_type.startsWith('CLOUDFLARE_EDGE') ? (
+                        <span className="px-2.5 py-1 rounded text-xs font-sans font-semibold text-sky-700 dark:text-sky-300 bg-sky-500/10 border border-sky-500/30 whitespace-nowrap flex-shrink-0">
+                          Cloudflare Managed
+                        </span>
+                      ) : isItemBusy ? (
                         <span className="px-2.5 py-1 rounded text-xs font-sans font-medium text-amber-700 dark:text-amber-300 bg-amber-500/10 border border-amber-500/30 flex items-center gap-1.5 whitespace-nowrap">
                           <RefreshCw className="w-3 h-3 animate-spin text-amber-500" />
                           In Progress...

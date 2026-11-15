@@ -39,6 +39,47 @@ export function buildDeployCommand(
   };
 }
 
+export function buildCloudflarePagesDeployCommand(
+  appPath: string,
+  options: {
+    mode?: 'GitCi' | 'Wrangler';
+    bumpVersion?: 'none' | 'patch' | 'minor' | 'major';
+    allowDirty?: boolean;
+    skipSmoke?: boolean;
+    rollbackDeploymentId?: string;
+    testMode?: boolean;
+  }
+): ScriptActionExecution {
+  const args: string[] = [
+    '-NoProfile',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-File',
+    '.\\deploy-cloudflare-pages.ps1',
+  ];
+
+  if (options.rollbackDeploymentId) {
+    args.push('-RollbackDeploymentId', options.rollbackDeploymentId);
+  } else {
+    args.push('-Mode', options.mode || 'GitCi');
+    if (options.bumpVersion && options.bumpVersion !== 'none') {
+      args.push('-BumpVersion', options.bumpVersion);
+    }
+    if (options.allowDirty) args.push('-AllowDirty');
+    if (options.skipSmoke) args.push('-SkipSmoke');
+  }
+  if (options.testMode) args.push('-Test');
+
+  return {
+    scriptPath: `${appPath}\\deploy-cloudflare-pages.ps1`,
+    command: 'pwsh.exe',
+    args,
+    lockType: 'None',
+    elevated: false,
+    workingDir: appPath,
+  };
+}
+
 export function buildDbManagerCommand(
   appPath: string,
   action: 'backup' | 'history' | 'apply-local',
