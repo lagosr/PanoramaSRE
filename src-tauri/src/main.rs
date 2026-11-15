@@ -15,6 +15,7 @@ mod tests {
     use panorama_sre_lib::commands::optin_ops::{
         format_opt_ins_csv, mask_phone_number, parse_wrangler_d1_opt_ins_json,
     };
+    use panorama_sre_lib::commands::smoke_ops::{sanitize_smoke_target_url, sanitize_smoke_trigger};
     use panorama_sre_lib::db::{OptInCacheRow, SreDatabase};
     use panorama_sre_lib::dev_supervisor::{is_dev_server_ready_line, DevSupervisor};
     use panorama_sre_lib::ipc_security::validate_dev_command;
@@ -322,5 +323,26 @@ mod tests {
         let _ = std::fs::remove_file(&db_path);
         let _ = std::fs::remove_file(db_path.with_extension("sqlite-wal"));
         let _ = std::fs::remove_file(db_path.with_extension("sqlite-shm"));
+    }
+
+    #[test]
+    fn test_smoke_ipc_param_sanitization() {
+        assert_eq!(sanitize_smoke_trigger(Some("scheduled")), "scheduled");
+        assert_eq!(sanitize_smoke_trigger(Some("scheduled:08:00")), "scheduled:08:00");
+        assert_eq!(sanitize_smoke_trigger(Some("mcp-agent")), "mcp-agent");
+        assert_eq!(sanitize_smoke_trigger(Some("bad;whoami")), "mcp-agent");
+        assert_eq!(sanitize_smoke_trigger(Some("")), "mcp-agent");
+        assert_eq!(sanitize_smoke_trigger(None), "mcp-agent");
+
+        assert_eq!(
+            sanitize_smoke_target_url(Some("https://wsh.panoramadr.com")),
+            Some("https://wsh.panoramadr.com".to_string())
+        );
+        assert_eq!(
+            sanitize_smoke_target_url(Some("https://wsh.panoramadr.com && calc")),
+            None
+        );
+        assert_eq!(sanitize_smoke_target_url(Some("file:///etc/passwd")), None);
+        assert_eq!(sanitize_smoke_target_url(None), None);
     }
 }

@@ -7,7 +7,10 @@ use crate::commands::monitor::{
 use crate::commands::optin_ops::{
     mask_phone_number, read_cached_snapshot, sync_parakith_opt_ins_internal,
 };
-use crate::commands::smoke_ops::{get_smoke_test_history, run_smoke_tests_streaming};
+use crate::commands::smoke_ops::{
+    get_smoke_test_history, run_smoke_tests_streaming, sanitize_smoke_target_url,
+    sanitize_smoke_trigger,
+};
 use crate::commands::ssl_ops::get_ssl_fleet_status;
 use crate::commands::workspace::{discover_suite_apps_internal, resolve_suite_workspace_root};
 use crate::db::SreDatabase;
@@ -1341,22 +1344,33 @@ pub async fn process_ipc_message(
                     let ws_root = resolve_suite_workspace_root(None)
                         .to_string_lossy()
                         .to_string();
+                    let triggered_by = sanitize_smoke_trigger(req.params["triggeredBy"].as_str());
+                    let target_url = sanitize_smoke_target_url(req.params["targetUrl"].as_str());
+                    let force_sms = req.params["forceSms"].as_bool().unwrap_or(false);
+                    let is_scheduled =
+                        triggered_by == "scheduled" || triggered_by.starts_with("scheduled:");
                     match run_smoke_tests_streaming(
                         app_handle,
                         ws_root,
-                        None,
-                        Some("mcp-agent".to_string()),
+                        target_url,
+                        Some(triggered_by.clone()),
+                        force_sms,
                     )
                     .await
                     {
                         Ok(run) => {
                             if let Ok(guard) = sre_db.lock() {
+                                let actor_label = if is_scheduled {
+                                    "Scheduled Task"
+                                } else {
+                                    "Agent"
+                                };
                                 let _ = guard.log_action(
                                     "AGENT_IPC",
                                     if run.failed == 0 { "INFO" } else { "WARN" },
                                     &format!(
-                                        "Agent executed Production Smoke Suite via IPC: {}/{} passed ({} failed)",
-                                        run.passed, run.total, run.failed
+                                        "{} executed Production Smoke Suite via IPC (trigger={}): {}/{} passed ({} failed)",
+                                        actor_label, triggered_by, run.passed, run.total, run.failed
                                     ),
                                     Some(&format!("caller_pid={}", attestation.pid)),
                                 );
@@ -1366,8 +1380,8 @@ pub async fn process_ipc_message(
                                 None,
                                 run.failed == 0,
                                 Some(&format!(
-                                    "Smoke tests: {}/{} passed",
-                                    run.passed, run.total
+                                    "Smoke tests ({}): {}/{} passed",
+                                    triggered_by, run.passed, run.total
                                 )),
                             );
                             IpcResponse::success(&req.id, json!(run))

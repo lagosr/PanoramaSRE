@@ -57,13 +57,17 @@ function getNextScheduleSlot(slots: string[]): string {
   return `Tomorrow at ${slots[0] || '08:00'}`;
 }
 
-function getRunE2eSmsInfo(run: SmokeTestRun): { status: 'passed' | 'failed'; detail: string } | null {
+export function getRunE2eSmsInfo(run: SmokeTestRun): { status: 'passed' | 'failed'; detail: string } | null {
   const smsCheck = run.results?.find((r) => r.name.includes('E2E SMS Delivery'));
   if (!smsCheck) return null;
   if (!smsCheck.passed) {
     return { status: 'failed', detail: smsCheck.detail };
   }
-  if (smsCheck.detail.includes('out=SM') && smsCheck.detail.includes('-> in=SM')) {
+  const trimmed = smsCheck.detail.trim();
+  if (/^skipped\b/i.test(trimmed)) {
+    return null;
+  }
+  if (trimmed.includes('out=SM') && trimmed.includes('-> in=SM')) {
     return { status: 'passed', detail: smsCheck.detail };
   }
   return null;

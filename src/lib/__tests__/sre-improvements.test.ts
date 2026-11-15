@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { isAppDeployCandidate } from '../types';
+import { isAppDeployCandidate, SmokeTestRun } from '../types';
 import { BLAST_RADIUS_CONFIG } from '../../components/ui/BlastRadiusBadge';
+import { getRunE2eSmsInfo } from '../../components/smoke/SmokeTestsView';
 
 describe('PanoramaSRE Application Improvements & Architecture', () => {
   describe('Blast Radius Human-Readable Badges & Tooltips', () => {
@@ -372,6 +373,54 @@ libc-bin/stable 2.36-9+deb12u9 arm64 [upgradable from: 2.36-9+deb12u8]
       const isLastFailed = mockLedger.last_run_status.toLowerCase() === 'failed';
       const isActionableNow = isLastFailed || todayPip.status !== 'Success';
       expect(isActionableNow).toBe(false);
+    });
+  });
+
+  describe('SmokeTestsView E2E SMS Badge Guard', () => {
+    const buildRun = (passed: boolean, detail: string): SmokeTestRun => ({
+      id: 'smoke_1',
+      timestamp: '2026-11-15T15:00:00Z',
+      targetUrl: 'https://wsh.panoramadr.com',
+      triggeredBy: 'scheduled',
+      envOnly: false,
+      total: 32,
+      passed: passed ? 32 : 31,
+      failed: passed ? 0 : 1,
+      results: [
+        {
+          name: 'PanoramaAuth: E2E SMS Delivery -> +19704272020 (inbound-only)',
+          category: 'notifications',
+          passed,
+          durationMs: 120,
+          detail,
+        },
+      ],
+    });
+
+    it('shows E2E SMS badge only for genuine live Twilio round-trips and excludes skipped runs', () => {
+      const liveRun = buildRun(true, 'out=SMff572d6618 -> in=SMaef45d49b5 (nonce=1e040c95 received)');
+      expect(getRunE2eSmsInfo(liveRun)).toEqual({
+        status: 'passed',
+        detail: 'out=SMff572d6618 -> in=SMaef45d49b5 (nonce=1e040c95 received)',
+      });
+
+      const cleanSkip = buildRun(
+        true,
+        'skipped (no SMS pipeline changes since live verification 19.0h ago [auth:1.0.6]; use Force Live E2E SMS to override)'
+      );
+      expect(getRunE2eSmsInfo(cleanSkip)).toBeNull();
+
+      const legacyNestedSkip = buildRun(
+        true,
+        'skipped (no code changes since verified E2E SMS [auth:1.0.6]: out=SMff572d6618 -> in=SMaef45d49b5 (nonce=1e040c95 received); use Force Live E2E SMS to override)'
+      );
+      expect(getRunE2eSmsInfo(legacyNestedSkip)).toBeNull();
+
+      const failedRun = buildRun(false, 'Outbound SID=SM123 failed with status=undelivered');
+      expect(getRunE2eSmsInfo(failedRun)).toEqual({
+        status: 'failed',
+        detail: 'Outbound SID=SM123 failed with status=undelivered',
+      });
     });
   });
 });

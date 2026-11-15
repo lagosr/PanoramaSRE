@@ -36,6 +36,16 @@ export const diagnosticsDomain: SreToolDomain = {
             description:
               'When domain="opt_ins", set sync=true to force an immediate live Wrangler D1 query before returning counts (default reads local cache).',
           },
+          triggeredBy: {
+            type: 'string',
+            description:
+              'Optional trigger label when domain="smoke_run" (e.g., "mcp-agent" or "scheduled").',
+          },
+          forceSms: {
+            type: 'boolean',
+            description:
+              'When domain="smoke_run", set forceSms=true to bypass the SMS skip classifier and send a live E2E probe.',
+          },
           instance: {
             type: 'string',
             description:
@@ -66,12 +76,18 @@ export const diagnosticsDomain: SreToolDomain = {
         if (typeof args.sync === 'boolean') {
           params.sync = args.sync;
         }
+        if (typeof args.triggeredBy === 'string' && args.triggeredBy.trim() !== '') {
+          params.triggeredBy = args.triggeredBy.trim();
+        }
+        if (typeof args.forceSms === 'boolean') {
+          params.forceSms = args.forceSms;
+        }
 
         const telemetry = await callSrePipe<unknown>(
           ensured.instance.lease,
           'ops.telemetry',
           params,
-          { timeoutMs: domain === 'smoke_run' ? 60000 : 15000 }
+          { timeoutMs: domain === 'smoke_run' ? 90000 : 15000 }
         );
 
         return {

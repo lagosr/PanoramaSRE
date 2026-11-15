@@ -254,12 +254,12 @@ export const App: React.FC = () => {
     setIsDrawerOpen(true);
   }, []);
 
-  // Keep refs to current apps, snapshot, and scheduled smoke runner for async callbacks
+  // Keep refs to current apps, snapshot, and smoke history loader for async callbacks
   const appsRef = useRef<DiscoveredApp[]>([]);
   appsRef.current = apps;
   const wshSnapshotRef = useRef<WshSnapshot | null>(null);
   wshSnapshotRef.current = wshSnapshot;
-  const runSmokeTestsRef = useRef<((triggeredBy?: string, forceSms?: boolean) => void) | null>(null);
+  const refreshSmokeHistoryRef = useRef<(() => Promise<void>) | null>(null);
 
   // Refresh Dev Server process states (lightweight TCP / PID check)
   const refreshDevServers = useCallback(async () => {
@@ -684,6 +684,9 @@ export const App: React.FC = () => {
         ]);
       }
 
+      // Keep smoke test history synced with OS-scheduled headless runs
+      void refreshSmokeHistoryRef.current?.();
+
       if (syncJobId) {
         const finishedAt = new Date().toISOString();
         const passLine = `[PASS] Telemetry sync complete (${enrichedApps.length} apps, posture: ${posture}).`;
@@ -790,29 +793,9 @@ export const App: React.FC = () => {
         refreshMcpStatus();
       }
 
-      // Tier 2 (60s): pooled home lab appliance probes & 4x/day Smoke Test slot check
+      // Tier 2 (60s): pooled home lab appliance probes (4x/day smoke schedule is owned by Windows Task Scheduler)
       if (dueTiers.includes(2)) {
         refreshAppliances();
-
-        const now = new Date();
-        const currentMinutes = now.getHours() * 60 + now.getMinutes();
-        const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-        const SCHEDULE_SLOTS = [
-          { label: '08:00', mins: 8 * 60 },
-          { label: '13:00', mins: 13 * 60 },
-          { label: '17:00', mins: 17 * 60 },
-          { label: '22:00', mins: 22 * 60 },
-        ];
-        const dueSlot = SCHEDULE_SLOTS.find(
-          (slot) => currentMinutes >= slot.mins && currentMinutes <= slot.mins + 1
-        );
-        if (dueSlot) {
-          const slotKey = `${dateStr} ${dueSlot.label}`;
-          if (localStorage.getItem('panoramasre_last_smoke_slot') !== slotKey) {
-            localStorage.setItem('panoramasre_last_smoke_slot', slotKey);
-            runSmokeTestsRef.current?.(`sre-scheduled:${dueSlot.label}`);
-          }
-        }
       }
 
       // Tier 3 (300s default / configurable): posture + 6x health + 6x git composition + WSH --fast SSH snapshot
@@ -2071,6 +2054,7 @@ export const App: React.FC = () => {
       setSmokeError(String(err));
     }
   }, [getWorkspaceRoot]);
+  refreshSmokeHistoryRef.current = refreshSmokeHistory;
 
   const handleRunSmokeTests = useCallback(
     (triggeredBy = 'sre-manual', forceSms = false) => {
@@ -2144,8 +2128,6 @@ export const App: React.FC = () => {
     ]
   );
 
-  runSmokeTestsRef.current = handleRunSmokeTests;
-
   const handleRegisterSmokeSchedule = useCallback(() => {
     const jobId = `smoke-schedule-${Date.now()}`;
     const smokeDir = `${getWorkspaceRoot()}\\PanoramaDrSuite\\tools\\smoke-tester`;
@@ -2182,7 +2164,13 @@ export const App: React.FC = () => {
     }
   }, [apps.length, refreshSmokeHistory]);
 
-  // Listen for AI Agent MCP-triggered Smoke Test executions (`sre_ops_telemetry({ domain: "smoke_run" })`)
+  useEffect(() => {
+    if (activeTab === 'smoke') {
+      void refreshSmokeHistory();
+    }
+  }, [activeTab, refreshSmokeHistory]);
+
+  // Listen for IPC-triggered Smoke Test executions (AI Agent MCP or Windows Task Scheduler bridge)
   useEffect(() => {
     let unlistenStart: (() => void) | undefined;
     let unlistenLine: (() => void) | undefined;
@@ -2193,6 +2181,9 @@ export const App: React.FC = () => {
         jobId: `smoke-mcp-${Date.now()}`,
         triggeredBy: 'mcp-agent',
       };
+      const isScheduled =
+        triggeredBy === 'scheduled' || triggeredBy.startsWith('scheduled:');
+      const actorLabel = isScheduled ? 'OS Scheduled Task' : 'AI Agent';
       setIsSmokeRunning(true);
       setActiveSmokeJobId(jobId);
       setSmokeError(null);
@@ -2200,17 +2191,17 @@ export const App: React.FC = () => {
       const newTab: TerminalTab = {
         id: jobId,
         title: `Smoke Tests (${triggeredBy})`,
-        lines: [`[PanoramaSRE] AI Agent triggered Production Smoke Suite (${triggeredBy})...`],
+        lines: [`[PanoramaSRE] ${actorLabel} triggered Production Smoke Suite (${triggeredBy})...`],
         isRunning: true,
         createdAt: new Date().toISOString(),
         pageScope: 'smoke',
-        source: 'mcp',
+        source: isScheduled ? 'scheduled' : 'mcp',
         abortable: false,
       };
       setTerminalTabs((prev) => [...prev, newTab]);
       setActiveTerminalTabId(jobId);
       saveTabToDb(newTab);
-      showActionFeedback(`AI Agent started Production Smoke Suite (${triggeredBy})`, 'pending');
+      showActionFeedback(`${actorLabel} started Production Smoke Suite (${triggeredBy})`, 'pending');
     }).then((unsub) => {
       unlistenStart = unsub;
     });
@@ -2232,15 +2223,18 @@ export const App: React.FC = () => {
       refreshSmokeHistory();
       refreshMcpStatus();
       if (run) {
+        const isScheduled =
+          run.triggeredBy === 'scheduled' || run.triggeredBy?.startsWith('scheduled:');
+        const suiteLabel = isScheduled ? 'Scheduled Smoke Suite' : 'AI Agent Smoke Suite';
         if (run.failed === 0) {
           showActionFeedback(
-            `AI Agent Smoke Suite passed (${run.passed}/${run.total} checks)`,
+            `${suiteLabel} passed (${run.passed}/${run.total} checks)`,
             'success',
             5000
           );
         } else {
           showActionFeedback(
-            `AI Agent Smoke Suite detected ${run.failed} failure(s) (${run.passed}/${run.total} passed)`,
+            `${suiteLabel} detected ${run.failed} failure(s) (${run.passed}/${run.total} passed)`,
             'error',
             8000
           );

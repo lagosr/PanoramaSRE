@@ -38,6 +38,37 @@ fn smoke_tester_dir(workspace_root: &str) -> PathBuf {
         .join("smoke-tester")
 }
 
+/// Validates and normalizes an IPC `triggeredBy` label for smoke runs.
+pub fn sanitize_smoke_trigger(raw: Option<&str>) -> String {
+    let trimmed = raw.unwrap_or("").trim();
+    if trimmed.is_empty() || trimmed.len() > 48 {
+        return "mcp-agent".to_string();
+    }
+    if trimmed
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == ':' || c == '_' || c == '-')
+    {
+        trimmed.to_string()
+    } else {
+        "mcp-agent".to_string()
+    }
+}
+
+/// Validates an optional IPC `targetUrl` override for smoke runs.
+pub fn sanitize_smoke_target_url(raw: Option<&str>) -> Option<String> {
+    let trimmed = raw.unwrap_or("").trim();
+    if trimmed.is_empty() || trimmed.len() > 128 {
+        return None;
+    }
+    if !(trimmed.starts_with("https://") || trimmed.starts_with("http://")) {
+        return None;
+    }
+    if trimmed.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
 #[tauri::command]
 pub async fn get_smoke_test_history(
     workspace_root: String,
@@ -134,6 +165,7 @@ pub async fn run_smoke_tests_streaming(
     workspace_root: String,
     target_url: Option<String>,
     triggered_by: Option<String>,
+    force_sms: bool,
 ) -> Result<SmokeTestRun, String> {
     let dir = smoke_tester_dir(&workspace_root);
     let script_path = dir.join("smoke-tests.ts");
@@ -165,8 +197,11 @@ pub async fn run_smoke_tests_streaming(
         .arg("--target")
         .arg(&target)
         .arg("--triggered-by")
-        .arg(&trigger)
-        .current_dir(&dir)
+        .arg(&trigger);
+    if force_sms {
+        cmd.arg("--force-sms");
+    }
+    cmd.current_dir(&dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 

@@ -16,6 +16,10 @@ import {
 } from '../src/client/discovery.ts';
 import { classifyShellCommand, evaluatePreToolUse } from '../src/guard/preToolHook.ts';
 import { handleJsonRpcMessage, getAllRegisteredTools } from '../src/index.ts';
+import {
+  FALLBACK_HEADLESS_EXIT_CODE,
+  triggerSmokeViaSreBridge,
+} from '../src/cli/triggerSmokeRun.ts';
 import type {
   IpcRequest,
   LiveSreInstance,
@@ -371,5 +375,125 @@ describe('PanoramaSRE MCP Server & Zero-Trust Named Pipe Client', () => {
     });
     const listedTools = (listResp?.result as { tools: Array<{ name: string }> }).tools;
     expect(listedTools).toHaveLength(7);
+  });
+
+  it('routes scheduled smoke runs over Named Pipe when PanoramaSRE is live and falls back (exit=2) when closed', async () => {
+    const emptyLeaseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sre-smoke-empty-'));
+    tempDirs.push(emptyLeaseDir);
+
+    const noSreResult = await triggerSmokeViaSreBridge({
+      targetUrl: 'https://wsh.panoramadr.com',
+      triggeredBy: 'scheduled',
+      leaseDir: emptyLeaseDir,
+    });
+    expect(noSreResult.routedViaSre).toBe(false);
+    expect(noSreResult.exitCode).toBe(FALLBACK_HEADLESS_EXIT_CODE);
+
+    const liveLeaseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sre-smoke-live-'));
+    tempDirs.push(liveLeaseDir);
+
+    const pipeName = `\\\\.\\pipe\\panoramasre-test-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+    const hmacSecret = crypto.randomBytes(32).toString('hex');
+    const capturedRequests: IpcRequest[] = [];
+    let mockFailedCount = 0;
+
+    const server = net.createServer((socket) => {
+      let buf = '';
+      socket.on('data', (chunk) => {
+        buf += chunk.toString('utf8');
+        const idx = buf.indexOf('\n');
+        if (idx === -1) return;
+        const req = JSON.parse(buf.slice(0, idx)) as IpcRequest;
+        capturedRequests.push(req);
+
+        if (req.action === 'instances.ping') {
+          socket.end(
+            `${JSON.stringify({
+              id: req.id,
+              ok: true,
+              data: {
+                instanceId: `sre-installed-${process.pid}`,
+                pid: process.pid,
+                version: '1.5.8',
+                channel: 'installed',
+                exePath: process.execPath,
+                workspaceRoot: 'C:\\AG Projects',
+                startedAt: '2026-11-15T08:00:00Z',
+                managedApps: [],
+                managedCount: 0,
+              },
+            })}\n`
+          );
+          return;
+        }
+
+        if (req.action === 'ops.telemetry') {
+          socket.end(
+            `${JSON.stringify({
+              id: req.id,
+              ok: true,
+              data: {
+                id: 'smoke_mock_1',
+                total: 32,
+                passed: 32 - mockFailedCount,
+                failed: mockFailedCount,
+              },
+            })}\n`
+          );
+        }
+      });
+    });
+
+    await new Promise<void>((resolve) => server.listen(pipeName, resolve));
+    activeServers.push(server);
+
+    const lease: SreInstanceLease = {
+      instanceId: `sre-installed-${process.pid}`,
+      pid: process.pid,
+      pipeName,
+      version: '1.5.8',
+      channel: 'installed',
+      exePath: process.execPath,
+      workspaceRoot: 'C:\\AG Projects',
+      startedAt: '2026-11-15T08:00:00Z',
+      hmacSecret,
+    };
+    fs.writeFileSync(
+      path.join(liveLeaseDir, `lease-${process.pid}.json`),
+      JSON.stringify(lease),
+      'utf8'
+    );
+
+    const passRes = await triggerSmokeViaSreBridge({
+      targetUrl: 'https://wsh.panoramadr.com',
+      triggeredBy: 'scheduled',
+      leaseDir: liveLeaseDir,
+    });
+    expect(passRes.routedViaSre).toBe(true);
+    expect(passRes.exitCode).toBe(0);
+
+    const smokeReq = capturedRequests.find((r) => r.action === 'ops.telemetry');
+    expect(smokeReq?.params).toEqual({
+      domain: 'smoke_run',
+      targetUrl: 'https://wsh.panoramadr.com',
+      triggeredBy: 'scheduled',
+    });
+
+    mockFailedCount = 1;
+    const failRes = await triggerSmokeViaSreBridge({
+      targetUrl: 'https://wsh.panoramadr.com',
+      triggeredBy: 'scheduled',
+      forceSms: true,
+      leaseDir: liveLeaseDir,
+    });
+    expect(failRes.routedViaSre).toBe(true);
+    expect(failRes.exitCode).toBe(1);
+    const forceReq = capturedRequests.filter((r) => r.action === 'ops.telemetry')[1];
+    expect(forceReq?.params).toEqual({
+      domain: 'smoke_run',
+      forceSms: true,
+      targetUrl: 'https://wsh.panoramadr.com',
+      triggeredBy: 'scheduled',
+    });
   });
 });
