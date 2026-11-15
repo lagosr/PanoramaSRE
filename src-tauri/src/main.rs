@@ -239,6 +239,39 @@ mod tests {
         assert!(deps[0].is_active);
         assert!(!deps[1].is_active);
 
+        let wrangler_v4_deps = parse_wrangler_deployments_json(
+            r#"[
+              {
+                "Id": "099a859f-4a84-47bb-a057-9285308c995e",
+                "Environment": "Production",
+                "Branch": "main",
+                "Source": "5aaa1c3",
+                "Deployment": "https://099a859f.parakith-site.pages.dev",
+                "Status": "Failure",
+                "Build": "https://dash.cloudflare.com/x"
+              },
+              {
+                "Id": "2a0b05fb-8515-4b46-8ceb-65eb0370b896",
+                "Environment": "Production",
+                "Branch": "main",
+                "Source": "810d12e",
+                "Deployment": "https://2a0b05fb.parakith-site.pages.dev",
+                "Status": "7 hours ago",
+                "Build": "https://dash.cloudflare.com/y"
+              }
+            ]"#,
+        )
+        .expect("parse wrangler 4.162 json");
+        assert_eq!(wrangler_v4_deps.len(), 2);
+        assert_eq!(wrangler_v4_deps[0].status, "Failure");
+        assert_eq!(wrangler_v4_deps[0].commit_hash, "5aaa1c3");
+        assert_eq!(wrangler_v4_deps[0].created_on, "");
+        assert!(!wrangler_v4_deps[0].is_active);
+        assert_eq!(wrangler_v4_deps[1].status, "7 hours ago");
+        assert_eq!(wrangler_v4_deps[1].commit_hash, "810d12e");
+        assert_eq!(wrangler_v4_deps[1].created_on, "7 hours ago");
+        assert!(wrangler_v4_deps[1].is_active);
+
         let parsed_records = parse_wrangler_d1_opt_ins_json(
             r#"[{
               "results": [

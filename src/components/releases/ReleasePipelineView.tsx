@@ -169,6 +169,9 @@ export function ReleasePipelineView({
 
   const selectedApp = apps.find((a) => a.manifest.slug === effectiveSelectedSlug) || apps[0];
   const isEdgeApp = selectedApp?.manifest.hostingTarget === 'cloudflare-pages';
+  const appPublicUrl = isEdgeApp
+    ? (selectedApp?.manifest.cloudflare?.primaryUrl || 'https://www.parakith.com').replace(/\/+$/, '')
+    : `https://wsh.panoramadr.com${selectedApp?.manifest.basePath || ''}`;
   const comp = selectedApp?.composition;
 
   useEffect(() => {
@@ -692,7 +695,7 @@ export function ReleasePipelineView({
               </div>
 
               <a
-                href={`https://wsh.panoramadr.com${selectedApp.manifest.basePath}`}
+                href={appPublicUrl}
                 target="_blank"
                 rel="noreferrer"
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700/60 transition-colors"
@@ -755,7 +758,7 @@ export function ReleasePipelineView({
                 <div>
                   <p className="font-semibold">Health & Telemetry Endpoint Probing Unreachable</p>
                   <p className="text-[11px] text-slate-400 mt-0.5">
-                    Could not query <code className="text-amber-300">https://wsh.panoramadr.com{selectedApp.manifest.basePath}/api/health</code>. The container may be offline, starting up, or using legacy unstamped release routes.
+                    Could not query <code className="text-amber-300">{appPublicUrl}{selectedApp.manifest.sre?.healthEndpoint || '/api/health'}</code>. The container may be offline, starting up, or using legacy unstamped release routes.
                   </p>
                 </div>
               </div>
@@ -1393,6 +1396,11 @@ export function ReleasePipelineView({
                                     <span className="px-1 py-0.2 rounded text-[9px] font-mono bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 shrink-0">
                                       {dep.environment}
                                     </span>
+                                    {dep.status && ['failure', 'failed', 'canceled', 'cancelled'].includes(dep.status.toLowerCase()) && (
+                                      <span className="px-1 py-0.2 rounded text-[9px] font-mono bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-rose-500/30 shrink-0">
+                                        FAILED
+                                      </span>
+                                    )}
                                     {dep.is_active && (
                                       <span className="px-1 py-0.2 rounded text-[9px] font-mono bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 shrink-0">
                                         LIVE
@@ -1405,16 +1413,21 @@ export function ReleasePipelineView({
                                     </p>
                                   )}
                                 </div>
-                                {dep.created_on && (
-                                  <div className="text-right shrink-0">
-                                    <span className="text-[10px] text-slate-400 block font-sans">
-                                      {formatRelativeTime(dep.created_on)}
-                                    </span>
-                                    <span className="text-[9px] text-slate-500 block">
-                                      {formatLocalDateTime(dep.created_on)}
-                                    </span>
-                                  </div>
-                                )}
+                                {dep.created_on && (() => {
+                                  const isIsoTimestamp = !Number.isNaN(Date.parse(dep.created_on));
+                                  return (
+                                    <div className="text-right shrink-0">
+                                      <span className="text-[10px] text-slate-400 block font-sans">
+                                        {isIsoTimestamp ? formatRelativeTime(dep.created_on) : dep.created_on}
+                                      </span>
+                                      {isIsoTimestamp && (
+                                        <span className="text-[9px] text-slate-500 block">
+                                          {formatLocalDateTime(dep.created_on)}
+                                        </span>
+                                      )}
+                                    </div>
+                                  );
+                                })()}
                               </button>
                             ))}
                           </div>

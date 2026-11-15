@@ -549,6 +549,7 @@ export interface CloudflareDeployment {
   id: string;
   short_id: string;
   environment: string;
+  status?: string;
   url: string;
   created_on: string;
   branch?: string | null;

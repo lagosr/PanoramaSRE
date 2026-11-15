@@ -8,6 +8,7 @@ pub struct CloudflareDeploymentDto {
     pub id: String,
     pub short_id: String,
     pub environment: String,
+    pub status: String,
     pub url: String,
     pub created_on: String,
     pub branch: String,
@@ -97,11 +98,19 @@ pub fn parse_wrangler_deployments_json(raw: &str) -> Result<Vec<CloudflareDeploy
                 env.to_ascii_lowercase()
             }
         };
+        let raw_status = pick_str(obj, &["status", "Status"]);
+        let is_failed = matches!(
+            raw_status.to_ascii_lowercase().as_str(),
+            "failure" | "failed" | "canceled" | "cancelled"
+        );
         let url = pick_str(obj, &["url", "URL", "Url", "Deployment"]);
-        let created_on = pick_str(
+        let mut created_on = pick_str(
             obj,
             &["created_on", "Created on", "CreatedOn", "Created"],
         );
+        if created_on.is_empty() && !is_failed && !raw_status.is_empty() {
+            created_on = raw_status.clone();
+        }
 
         let trigger_meta = obj
             .get("deployment_trigger")
@@ -124,6 +133,16 @@ pub fn parse_wrangler_deployments_json(raw: &str) -> Result<Vec<CloudflareDeploy
                 commit_hash = pick_str(meta, &["commit_hash", "commitHash"]);
             }
         }
+        if commit_hash.is_empty() {
+            let source_str = pick_str(obj, &["Source", "source"]);
+            if let Some(first_tok) = source_str.split_whitespace().next() {
+                if (7..=40).contains(&first_tok.len())
+                    && first_tok.chars().all(|c| c.is_ascii_hexdigit())
+                {
+                    commit_hash = first_tok.to_string();
+                }
+            }
+        }
 
         let mut commit_message = pick_str(obj, &["commit_message", "CommitMessage", "Source"]);
         if commit_message.is_empty() {
@@ -137,14 +156,18 @@ pub fn parse_wrangler_deployments_json(raw: &str) -> Result<Vec<CloudflareDeploy
             .and_then(|v| v.as_bool())
             .or_else(|| obj.get("is_current_production").and_then(|v| v.as_bool()));
 
-        let is_active = match explicit_active {
-            Some(flag) => flag,
-            None => {
-                if environment == "production" && !marked_active_prod {
-                    marked_active_prod = true;
-                    true
-                } else {
-                    false
+        let is_active = if is_failed {
+            false
+        } else {
+            match explicit_active {
+                Some(flag) => flag,
+                None => {
+                    if environment == "production" && !marked_active_prod {
+                        marked_active_prod = true;
+                        true
+                    } else {
+                        false
+                    }
                 }
             }
         };
@@ -153,6 +176,7 @@ pub fn parse_wrangler_deployments_json(raw: &str) -> Result<Vec<CloudflareDeploy
             id,
             short_id,
             environment,
+            status: raw_status,
             url,
             created_on,
             branch,
@@ -280,5 +304,46 @@ mod tests {
         assert_eq!(validate_cf_project_name("parakith-site").unwrap(), "parakith-site");
         assert!(validate_cf_project_name("parakith; calc").is_err());
         assert!(validate_cf_project_name("").is_err());
+    }
+
+    #[test]
+    fn handles_wrangler_4_162_failure_status_and_relative_age() {
+        let sample = r#"
+        [
+          {
+            "Id": "099a859f-4a84-47bb-a057-9285308c995e",
+            "Environment": "Production",
+            "Branch": "main",
+            "Source": "5aaa1c3",
+            "Deployment": "https://099a859f.parakith-site.pages.dev",
+            "Status": "Failure",
+            "Build": "https://dash.cloudflare.com/x"
+          },
+          {
+            "Id": "2a0b05fb-8515-4b46-8ceb-65eb0370b896",
+            "Environment": "Production",
+            "Branch": "main",
+            "Source": "810d12e",
+            "Deployment": "https://2a0b05fb.parakith-site.pages.dev",
+            "Status": "7 hours ago",
+            "Build": "https://dash.cloudflare.com/y"
+          }
+        ]
+        "#;
+
+        let parsed = parse_wrangler_deployments_json(sample).expect("parse wrangler 4.162 json");
+        assert_eq!(parsed.len(), 2);
+
+        assert_eq!(parsed[0].short_id, "099a859f");
+        assert_eq!(parsed[0].status, "Failure");
+        assert_eq!(parsed[0].commit_hash, "5aaa1c3");
+        assert_eq!(parsed[0].created_on, "");
+        assert!(!parsed[0].is_active, "failed deployment must never be marked LIVE");
+
+        assert_eq!(parsed[1].short_id, "2a0b05fb");
+        assert_eq!(parsed[1].status, "7 hours ago");
+        assert_eq!(parsed[1].commit_hash, "810d12e");
+        assert_eq!(parsed[1].created_on, "7 hours ago");
+        assert!(parsed[1].is_active, "first non-failed production deployment should be LIVE");
     }
 }
