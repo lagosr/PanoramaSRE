@@ -66,6 +66,224 @@ pub enum NetworkPosture {
     Offline,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum TrustedNetworkState {
+    TrustedHomeOrVpn,
+    RoamingUntrusted,
+    RoamingDisconnected,
+    Offline,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrustedNetworkVerdict {
+    pub state: TrustedNetworkState,
+    pub is_trusted: bool,
+    pub wsh_resolved_ips: Vec<String>,
+    pub matched_expected_wsh_ip: bool,
+    pub wsh_reachable: bool,
+    pub canary_reachable: bool,
+    pub reason: String,
+}
+
+pub fn is_private_or_loopback_ip(ip: &std::net::IpAddr) -> bool {
+    if ip.is_loopback() {
+        return true;
+    }
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            let octets = v4.octets();
+            octets[0] == 10
+                || (octets[0] == 172 && (16..=31).contains(&octets[1]))
+                || (octets[0] == 192 && octets[1] == 168)
+        }
+        std::net::IpAddr::V6(v6) => (v6.segments()[0] & 0xfe00) == 0xfc00,
+    }
+}
+
+pub fn classify_resolved_posture(addrs: &[std::net::IpAddr]) -> NetworkPosture {
+    if addrs.is_empty() {
+        NetworkPosture::Offline
+    } else if addrs.iter().any(is_private_or_loopback_ip) {
+        NetworkPosture::LanDirect
+    } else {
+        NetworkPosture::WanCloudflare
+    }
+}
+
+pub fn evaluate_trusted_network_signals(
+    wsh_ips: &[std::net::IpAddr],
+    expected_wsh_ip: &str,
+    wsh_reachable: bool,
+    canary_reachable: bool,
+) -> TrustedNetworkVerdict {
+    let resolved_strs: Vec<String> = wsh_ips.iter().map(|ip| ip.to_string()).collect();
+    let expected_trimmed = expected_wsh_ip.trim();
+    let matched_expected_wsh_ip = if let Ok(expected_addr) = expected_trimmed.parse::<std::net::IpAddr>() {
+        wsh_ips.iter().any(|ip| ip == &expected_addr)
+    } else {
+        wsh_ips.iter().any(is_private_or_loopback_ip)
+    };
+
+    if matched_expected_wsh_ip {
+        if wsh_reachable || canary_reachable {
+            let detail = if wsh_reachable && canary_reachable {
+                format!(
+                    "Home LAN / VPN verified (split-DNS {} + WSH & Home Canary reachable)",
+                    expected_trimmed
+                )
+            } else if canary_reachable {
+                format!(
+                    "Home LAN / VPN verified via Home Canary while WSH ({}) is unreachable",
+                    expected_trimmed
+                )
+            } else {
+                format!(
+                    "Home LAN / VPN verified (split-DNS {} + WSH reachable)",
+                    expected_trimmed
+                )
+            };
+            TrustedNetworkVerdict {
+                state: TrustedNetworkState::TrustedHomeOrVpn,
+                is_trusted: true,
+                wsh_resolved_ips: resolved_strs,
+                matched_expected_wsh_ip: true,
+                wsh_reachable,
+                canary_reachable,
+                reason: detail,
+            }
+        } else {
+            TrustedNetworkVerdict {
+                state: TrustedNetworkState::RoamingDisconnected,
+                is_trusted: false,
+                wsh_resolved_ips: resolved_strs,
+                matched_expected_wsh_ip: true,
+                wsh_reachable: false,
+                canary_reachable: false,
+                reason: "Split-DNS resolved private IP, but neither WSH nor Home Canary responded (laptop waking or VPN tunnel disconnected)".to_string(),
+            }
+        }
+    } else if wsh_reachable && canary_reachable {
+        TrustedNetworkVerdict {
+            state: TrustedNetworkState::TrustedHomeOrVpn,
+            is_trusted: true,
+            wsh_resolved_ips: resolved_strs,
+            matched_expected_wsh_ip: false,
+            wsh_reachable: true,
+            canary_reachable: true,
+            reason: "Split-tunnel VPN verified (both private WSH IP and Home Canary reachable)".to_string(),
+        }
+    } else if wsh_ips.is_empty() {
+        TrustedNetworkVerdict {
+            state: TrustedNetworkState::Offline,
+            is_trusted: false,
+            wsh_resolved_ips: resolved_strs,
+            matched_expected_wsh_ip: false,
+            wsh_reachable,
+            canary_reachable,
+            reason: "Network offline (DNS resolution failed)".to_string(),
+        }
+    } else {
+        TrustedNetworkVerdict {
+            state: TrustedNetworkState::RoamingUntrusted,
+            is_trusted: false,
+            wsh_resolved_ips: resolved_strs,
+            matched_expected_wsh_ip: false,
+            wsh_reachable,
+            canary_reachable,
+            reason: "Away from home network / VPN inactive (public Cloudflare or external DNS detected)".to_string(),
+        }
+    }
+}
+
+pub async fn verify_trusted_home_network(
+    expected_wsh_ip: &str,
+    canary_host: &str,
+) -> TrustedNetworkVerdict {
+    let expected_ip = if expected_wsh_ip.trim().is_empty() {
+        "172.25.25.5".to_string()
+    } else {
+        expected_wsh_ip.trim().to_string()
+    };
+    let canary = if canary_host.trim().is_empty() {
+        "ui.panoramadr.com".to_string()
+    } else {
+        canary_host.trim().to_string()
+    };
+
+    tokio::task::spawn_blocking(move || {
+        let timeout = Duration::from_millis(1200);
+        let wsh_ips: Vec<std::net::IpAddr> = "wsh.panoramadr.com:443"
+            .to_socket_addrs()
+            .map(|iter| iter.map(|sa| sa.ip()).collect())
+            .unwrap_or_default();
+
+        // Probe WSH exclusively via private/loopback IP so Cloudflare edge never counts as local WSH reachability
+        let wsh_private_target: Option<std::net::IpAddr> = expected_ip
+            .parse::<std::net::IpAddr>()
+            .ok()
+            .filter(is_private_or_loopback_ip)
+            .or_else(|| wsh_ips.iter().copied().find(is_private_or_loopback_ip));
+
+        // Resolve canary exclusively to RFC1918 private IPs (plus 10.10.1.2 fallback for ui.panoramadr.com)
+        let mut canary_private_ips: Vec<std::net::IpAddr> = if let Ok(ip) = canary.parse::<std::net::IpAddr>() {
+            if is_private_or_loopback_ip(&ip) {
+                vec![ip]
+            } else {
+                Vec::new()
+            }
+        } else {
+            format!("{}:443", canary)
+                .to_socket_addrs()
+                .map(|iter| iter.map(|sa| sa.ip()).filter(is_private_or_loopback_ip).collect())
+                .unwrap_or_default()
+        };
+        if canary.eq_ignore_ascii_case("ui.panoramadr.com") && canary_private_ips.is_empty() {
+            if let Ok(fallback_ip) = "10.10.1.2".parse::<std::net::IpAddr>() {
+                canary_private_ips.push(fallback_ip);
+            }
+        }
+
+        let wsh_handle = std::thread::spawn(move || {
+            let Some(ip) = wsh_private_target else {
+                return false;
+            };
+            let s443 = std::net::SocketAddr::new(ip, 443);
+            if std::net::TcpStream::connect_timeout(&s443, timeout).is_ok() {
+                return true;
+            }
+            let s22 = std::net::SocketAddr::new(ip, 22);
+            std::net::TcpStream::connect_timeout(&s22, timeout).is_ok()
+        });
+
+        let canary_handle = std::thread::spawn(move || {
+            for ip in canary_private_ips {
+                let sa = std::net::SocketAddr::new(ip, 443);
+                if std::net::TcpStream::connect_timeout(&sa, timeout).is_ok() {
+                    return true;
+                }
+            }
+            false
+        });
+
+        let wsh_reachable = wsh_handle.join().unwrap_or(false);
+        let canary_reachable = canary_handle.join().unwrap_or(false);
+
+        evaluate_trusted_network_signals(&wsh_ips, &expected_ip, wsh_reachable, canary_reachable)
+    })
+    .await
+    .unwrap_or_else(|_| TrustedNetworkVerdict {
+        state: TrustedNetworkState::Offline,
+        is_trusted: false,
+        wsh_resolved_ips: Vec::new(),
+        matched_expected_wsh_ip: false,
+        wsh_reachable: false,
+        canary_reachable: false,
+        reason: "Failed to execute trusted network probe".to_string(),
+    })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReleaseInfo {
     pub release_id: Option<String>,
@@ -120,7 +338,8 @@ pub struct HostVitals {
 }
 
 /// Detects split-DNS network posture:
-/// Resolves wsh.panoramadr.com to an IP.
+/// Resolves wsh.panoramadr.com to all candidate IPs (checking all IPv4 + IPv6 records so public
+/// Cloudflare AAAA records never shadow a private split-DNS IPv4 A record).
 /// RFC1918 (10.*, 172.16-31.*, 192.168.*) => LAN_DIRECT
 /// Non-RFC1918 public IP => WAN_CLOUDFLARE
 /// Resolve failed => OFFLINE
@@ -130,37 +349,9 @@ pub async fn detect_network_posture(target_host: Option<String>) -> NetworkPostu
     tokio::task::spawn_blocking(move || {
         let socket_addr = format!("{}:443", host);
         match socket_addr.to_socket_addrs() {
-            Ok(mut addrs) => {
-                if let Some(addr) = addrs.next() {
-                    let ip = addr.ip();
-                    if ip.is_loopback() {
-                        NetworkPosture::LanDirect
-                    } else {
-                        match ip {
-                            std::net::IpAddr::V4(v4) => {
-                                let octets = v4.octets();
-                                if octets[0] == 10
-                                    || (octets[0] == 172 && (16..=31).contains(&octets[1]))
-                                    || (octets[0] == 192 && octets[1] == 168)
-                                {
-                                    NetworkPosture::LanDirect
-                                } else {
-                                    NetworkPosture::WanCloudflare
-                                }
-                            }
-                            std::net::IpAddr::V6(v6) => {
-                                // Unique local address (fc00::/7)
-                                if (v6.segments()[0] & 0xfe00) == 0xfc00 {
-                                    NetworkPosture::LanDirect
-                                } else {
-                                    NetworkPosture::WanCloudflare
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    NetworkPosture::Offline
-                }
+            Ok(addrs) => {
+                let ips: Vec<std::net::IpAddr> = addrs.map(|sa| sa.ip()).collect();
+                classify_resolved_posture(&ips)
             }
             Err(_) => NetworkPosture::Offline,
         }
@@ -965,5 +1156,62 @@ mod tests {
             extract_url_pathname("https://www.parakith.com/api/health?x=1"),
             "/api/health"
         );
+    }
+
+    #[test]
+    fn posture_prefers_private_split_dns_even_when_public_ipv6_precedes() {
+        let cf_v6: std::net::IpAddr = "2606:4700:3030::ac43:b912".parse().unwrap();
+        let wsh_v4: std::net::IpAddr = "172.25.25.5".parse().unwrap();
+        let cf_v4: std::net::IpAddr = "104.21.76.18".parse().unwrap();
+
+        assert_eq!(
+            classify_resolved_posture(&[cf_v6, wsh_v4]),
+            NetworkPosture::LanDirect
+        );
+        assert_eq!(
+            classify_resolved_posture(&[cf_v6, cf_v4]),
+            NetworkPosture::WanCloudflare
+        );
+        assert_eq!(classify_resolved_posture(&[]), NetworkPosture::Offline);
+    }
+
+    #[test]
+    fn trusted_network_gate_distinguishes_roaming_from_real_wsh_outage() {
+        let cf_v6: std::net::IpAddr = "2606:4700:3030::ac43:b912".parse().unwrap();
+        let cf_v4: std::net::IpAddr = "104.21.76.18".parse().unwrap();
+        let wsh_v4: std::net::IpAddr = "172.25.25.5".parse().unwrap();
+        let hotel_captive: std::net::IpAddr = "192.168.1.1".parse().unwrap();
+
+        // 1. Normal Home LAN / VPN
+        let v_home = evaluate_trusted_network_signals(&[cf_v6, wsh_v4], "172.25.25.5", true, true);
+        assert!(v_home.is_trusted);
+        assert_eq!(v_home.state, TrustedNetworkState::TrustedHomeOrVpn);
+
+        // 2. Real Raspberry Pi crash at home / VPN (WSH down, UniFi Canary UP -> MUST stay trusted & alert!)
+        let v_pi_down =
+            evaluate_trusted_network_signals(&[cf_v6, wsh_v4], "172.25.25.5", false, true);
+        assert!(v_pi_down.is_trusted);
+        assert_eq!(v_pi_down.state, TrustedNetworkState::TrustedHomeOrVpn);
+
+        // 3. Coffee shop / away without VPN (Cloudflare public IP)
+        let v_away = evaluate_trusted_network_signals(&[cf_v6, cf_v4], "172.25.25.5", false, false);
+        assert!(!v_away.is_trusted);
+        assert_eq!(v_away.state, TrustedNetworkState::RoamingUntrusted);
+
+        // 4. Hotel captive portal hijacking DNS to 192.168.1.1 (does NOT match 172.25.25.5)
+        let v_hotel = evaluate_trusted_network_signals(&[hotel_captive], "172.25.25.5", false, false);
+        assert!(!v_hotel.is_trusted);
+        assert_eq!(v_hotel.state, TrustedNetworkState::RoamingUntrusted);
+
+        // 5. Laptop woke from sleep away from home with stale split-DNS cache (neither WSH nor Canary responds)
+        let v_stale =
+            evaluate_trusted_network_signals(&[wsh_v4], "172.25.25.5", false, false);
+        assert!(!v_stale.is_trusted);
+        assert_eq!(v_stale.state, TrustedNetworkState::RoamingDisconnected);
+
+        // 6. Airplane mode / offline
+        let v_offline = evaluate_trusted_network_signals(&[], "172.25.25.5", false, false);
+        assert!(!v_offline.is_trusted);
+        assert_eq!(v_offline.state, TrustedNetworkState::Offline);
     }
 }

@@ -370,6 +370,14 @@ pub async fn sync_parakith_opt_ins_internal(
     };
 
     if notify_on_new && !newly_observed.is_empty() {
+        let latest = &newly_observed[0];
+        crate::pushover::maybe_notify_parakith_opt_ins(
+            db,
+            newly_observed.len(),
+            latest.id,
+            &latest.consent,
+        )
+        .await;
         if let Some(app) = app_handle {
             let latest = &newly_observed[0];
             let body = if newly_observed.len() == 1 {

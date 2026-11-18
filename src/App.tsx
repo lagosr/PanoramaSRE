@@ -40,6 +40,7 @@ import {
   isAppDeployCandidate,
 } from './lib/types';
 import { inferPageScopeFromJob } from './lib/stream-utils';
+import { buildSyncAlertEvaluationInput } from './lib/pushover-payload';
 import {
   buildSslCertCommand,
   buildCloudflareTunnelCommand,
@@ -259,7 +260,36 @@ export const App: React.FC = () => {
   appsRef.current = apps;
   const wshSnapshotRef = useRef<WshSnapshot | null>(null);
   wshSnapshotRef.current = wshSnapshot;
+  const maintenanceSuppressedRef = useRef<boolean>(false);
+  maintenanceSuppressedRef.current =
+    isHostRebooting || isDeployingAll || currentRunningDeployJobIdRef.current !== null;
   const refreshSmokeHistoryRef = useRef<(() => Promise<void>) | null>(null);
+
+  const computeBackupIncidentKey = useCallback((ledger: BackupLedgerSummary | null | undefined) => {
+    let dismissedKey: string | null = null;
+    try {
+      dismissedKey = localStorage.getItem('panorama_sre_dismissed_backup_incident');
+    } catch {
+      dismissedKey = null;
+    }
+    if (!ledger) return { rawFailures: 0, incidentKey: null as string | null, isDismissed: false };
+    const rawFailures =
+      ledger.last_run_status?.toLowerCase() === 'failed'
+        ? ledger.latest_app_details.filter((a) => a.status.toLowerCase() === 'failed').length || 1
+        : ledger.failed_runs_7d || 0;
+    const incidentKey =
+      rawFailures > 0
+        ? `${ledger.last_run_timestamp || 'unknown'}|${ledger.last_run_status || ''}|${ledger.failed_runs_7d || 0}|${(ledger.daily_pips_7d || [])
+            .filter((p) => p.status !== 'Success')
+            .map((p) => p.date)
+            .join(',')}`
+        : null;
+    return {
+      rawFailures,
+      incidentKey,
+      isDismissed: Boolean(incidentKey && dismissedKey === incidentKey),
+    };
+  }, []);
 
   // Refresh Dev Server process states (lightweight TCP / PID check)
   const refreshDevServers = useCallback(async () => {
@@ -292,7 +322,7 @@ export const App: React.FC = () => {
   }, []);
 
   // Refresh Home Lab Appliances status
-  const refreshAppliances = useCallback(async () => {
+  const refreshAppliances = useCallback(async (evaluateAlerts = true): Promise<ApplianceStatus[]> => {
     try {
       const applianceTuples = DEFAULT_APPLIANCES.map((a) => [a.key, a.name, a.host]);
       const applianceResults = await invoke<ApplianceStatus[]>('probe_appliances', {
@@ -300,8 +330,17 @@ export const App: React.FC = () => {
         timeoutMs: 2500,
       });
       setAppliances(applianceResults);
+      if (evaluateAlerts && applianceResults.length > 0) {
+        const input = buildSyncAlertEvaluationInput({
+          maintenanceSuppressed: maintenanceSuppressedRef.current,
+          appliances: applianceResults,
+        });
+        void invoke('evaluate_and_notify_sync', { input }).catch(() => {});
+      }
+      return applianceResults;
     } catch {
       // Ignore background appliance probe errors
+      return [];
     }
   }, []);
 
@@ -328,23 +367,27 @@ export const App: React.FC = () => {
   }, []);
 
   // Refresh Backup Ledger
-  const refreshBackupLedger = useCallback(async () => {
+  const refreshBackupLedger = useCallback(async (): Promise<BackupLedgerSummary | null> => {
     try {
       const ledger = await invoke<BackupLedgerSummary>('read_backup_ledger', {});
       setBackupLedger(ledger);
+      return ledger;
     } catch (ledgerErr) {
       console.warn('[PanoramaSRE] Backup ledger warning:', ledgerErr);
+      return null;
     }
   }, []);
 
   // Refresh 5-Domain SSL Dual-Probe & Drift Status
-  const refreshSslStatus = useCallback(async () => {
+  const refreshSslStatus = useCallback(async (): Promise<SslFleetSummary | null> => {
     setIsLoadingSsl(true);
     try {
       const summary = await invoke<SslFleetSummary>('get_ssl_fleet_status', {});
       setSslFleet(summary);
+      return summary;
     } catch (sslErr) {
       console.warn('[PanoramaSRE] SSL fleet probe warning:', sslErr);
+      return null;
     } finally {
       setIsLoadingSsl(false);
     }
@@ -406,38 +449,54 @@ export const App: React.FC = () => {
   );
 
   // Refresh Upstream Cloudflare Tunnel Release Status (non-SSH, ETag cached)
-  const refreshTunnelVersion = useCallback(async (force = false, explicitRunningRaw?: string) => {
-    setIsCheckingTunnelVersion(true);
-    try {
-      const runningRaw =
-        explicitRunningRaw ?? wshSnapshotRef.current?.cloudflared?.version_raw ?? undefined;
-      const status = await invoke<CloudflareTunnelVersionStatus>(
-        'check_cloudflare_tunnel_version',
-        {
-          runningVersionRaw: runningRaw ?? null,
-          force,
-        }
-      );
-      setTunnelVersionStatus(status);
-      setLastHourlyCheckTime(new Date().toLocaleTimeString());
-    } catch (cfErr) {
-      console.warn('[PanoramaSRE] Cloudflare tunnel version check warning:', cfErr);
-    } finally {
-      setIsCheckingTunnelVersion(false);
-    }
-  }, []);
+  const refreshTunnelVersion = useCallback(
+    async (force = false, explicitRunningRaw?: string): Promise<CloudflareTunnelVersionStatus | null> => {
+      setIsCheckingTunnelVersion(true);
+      try {
+        const runningRaw =
+          explicitRunningRaw ?? wshSnapshotRef.current?.cloudflared?.version_raw ?? undefined;
+        const status = await invoke<CloudflareTunnelVersionStatus>(
+          'check_cloudflare_tunnel_version',
+          {
+            runningVersionRaw: runningRaw ?? null,
+            force,
+          }
+        );
+        setTunnelVersionStatus(status);
+        setLastHourlyCheckTime(new Date().toLocaleTimeString());
+        return status;
+      } catch (cfErr) {
+        console.warn('[PanoramaSRE] Cloudflare tunnel version check warning:', cfErr);
+        return null;
+      } finally {
+        setIsCheckingTunnelVersion(false);
+      }
+    },
+    []
+  );
 
   // Execute Tier 4 hourly checks (Cloudflare Tunnel release, SSL matrix, GFS backup ledger)
   const runHourlyChecksNow = useCallback(
     async (force = false, explicitRunningRaw?: string) => {
-      await Promise.all([
+      const [tunnelRes, sslRes, ledgerRes] = await Promise.all([
         refreshTunnelVersion(force, explicitRunningRaw),
         refreshSslStatus(),
         refreshBackupLedger(),
       ]);
       setLastHourlyCheckTime(new Date().toLocaleTimeString());
+
+      const { incidentKey, isDismissed } = computeBackupIncidentKey(ledgerRes);
+      const input = buildSyncAlertEvaluationInput({
+        maintenanceSuppressed: maintenanceSuppressedRef.current,
+        tunnelVersion: tunnelRes,
+        sslFleet: sslRes,
+        backupLedger: ledgerRes,
+        backupIncidentKey: incidentKey,
+        isBackupIncidentDismissed: isDismissed,
+      });
+      void invoke('evaluate_and_notify_sync', { input }).catch(() => {});
     },
-    [refreshTunnelVersion, refreshSslStatus, refreshBackupLedger]
+    [computeBackupIncidentKey, refreshTunnelVersion, refreshSslStatus, refreshBackupLedger]
   );
 
   // Full Initial App Discovery & Telemetry Probe
@@ -656,6 +715,7 @@ export const App: React.FC = () => {
       );
 
       // 5. Fetch WSH Host & Topology Snapshot (LAN Direct only)
+      let latestSnap: WshSnapshot | null = wshSnapshotRef.current;
       let capturedRunningRaw: string | undefined =
         wshSnapshotRef.current?.cloudflared?.version_raw;
       if (includeWshSnapshot && posture === 'LAN_DIRECT') {
@@ -665,6 +725,7 @@ export const App: React.FC = () => {
             force: isUserInitiated,
           });
           setWshSnapshot(snap);
+          latestSnap = snap;
           capturedRunningRaw = snap.cloudflared?.version_raw;
           setLastSecurityAuditTime(new Date().toLocaleTimeString());
           pushSyncTrace('[INFO] WSH host firewall, Docker, and CGNAT snapshot updated.');
@@ -675,14 +736,44 @@ export const App: React.FC = () => {
       }
 
       // 6. On initial startup or manual Sync Now, also execute Tier 2 appliances + Tier 4 hourly checks
+      let hourlyAppliances: ApplianceStatus[] | undefined;
+      let hourlyLedger: BackupLedgerSummary | null = null;
+      let hourlySsl: SslFleetSummary | null = null;
+      let hourlyTunnel: CloudflareTunnelVersionStatus | null = null;
       if (includeHourlyTiers) {
-        await Promise.all([
-          refreshAppliances(),
+        const [applRes, ledgerRes, sslRes, tunnelRes] = await Promise.all([
+          refreshAppliances(false),
           refreshBackupLedger(),
           refreshSslStatus(),
           refreshTunnelVersion(isUserInitiated, capturedRunningRaw),
         ]);
+        hourlyAppliances = applRes;
+        hourlyLedger = ledgerRes;
+        hourlySsl = sslRes;
+        hourlyTunnel = tunnelRes;
       }
+
+      // 7. Evaluate edge-triggered Pushover notifications (coalesced across this sync tick; paused if roaming)
+      const evalTopo = latestSnap
+        ? synthesizeTopology(enrichedApps, latestSnap, hourlyTunnel)
+        : null;
+      const { incidentKey, isDismissed } = computeBackupIncidentKey(hourlyLedger);
+      const alertInput = buildSyncAlertEvaluationInput({
+        maintenanceSuppressed: maintenanceSuppressedRef.current,
+        apps: enrichedApps,
+        appliances: hourlyAppliances,
+        wshSnapshot: includeWshSnapshot ? latestSnap : null,
+        securityViolationCount: evalTopo ? evalTopo.securityAudit.securityViolationCount : 0,
+        failingInvariants: evalTopo
+          ? evalTopo.securityAudit.invariants.filter((i) => i.status === 'FAIL')
+          : [],
+        tunnelVersion: hourlyTunnel,
+        sslFleet: hourlySsl,
+        backupLedger: hourlyLedger,
+        backupIncidentKey: incidentKey,
+        isBackupIncidentDismissed: isDismissed,
+      });
+      void invoke('evaluate_and_notify_sync', { input: alertInput }).catch(() => {});
 
       // Keep smoke test history synced with OS-scheduled headless runs
       void refreshSmokeHistoryRef.current?.();
@@ -732,7 +823,7 @@ export const App: React.FC = () => {
         setIsManualSyncing(false);
       }
     }
-  }, [refreshAppliances, refreshBackupLedger, refreshSslStatus, refreshTunnelVersion, refreshOptIns, saveTabToDb]);
+  }, [computeBackupIncidentKey, refreshAppliances, refreshBackupLedger, refreshSslStatus, refreshTunnelVersion, refreshOptIns, saveTabToDb]);
 
   // Initial sync on mount (all tiers once on startup + cached opt-ins hydration)
   useEffect(() => {
@@ -2050,6 +2141,13 @@ export const App: React.FC = () => {
       });
       setSmokeRuns(history);
       setSmokeError(null);
+      if (history.length > 0) {
+        const input = buildSyncAlertEvaluationInput({
+          maintenanceSuppressed: maintenanceSuppressedRef.current,
+          latestSmokeRun: history[0],
+        });
+        void invoke('evaluate_and_notify_sync', { input }).catch(() => {});
+      }
     } catch (err) {
       setSmokeError(String(err));
     }

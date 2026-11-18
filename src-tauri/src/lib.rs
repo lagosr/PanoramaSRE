@@ -18,6 +18,7 @@ pub mod dev_supervisor;
 pub mod ipc_security;
 pub mod job_manager;
 pub mod notifications;
+pub mod pushover;
 pub mod scheduler;
 pub mod scrubber;
 pub mod tray;
@@ -37,6 +38,10 @@ use commands::workspace::*;
 use db::SreDatabase;
 use dev_supervisor::{get_dev_servers_status, start_dev_server, stop_dev_server, DevSupervisor};
 use job_manager::JobManager;
+use pushover::{
+    evaluate_and_notify_sync, get_pushover_settings, reset_pushover_alert_baseline,
+    save_pushover_settings, send_test_pushover_notification,
+};
 use scheduler::{TelemetryScheduler, update_scheduler_intervals};
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
@@ -141,7 +146,12 @@ pub fn run() {
             mark_parakith_opt_ins_seen,
             export_parakith_opt_ins,
             delete_parakith_opt_in,
-            control_server::get_mcp_bridge_status
+            control_server::get_mcp_bridge_status,
+            get_pushover_settings,
+            save_pushover_settings,
+            reset_pushover_alert_baseline,
+            send_test_pushover_notification,
+            evaluate_and_notify_sync
         ])
         .setup(move |app| {
             // Setup System Tray

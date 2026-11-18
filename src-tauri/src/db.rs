@@ -40,6 +40,16 @@ pub struct ConsoleSessionRecord {
     pub source: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PushoverAlertStateRow {
+    pub dedup_key: String,
+    pub fingerprint: String,
+    pub is_failing: bool,
+    pub consecutive_count: u32,
+    pub updated_at: String,
+    pub last_notified_at: Option<String>,
+}
+
 pub struct SreDatabase {
     conn: Connection,
     log_file_path: PathBuf,
@@ -129,6 +139,15 @@ impl SreDatabase {
                 user_agent TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 synced_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS pushover_alert_state (
+                dedup_key TEXT PRIMARY KEY,
+                fingerprint TEXT NOT NULL,
+                is_failing INTEGER NOT NULL DEFAULT 0,
+                consecutive_count INTEGER NOT NULL DEFAULT 1,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                last_notified_at TEXT
             );"
         )?;
 
@@ -393,6 +412,89 @@ impl SreDatabase {
             .execute("DELETE FROM parakith_opt_ins_cache WHERE id = ?1", params![id])?;
         Ok(())
     }
+
+    pub fn get_pushover_alert_state(&self, dedup_key: &str) -> Result<Option<PushoverAlertStateRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT dedup_key, fingerprint, is_failing, consecutive_count, updated_at, last_notified_at
+             FROM pushover_alert_state
+             WHERE dedup_key = ?1",
+        )?;
+        let mut rows = stmt.query(params![dedup_key])?;
+        if let Some(row) = rows.next()? {
+            let is_failing_int: i32 = row.get(2)?;
+            let consecutive_raw: i64 = row.get(3)?;
+            Ok(Some(PushoverAlertStateRow {
+                dedup_key: row.get(0)?,
+                fingerprint: row.get(1)?,
+                is_failing: is_failing_int != 0,
+                consecutive_count: consecutive_raw.max(0) as u32,
+                updated_at: row.get(4)?,
+                last_notified_at: row.get(5)?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn get_all_pushover_alert_states(&self) -> Result<Vec<PushoverAlertStateRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT dedup_key, fingerprint, is_failing, consecutive_count, updated_at, last_notified_at
+             FROM pushover_alert_state
+             ORDER BY dedup_key ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let is_failing_int: i32 = row.get(2)?;
+            let consecutive_raw: i64 = row.get(3)?;
+            Ok(PushoverAlertStateRow {
+                dedup_key: row.get(0)?,
+                fingerprint: row.get(1)?,
+                is_failing: is_failing_int != 0,
+                consecutive_count: consecutive_raw.max(0) as u32,
+                updated_at: row.get(4)?,
+                last_notified_at: row.get(5)?,
+            })
+        })?;
+
+        let mut out = Vec::new();
+        for item in rows {
+            out.push(item?);
+        }
+        Ok(out)
+    }
+
+    pub fn upsert_pushover_alert_state(
+        &self,
+        dedup_key: &str,
+        fingerprint: &str,
+        is_failing: bool,
+        consecutive_count: u32,
+        last_notified_at: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO pushover_alert_state
+             (dedup_key, fingerprint, is_failing, consecutive_count, updated_at, last_notified_at)
+             VALUES (?1, ?2, ?3, ?4, CURRENT_TIMESTAMP, ?5)
+             ON CONFLICT(dedup_key) DO UPDATE SET
+                fingerprint = excluded.fingerprint,
+                is_failing = excluded.is_failing,
+                consecutive_count = excluded.consecutive_count,
+                updated_at = CURRENT_TIMESTAMP,
+                last_notified_at = COALESCE(excluded.last_notified_at, pushover_alert_state.last_notified_at)",
+            params![
+                dedup_key,
+                fingerprint,
+                if is_failing { 1 } else { 0 },
+                consecutive_count as i64,
+                last_notified_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn clear_all_pushover_alert_states(&self) -> Result<()> {
+        self.conn.execute("DELETE FROM pushover_alert_state", [])?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -490,5 +592,48 @@ mod tests {
         let remaining = db.get_parakith_opt_ins().expect("load after delete");
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].id, 2);
+    }
+
+    #[test]
+    fn test_pushover_alert_state_persistence_and_reset() {
+        let db = SreDatabase::new(":memory:").expect("init memory db");
+
+        assert!(db.get_pushover_alert_state("update:cloudflared").unwrap().is_none());
+
+        db.upsert_pushover_alert_state(
+            "update:cloudflared",
+            "2026.11.0",
+            true,
+            1,
+            Some("2026-11-18T05:00:00Z"),
+        )
+        .expect("insert state");
+
+        let row = db
+            .get_pushover_alert_state("update:cloudflared")
+            .unwrap()
+            .expect("row exists");
+        assert_eq!(row.fingerprint, "2026.11.0");
+        assert!(row.is_failing);
+        assert_eq!(row.consecutive_count, 1);
+        assert_eq!(row.last_notified_at.as_deref(), Some("2026-11-18T05:00:00Z"));
+
+        // Subsequent update with None preserves last_notified_at
+        db.upsert_pushover_alert_state("update:cloudflared", "up_to_date", false, 0, None)
+            .expect("resolve state");
+        let resolved = db
+            .get_pushover_alert_state("update:cloudflared")
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.fingerprint, "up_to_date");
+        assert!(!resolved.is_failing);
+        assert_eq!(resolved.consecutive_count, 0);
+        assert_eq!(
+            resolved.last_notified_at.as_deref(),
+            Some("2026-11-18T05:00:00Z")
+        );
+
+        db.clear_all_pushover_alert_states().expect("clear all");
+        assert!(db.get_all_pushover_alert_states().unwrap().is_empty());
     }
 }

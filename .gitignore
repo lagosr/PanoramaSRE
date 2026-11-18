@@ -11,6 +11,7 @@ src-tauri/gen/
 # Environment secrets
 .env
 .env*.local
+.env.local.keys
 .env.deploy
 *.pfx
 *.p12

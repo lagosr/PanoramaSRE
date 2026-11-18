@@ -584,3 +584,133 @@ export interface OptInComplianceSnapshot {
   syncError?: string | null;
 }
 
+export type TrustedNetworkState =
+  | 'TRUSTED_HOME_OR_VPN'
+  | 'ROAMING_UNTRUSTED'
+  | 'ROAMING_DISCONNECTED'
+  | 'OFFLINE';
+
+export interface TrustedNetworkVerdict {
+  state: TrustedNetworkState;
+  isTrusted: boolean;
+  wshResolvedIps: string[];
+  matchedExpectedWshIp: boolean;
+  wshReachable: boolean;
+  canaryReachable: boolean;
+  reason: string;
+}
+
+export interface PushoverCategoryPrefs {
+  systemUpdates: boolean;
+  appAndHostFailures: boolean;
+  smokeFailures: boolean;
+  sslAlerts: boolean;
+  backupFailures: boolean;
+  optInEvents: boolean;
+  recoveryAlerts: boolean;
+}
+
+export interface PushoverPreferences {
+  enabled: boolean;
+  device: string;
+  updateSound: string;
+  failureSound: string;
+  recoverySound: string;
+  failurePriority: number;
+  expectedWshIp: string;
+  canaryHost: string;
+  categories: PushoverCategoryPrefs;
+}
+
+export interface PushoverSettingsViewDto {
+  configured: boolean;
+  credentialSource: 'dpapi' | 'env_local_keys' | 'env' | 'none' | string;
+  maskedToken: string;
+  maskedUser: string;
+  preferences: PushoverPreferences;
+  networkGate: TrustedNetworkVerdict;
+  trackedStateCount: number;
+}
+
+export interface SavePushoverSettingsInput {
+  apiToken?: string | null;
+  userKey?: string | null;
+  clearStoredCredentials?: boolean;
+  preferences: PushoverPreferences;
+}
+
+export interface PushoverSendReceipt {
+  requestId: string;
+  status: number;
+  title: string;
+}
+
+export interface SyncAlertEvaluationInput {
+  maintenanceSuppressed: boolean;
+  apps?: Array<{
+    slug: string;
+    displayName: string;
+    basePath: string;
+    status: string;
+    detail?: string | null;
+  }>;
+  appliances?: Array<{
+    key: string;
+    name: string;
+    host: string;
+    status: string;
+  }>;
+  wsh?: {
+    dietpiVersion: string;
+    dietpiUpdateAvailable: string;
+    rebootRequired: boolean;
+    kernel: string;
+    rpiThrottled: string;
+    lighttpdStatus: string;
+    dockerStatus: string;
+    sshStatus: string;
+    aptUpgradableRaw: string;
+    securityViolationCount: number;
+    failingInvariants: string[];
+  };
+  tunnelVersion?: {
+    runningVersion?: string | null;
+    latestVersion?: string | null;
+    updateAvailable: boolean;
+    releaseUrl?: string | null;
+  };
+  sslDomains?: Array<{
+    domain: string;
+    displayName: string;
+    status: string;
+    driftStatus: string;
+    daysRemaining: number;
+    liveReachable: boolean;
+    thumbprint: string;
+  }>;
+  backup?: {
+    incidentKey?: string | null;
+    lastRunStatus?: string | null;
+    failedRuns7d: number;
+    failedApps: string[];
+  };
+  latestSmokeRun?: {
+    id: string;
+    timestamp: string;
+    triggeredBy: string;
+    total: number;
+    passed: number;
+    failed: number;
+    failedChecks: string[];
+  };
+}
+
+export interface SyncEvaluationSummaryDto {
+  skipped: boolean;
+  skipReason?: string | null;
+  networkState: TrustedNetworkState;
+  dispatchedBatches: number;
+  notifiedKeys: string[];
+}
+
+

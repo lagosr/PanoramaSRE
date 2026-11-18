@@ -16,6 +16,11 @@ import {
   Copy,
   Pin,
   ArrowDownToLine,
+  Bell,
+  Send,
+  ShieldCheck,
+  AlertTriangle,
+  RotateCcw,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
@@ -24,7 +29,12 @@ import { WorkStreamContainer } from '../ui/WorkStreamContainer';
 import { formatConsoleLine, stripAnsiCodes } from '../layout/ConsoleColorizer';
 import { useSmartAutoScroll } from '../../hooks/useSmartAutoScroll';
 import { APP_VERSION_INFO } from '../../lib/version';
-import { TerminalTab } from '../../lib/types';
+import {
+  PushoverPreferences,
+  PushoverSendReceipt,
+  PushoverSettingsViewDto,
+  TerminalTab,
+} from '../../lib/types';
 import { useTheme } from '../../context/ThemeContext';
 
 interface SettingsViewProps {
@@ -94,6 +104,159 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [isSaved, setIsSaved] = useState(false);
   const [workspaceRoot, setWorkspaceRoot] = useState<string>('');
   const [workspaceFeedback, setWorkspaceFeedback] = useState<string | null>(null);
+
+  // Pushover Mobile Notifications & Trusted-Network Gate state
+  const [pushoverDto, setPushoverDto] = useState<PushoverSettingsViewDto | null>(null);
+  const [pushoverPrefs, setPushoverPrefs] = useState<PushoverPreferences>({
+    enabled: true,
+    device: '',
+    updateSound: 'bugle',
+    failureSound: 'siren',
+    recoverySound: 'magic',
+    failurePriority: 1,
+    expectedWshIp: '172.25.25.5',
+    canaryHost: 'ui.panoramadr.com',
+    categories: {
+      systemUpdates: true,
+      appAndHostFailures: true,
+      smokeFailures: true,
+      sslAlerts: true,
+      backupFailures: true,
+      optInEvents: false,
+      recoveryAlerts: false,
+    },
+  });
+  const [pushoverTokenInput, setPushoverTokenInput] = useState<string>('');
+  const [pushoverUserInput, setPushoverUserInput] = useState<string>('');
+  const [isLoadingPushover, setIsLoadingPushover] = useState<boolean>(false);
+  const [isSavingPushover, setIsSavingPushover] = useState<boolean>(false);
+  const [isTestingPushover, setIsTestingPushover] = useState<boolean>(false);
+  const [pushoverFeedback, setPushoverFeedback] = useState<{
+    text: string;
+    tone: 'ok' | 'err';
+  } | null>(null);
+
+  const loadPushoverSettings = useCallback(async () => {
+    setIsLoadingPushover(true);
+    try {
+      const dto = await invoke<PushoverSettingsViewDto>('get_pushover_settings');
+      setPushoverDto(dto);
+      setPushoverPrefs(dto.preferences);
+    } catch (err) {
+      console.warn('Failed to load Pushover settings:', err);
+    } finally {
+      setIsLoadingPushover(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadPushoverSettings();
+  }, [loadPushoverSettings]);
+
+  useEffect(() => {
+    if (activeTab === 'ssh') {
+      loadPushoverSettings();
+    }
+  }, [activeTab, loadPushoverSettings]);
+
+  const handleSavePushover = async () => {
+    setIsSavingPushover(true);
+    try {
+      const updated = await invoke<PushoverSettingsViewDto>('save_pushover_settings', {
+        input: {
+          apiToken: pushoverTokenInput.trim() || null,
+          userKey: pushoverUserInput.trim() || null,
+          clearStoredCredentials: false,
+          preferences: pushoverPrefs,
+        },
+      });
+      setPushoverDto(updated);
+      setPushoverPrefs(updated.preferences);
+      setPushoverTokenInput('');
+      setPushoverUserInput('');
+      setPushoverFeedback({ text: 'Pushover settings saved', tone: 'ok' });
+      setTimeout(() => setPushoverFeedback(null), 3500);
+      onEmitSettingsStream?.('Save Pushover Notification Governance', [
+        '[PanoramaSRE] Persisting Pushover preferences & DPAPI secret configuration...',
+        `[INFO] Enabled: ${updated.preferences.enabled} | Source: ${updated.credentialSource} | Sounds: updates=${updated.preferences.updateSound}, failures=${updated.preferences.failureSound}`,
+        `[INFO] Trusted-Network Gate: ${updated.networkGate.isTrusted ? 'ARMED' : 'PAUSED'} (${updated.networkGate.reason})`,
+        '[PASS] Pushover mobile alert configuration updated.',
+      ]);
+    } catch (err) {
+      const msg = String(err);
+      setPushoverFeedback({ text: `Error: ${msg}`, tone: 'err' });
+      setTimeout(() => setPushoverFeedback(null), 5000);
+      onEmitSettingsStream?.(
+        'Save Pushover Notification Governance',
+        [`[ERROR] Failed saving Pushover settings: ${msg}`],
+        1
+      );
+    } finally {
+      setIsSavingPushover(false);
+    }
+  };
+
+  const handleSendTestPushover = async () => {
+    setIsTestingPushover(true);
+    try {
+      // Save any pending form edits first so test reflects active UI selections
+      if (pushoverTokenInput.trim() || pushoverUserInput.trim()) {
+        const saved = await invoke<PushoverSettingsViewDto>('save_pushover_settings', {
+          input: {
+            apiToken: pushoverTokenInput.trim() || null,
+            userKey: pushoverUserInput.trim() || null,
+            clearStoredCredentials: false,
+            preferences: pushoverPrefs,
+          },
+        });
+        setPushoverDto(saved);
+        setPushoverTokenInput('');
+        setPushoverUserInput('');
+      }
+
+      const receipt = await invoke<PushoverSendReceipt>('send_test_pushover_notification', {
+        soundOverride: pushoverPrefs.updateSound,
+      });
+      setPushoverFeedback({
+        text: `Test delivered (req ${receipt.requestId.slice(0, 8)})`,
+        tone: 'ok',
+      });
+      setTimeout(() => setPushoverFeedback(null), 4500);
+      onEmitSettingsStream?.('Send Test Pushover Notification', [
+        '[PanoramaSRE] Dispatching direct HTTPS test payload to https://api.pushover.net/1/messages.json...',
+        `[PASS] Pushover accepted message (status=${receipt.status}, request=${receipt.requestId}, sound=${pushoverPrefs.updateSound}).`,
+      ]);
+    } catch (err) {
+      const msg = String(err);
+      setPushoverFeedback({ text: msg, tone: 'err' });
+      setTimeout(() => setPushoverFeedback(null), 6000);
+      onEmitSettingsStream?.(
+        'Send Test Pushover Notification',
+        [`[ERROR] Pushover test failed: ${msg}`],
+        1
+      );
+    } finally {
+      setIsTestingPushover(false);
+    }
+  };
+
+  const handleResetPushoverLedger = async () => {
+    try {
+      const cleared = await invoke<number>('reset_pushover_alert_baseline');
+      await loadPushoverSettings();
+      setPushoverFeedback({
+        text: `Cleared ${cleared} dedup fingerprint(s)`,
+        tone: 'ok',
+      });
+      setTimeout(() => setPushoverFeedback(null), 3500);
+      onEmitSettingsStream?.('Reset Pushover Deduplication Ledger', [
+        `[PanoramaSRE] Purged ${cleared} persisted state fingerprint(s) from pushover_alert_state.`,
+        '[PASS] Active updates or unresolved incidents will notify once on the next trusted sync.',
+      ]);
+    } catch (err) {
+      setPushoverFeedback({ text: String(err), tone: 'err' });
+    }
+  };
 
   // Load configured workspace directory on mount
   useEffect(() => {
@@ -592,12 +755,374 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
         {activeTab === 'ssh' && (
           <div className="max-w-4xl space-y-6">
-            <div className="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-3 font-mono text-xs shadow-sm">
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-3 font-mono text-xs shadow-sm">
               <div className="text-slate-600 dark:text-slate-400 font-semibold mb-2">TARGET HOST CONNECTION</div>
               <div className="text-slate-800 dark:text-slate-300"><span className="text-slate-500">Host:</span> wsh.panoramadr.com</div>
               <div className="text-slate-800 dark:text-slate-300"><span className="text-slate-500">User:</span> root</div>
               <div className="text-slate-800 dark:text-slate-300"><span className="text-slate-500">Key:</span> C:\Users\rodrigo\.ssh\rsa-key-deployment</div>
               <div className="text-slate-800 dark:text-slate-300"><span className="text-slate-500">Key Type:</span> OpenSSH Private Key (RSA)</div>
+            </div>
+
+            {/* Pushover Mobile Notifications & Trusted-Network Gate Card */}
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-5 shadow-sm">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <Bell className="w-4 h-4 text-orange-500 dark:text-orange-400 shrink-0" />
+                    <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                      Pushover Mobile Notifications & Roaming Gate
+                    </h3>
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Direct out-of-band Pushover REST alerts for new system updates, host/app outages, smoke failures, SSL drift, and backups.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {pushoverDto?.networkGate.isTrusted ? (
+                    <span
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono font-semibold bg-emerald-500/15 text-emerald-800 dark:text-emerald-400 border border-emerald-500/30 whitespace-nowrap flex-shrink-0"
+                      title={pushoverDto.networkGate.reason}
+                    >
+                      <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+                      <span>Gate: Armed (Home / VPN)</span>
+                    </span>
+                  ) : (
+                    <span
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono font-semibold bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-500/30 whitespace-nowrap flex-shrink-0"
+                      title={pushoverDto?.networkGate.reason || 'Checking network posture...'}
+                    >
+                      <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                      <span>Gate: Paused (Away / No Tunnel)</span>
+                    </span>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={loadPushoverSettings}
+                    disabled={isLoadingPushover}
+                    className="p-1.5 rounded-lg text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 transition-colors flex-shrink-0 cursor-pointer"
+                    title="Re-probe Trusted Home/VPN Network Gate"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isLoadingPushover ? 'animate-spin' : ''}`} />
+                  </button>
+                </div>
+              </div>
+
+              {pushoverDto?.networkGate.reason && (
+                <div className="px-3 py-2 rounded-lg bg-slate-50 dark:bg-[#050b14] border border-slate-200 dark:border-slate-800 text-[11px] font-mono text-slate-600 dark:text-slate-300 flex flex-wrap items-center justify-between gap-2">
+                  <span>{pushoverDto.networkGate.reason}</span>
+                  <span className="text-slate-400 dark:text-slate-500">
+                    Credentials:{' '}
+                    {pushoverDto.configured
+                      ? `Active (${pushoverDto.credentialSource === 'dpapi' ? 'Windows DPAPI' : '.env.local.keys'} • ${pushoverDto.maskedToken})`
+                      : 'Not Configured'}
+                  </span>
+                </div>
+              )}
+
+              {/* Master Toggle */}
+              <label className="flex items-center justify-between cursor-pointer pt-1">
+                <div>
+                  <div className="text-sm font-medium text-slate-800 dark:text-slate-200">
+                    Enable Automated Pushover Notifications
+                  </div>
+                  <div className="text-xs text-slate-500">
+                    Sends strictly once per new actionable event while connected to your trusted home network or VPN.
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={pushoverPrefs.enabled}
+                  onChange={(e) =>
+                    setPushoverPrefs((prev) => ({ ...prev, enabled: e.target.checked }))
+                  }
+                  className="w-4 h-4 accent-orange-500 rounded bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-700"
+                />
+              </label>
+
+              {/* Credentials & Device Target */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2 border-t border-slate-200 dark:border-slate-800">
+                <div>
+                  <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
+                    App API Token (DPAPI Sealed)
+                  </label>
+                  <input
+                    type="password"
+                    value={pushoverTokenInput}
+                    onChange={(e) => setPushoverTokenInput(e.target.value)}
+                    placeholder={
+                      pushoverDto?.configured
+                        ? `Keep active (${pushoverDto.maskedToken})`
+                        : 'Enter Pushover API Token'
+                    }
+                    className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-orange-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
+                    User / Group Key (DPAPI Sealed)
+                  </label>
+                  <input
+                    type="password"
+                    value={pushoverUserInput}
+                    onChange={(e) => setPushoverUserInput(e.target.value)}
+                    placeholder={
+                      pushoverDto?.configured
+                        ? `Keep active (${pushoverDto.maskedUser})`
+                        : 'Enter Pushover User Key'
+                    }
+                    className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-orange-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
+                    Target Device (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={pushoverPrefs.device}
+                    onChange={(e) =>
+                      setPushoverPrefs((prev) => ({ ...prev, device: e.target.value }))
+                    }
+                    placeholder="All subscribed devices"
+                    className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-orange-500"
+                  />
+                </div>
+              </div>
+
+              {/* Trusted Home / VPN Network Gate Anchors */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-slate-200 dark:border-slate-800">
+                <div>
+                  <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
+                    Expected WSH Split-DNS / Private IP
+                  </label>
+                  <input
+                    type="text"
+                    value={pushoverPrefs.expectedWshIp}
+                    onChange={(e) =>
+                      setPushoverPrefs((prev) => ({ ...prev, expectedWshIp: e.target.value }))
+                    }
+                    placeholder="172.25.25.5"
+                    className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-orange-500"
+                  />
+                  <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1 font-mono">
+                    Suppresses alerts when roaming on external Wi-Fi without VPN.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
+                    Independent Home Network Canary Host
+                  </label>
+                  <input
+                    type="text"
+                    value={pushoverPrefs.canaryHost}
+                    onChange={(e) =>
+                      setPushoverPrefs((prev) => ({ ...prev, canaryHost: e.target.value }))
+                    }
+                    placeholder="ui.panoramadr.com"
+                    className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-orange-500"
+                  />
+                  <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1 font-mono">
+                    Proves home/VPN reachability even if DietPi WSH itself crashes.
+                  </p>
+                </div>
+              </div>
+
+              {/* Sound & Priority Selectors */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2 border-t border-slate-200 dark:border-slate-800">
+                <div>
+                  <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
+                    System Update Sound
+                  </label>
+                  <CustomSelect
+                    value={pushoverPrefs.updateSound}
+                    onChange={(val) =>
+                      setPushoverPrefs((prev) => ({ ...prev, updateSound: val }))
+                    }
+                    options={[
+                      { value: 'bugle', label: 'Bugle (Default)' },
+                      { value: 'pushover', label: 'Pushover' },
+                      { value: 'magic', label: 'Magic' },
+                      { value: 'cosmic', label: 'Cosmic' },
+                      { value: 'pianobar', label: 'Piano Bar' },
+                      { value: 'cashregister', label: 'Cash Register' },
+                      { value: 'gamelan', label: 'Gamelan' },
+                      { value: 'vibrate', label: 'Vibrate Only' },
+                      { value: 'none', label: 'Silent (None)' },
+                    ]}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
+                    Failure / Outage Sound
+                  </label>
+                  <CustomSelect
+                    value={pushoverPrefs.failureSound}
+                    onChange={(val) =>
+                      setPushoverPrefs((prev) => ({ ...prev, failureSound: val }))
+                    }
+                    options={[
+                      { value: 'siren', label: 'Siren (Default)' },
+                      { value: 'spacealarm', label: 'Space Alarm' },
+                      { value: 'persistent', label: 'Persistent' },
+                      { value: 'alien', label: 'Alien' },
+                      { value: 'tugboat', label: 'Tugboat' },
+                      { value: 'intermission', label: 'Intermission' },
+                      { value: 'bugle', label: 'Bugle' },
+                      { value: 'updown', label: 'Up Down' },
+                      { value: 'none', label: 'Silent (None)' },
+                    ]}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
+                    Failure Priority Level
+                  </label>
+                  <CustomSelect
+                    value={String(pushoverPrefs.failurePriority)}
+                    onChange={(val) =>
+                      setPushoverPrefs((prev) => ({
+                        ...prev,
+                        failurePriority: Number.parseInt(val, 10) || 0,
+                      }))
+                    }
+                    options={[
+                      { value: '1', label: 'High (1) — Bypass Quiet Hours' },
+                      { value: '0', label: 'Normal (0)' },
+                      { value: '-1', label: 'Low / Quiet (-1)' },
+                    ]}
+                  />
+                </div>
+              </div>
+
+              {/* Per-Category Actionable Event Toggles */}
+              <div className="pt-2 border-t border-slate-200 dark:border-slate-800 space-y-2.5">
+                <div className="text-xs font-mono font-semibold text-slate-600 dark:text-slate-400">
+                  ACTIONABLE EVENT TRIGGERS
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 text-xs">
+                  {(
+                    [
+                      {
+                        key: 'systemUpdates',
+                        title: 'System & Tunnel Updates',
+                        desc: 'New cloudflared release, DietPi OS, Debian APT packages, or kernel reboot flag.',
+                      },
+                      {
+                        key: 'appAndHostFailures',
+                        title: 'App, WSH Host & Appliance Outages',
+                        desc: 'Unreachable suite apps, WSH systemd/thermal/security failures, or offline appliances.',
+                      },
+                      {
+                        key: 'smokeFailures',
+                        title: 'Production Smoke Suite Failures',
+                        desc: 'Failed checks during 4x/day scheduled or IPC smoke test executions.',
+                      },
+                      {
+                        key: 'sslAlerts',
+                        title: 'SSL Expiry & Certificate Drift',
+                        desc: 'Domains expiring (<30d), self-signed fallbacks, or live TLS thumbprint drift.',
+                      },
+                      {
+                        key: 'backupFailures',
+                        title: 'GFS Database Backup Failures',
+                        desc: 'Failed or missed daily SQLite backup runs in backup_history.json.',
+                      },
+                      {
+                        key: 'optInEvents',
+                        title: 'Parakith D1 SMS Opt-Ins',
+                        desc: 'Notify when new subscriber opt-in records arrive during 15m D1 syncs.',
+                      },
+                      {
+                        key: 'recoveryAlerts',
+                        title: 'Quiet Recovery Notifications',
+                        desc: 'Send a low-priority (-1) alert when an active outage returns to healthy.',
+                      },
+                    ] as const
+                  ).map((item) => (
+                    <label
+                      key={item.key}
+                      className="flex items-start justify-between gap-3 p-2.5 rounded-lg bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 cursor-pointer"
+                    >
+                      <div>
+                        <div className="font-semibold text-slate-800 dark:text-slate-200">
+                          {item.title}
+                        </div>
+                        <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                          {item.desc}
+                        </div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={pushoverPrefs.categories[item.key]}
+                        onChange={(e) =>
+                          setPushoverPrefs((prev) => ({
+                            ...prev,
+                            categories: {
+                              ...prev.categories,
+                              [item.key]: e.target.checked,
+                            },
+                          }))
+                        }
+                        className="mt-0.5 w-4 h-4 accent-orange-500 rounded bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-700 shrink-0"
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* Action Footer */}
+              <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex flex-wrap sm:flex-nowrap items-center justify-between gap-2">
+                <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleSavePushover}
+                    disabled={isSavingPushover}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-orange-600 hover:bg-orange-500 text-white shadow-sm transition-colors disabled:opacity-50 whitespace-nowrap flex-shrink-0 cursor-pointer"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    <span>{isSavingPushover ? 'Saving...' : 'Save Pushover Settings'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleSendTestPushover}
+                    disabled={isTestingPushover}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm transition-colors disabled:opacity-50 whitespace-nowrap flex-shrink-0 cursor-pointer"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                    <span>{isTestingPushover ? 'Sending Test...' : 'Send Test Alert'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleResetPushoverLedger}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-colors whitespace-nowrap flex-shrink-0 cursor-pointer"
+                    title="Clears remembered alert fingerprints so current updates/failures re-notify once on next sync"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Reset Dedup ({pushoverDto?.trackedStateCount ?? 0})</span>
+                  </button>
+                </div>
+
+                {pushoverFeedback && (
+                  <span
+                    className={`text-xs font-mono px-2.5 py-1 rounded border whitespace-nowrap flex-shrink-0 ${
+                      pushoverFeedback.tone === 'ok'
+                        ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
+                        : 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border-rose-500/30'
+                    }`}
+                  >
+                    {pushoverFeedback.text}
+                  </span>
+                )}
+              </div>
             </div>
 
             <WorkStreamContainer
@@ -642,6 +1167,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       { value: 'DEPLOY', label: 'DEPLOY' },
                       { value: 'BACKUP', label: 'BACKUP' },
                       { value: 'MONITOR', label: 'MONITOR' },
+                      { value: 'NOTIFY', label: 'NOTIFY' },
+                      { value: 'OPT_IN', label: 'OPT_IN' },
                     ]}
                   />
                 </div>

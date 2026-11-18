@@ -8,6 +8,9 @@ static SECRET_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         // Internal service key
         Regex::new(r"(?i)INTERNAL_SERVICE_KEY\s*=\s*[^\s]+").unwrap(),
         Regex::new(r"(?i)X-Panorama-Service-Key:\s*[^\s\r\n]+").unwrap(),
+        // Pushover API token & user key
+        Regex::new(r#"(?i)PUSHOVER_(?:API_TOKEN|USER_KEY)\s*=\s*("[^"]*"|'[^']*'|[^\s]+)"#).unwrap(),
+        Regex::new(r#""(?:token|user)"\s*:\s*"[a-z0-9]{28,34}""#).unwrap(),
         // PuTTY password argument
         Regex::new(r#"(?i)-pw\s+("[^"]*"|[^\s]+)"#).unwrap(),
         // JSON Web Tokens (RS256/HS256)
@@ -52,6 +55,15 @@ mod tests {
         let raw = r#"plink.exe -ssh root@host -pw "mypassword123" ls"#;
         let out = scrub_secrets(raw);
         assert!(!out.contains("mypassword123"));
+        assert!(out.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn test_scrubs_pushover_credentials() {
+        let raw = r#"PUSHOVER_API_TOKEN=abcdefghij1234567890abcdefghij {"token":"abcdefghij1234567890abcdefghij","user":"1234567890abcdefghij1234567890"}"#;
+        let out = scrub_secrets(raw);
+        assert!(!out.contains("abcdefghij1234567890abcdefghij"));
+        assert!(!out.contains("1234567890abcdefghij1234567890"));
         assert!(out.contains("[REDACTED]"));
     }
 }
