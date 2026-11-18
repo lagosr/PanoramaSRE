@@ -110,9 +110,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [pushoverPrefs, setPushoverPrefs] = useState<PushoverPreferences>({
     enabled: true,
     device: '',
-    updateSound: 'bugle',
-    failureSound: 'siren',
-    recoverySound: 'magic',
+    updateSound: 'cosmic',
+    failureSound: 'cosmic',
+    recoverySound: 'cosmic',
     failurePriority: 1,
     expectedWshIp: '172.25.25.5',
     canaryHost: 'ui.panoramadr.com',
@@ -933,51 +933,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
 
               {/* Sound & Priority Selectors */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2 border-t border-slate-200 dark:border-slate-800">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-slate-200 dark:border-slate-800">
                 <div>
                   <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
-                    System Update Sound
+                    Notification Sound (Fixed App Signature)
                   </label>
-                  <CustomSelect
-                    value={pushoverPrefs.updateSound}
-                    onChange={(val) =>
-                      setPushoverPrefs((prev) => ({ ...prev, updateSound: val }))
-                    }
-                    options={[
-                      { value: 'bugle', label: 'Bugle (Default)' },
-                      { value: 'pushover', label: 'Pushover' },
-                      { value: 'magic', label: 'Magic' },
-                      { value: 'cosmic', label: 'Cosmic' },
-                      { value: 'pianobar', label: 'Piano Bar' },
-                      { value: 'cashregister', label: 'Cash Register' },
-                      { value: 'gamelan', label: 'Gamelan' },
-                      { value: 'vibrate', label: 'Vibrate Only' },
-                      { value: 'none', label: 'Silent (None)' },
-                    ]}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
-                    Failure / Outage Sound
-                  </label>
-                  <CustomSelect
-                    value={pushoverPrefs.failureSound}
-                    onChange={(val) =>
-                      setPushoverPrefs((prev) => ({ ...prev, failureSound: val }))
-                    }
-                    options={[
-                      { value: 'siren', label: 'Siren (Default)' },
-                      { value: 'spacealarm', label: 'Space Alarm' },
-                      { value: 'persistent', label: 'Persistent' },
-                      { value: 'alien', label: 'Alien' },
-                      { value: 'tugboat', label: 'Tugboat' },
-                      { value: 'intermission', label: 'Intermission' },
-                      { value: 'bugle', label: 'Bugle' },
-                      { value: 'updown', label: 'Up Down' },
-                      { value: 'none', label: 'Silent (None)' },
-                    ]}
-                  />
+                  <div className="px-3 py-2 text-xs font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 flex items-center justify-between">
+                    <span>cosmic</span>
+                    <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                      Always used for all PanoramaSRE alerts
+                    </span>
+                  </div>
                 </div>
 
                 <div>

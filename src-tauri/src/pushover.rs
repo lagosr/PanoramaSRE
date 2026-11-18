@@ -21,6 +21,8 @@ const SETTING_PUSHOVER_PREFS: &str = "pushover_preferences_v1";
 /// Soft target length for mobile scannability (per Pushover UX guidelines; hard API cap is 1,024 chars).
 pub const MAX_SCANNABLE_MESSAGE_CHARS: usize = 900;
 pub const HARD_PUSHOVER_MESSAGE_LIMIT: usize = 1024;
+/// Fixed Pushover notification sound so all PanoramaSRE alerts are immediately recognizable.
+pub const PANORAMA_SRE_PUSHOVER_SOUND: &str = "cosmic";
 
 fn shared_pushover_client() -> Option<&'static reqwest::Client> {
     static CLIENT: OnceLock<Option<reqwest::Client>> = OnceLock::new();
@@ -228,15 +230,15 @@ fn default_true() -> bool {
 }
 
 fn default_update_sound() -> String {
-    "bugle".to_string()
+    PANORAMA_SRE_PUSHOVER_SOUND.to_string()
 }
 
 fn default_failure_sound() -> String {
-    "siren".to_string()
+    PANORAMA_SRE_PUSHOVER_SOUND.to_string()
 }
 
 fn default_recovery_sound() -> String {
-    "magic".to_string()
+    PANORAMA_SRE_PUSHOVER_SOUND.to_string()
 }
 
 fn default_failure_priority() -> i8 {
@@ -352,17 +354,25 @@ pub struct ResolvedPushoverCredentials {
 }
 
 pub fn load_preferences(db: &SreDatabase) -> PushoverPreferences {
-    db.get_setting(SETTING_PUSHOVER_PREFS)
+    let mut prefs = db
+        .get_setting(SETTING_PUSHOVER_PREFS)
         .ok()
         .flatten()
         .and_then(|raw| serde_json::from_str::<PushoverPreferences>(&raw).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    prefs.update_sound = PANORAMA_SRE_PUSHOVER_SOUND.to_string();
+    prefs.failure_sound = PANORAMA_SRE_PUSHOVER_SOUND.to_string();
+    prefs.recovery_sound = PANORAMA_SRE_PUSHOVER_SOUND.to_string();
+    prefs
 }
 
 pub fn save_preferences(db: &SreDatabase, prefs: &PushoverPreferences) -> Result<(), String> {
     let mut normalized = prefs.clone();
     normalized.failure_priority = normalized.failure_priority.clamp(-2, 1);
     normalized.device = normalized.device.trim().to_string();
+    normalized.update_sound = PANORAMA_SRE_PUSHOVER_SOUND.to_string();
+    normalized.failure_sound = PANORAMA_SRE_PUSHOVER_SOUND.to_string();
+    normalized.recovery_sound = PANORAMA_SRE_PUSHOVER_SOUND.to_string();
     normalized.expected_wsh_ip = if normalized.expected_wsh_ip.trim().is_empty() {
         default_expected_wsh_ip()
     } else {
@@ -1805,7 +1815,7 @@ pub async fn send_test_pushover_notification(
 
     let chosen_sound = sound_override
         .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| prefs.update_sound.clone());
+        .unwrap_or_else(|| PANORAMA_SRE_PUSHOVER_SOUND.to_string());
 
     let items = vec![
         FormattedBulletItem {
@@ -1818,7 +1828,7 @@ pub async fn send_test_pushover_notification(
         },
         FormattedBulletItem {
             label: "Sound Profile".to_string(),
-            detail: format!("Updates={} • Failures={}", prefs.update_sound, prefs.failure_sound),
+            detail: format!("{} (PanoramaSRE Signature)", chosen_sound),
         },
     ];
     let html_body = build_scannable_html_message(
@@ -2091,7 +2101,7 @@ mod tests {
         let first = plan_pushover_batches_from_sync(&db, &prefs, &verdict, &input, now);
         assert_eq!(first.len(), 1);
         assert_eq!(first[0].kind, OutboundBatchKind::Update);
-        assert_eq!(first[0].sound, "bugle");
+        assert_eq!(first[0].sound, "cosmic");
         assert_eq!(first[0].dedup_keys_notified.len(), 3);
 
         // Next 5 periodic ticks with identical versions -> 0 notifications!
