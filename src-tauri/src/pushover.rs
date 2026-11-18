@@ -243,7 +243,7 @@ fn default_recovery_sound() -> String {
 }
 
 fn default_failure_priority() -> i8 {
-    1
+    0
 }
 
 fn default_expected_wsh_ip() -> String {

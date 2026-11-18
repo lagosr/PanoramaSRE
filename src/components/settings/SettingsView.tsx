@@ -113,7 +113,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     updateSound: 'cosmic',
     failureSound: 'cosmic',
     recoverySound: 'cosmic',
-    failurePriority: 1,
+    failurePriority: 0,
     expectedWshIp: '172.25.25.5',
     canaryHost: 'ui.panoramadr.com',
     categories: {
@@ -126,8 +126,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       recoveryAlerts: false,
     },
   });
-  const [pushoverTokenInput, setPushoverTokenInput] = useState<string>('');
-  const [pushoverUserInput, setPushoverUserInput] = useState<string>('');
   const [isLoadingPushover, setIsLoadingPushover] = useState<boolean>(false);
   const [isSavingPushover, setIsSavingPushover] = useState<boolean>(false);
   const [isTestingPushover, setIsTestingPushover] = useState<boolean>(false);
@@ -164,16 +162,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     try {
       const updated = await invoke<PushoverSettingsViewDto>('save_pushover_settings', {
         input: {
-          apiToken: pushoverTokenInput.trim() || null,
-          userKey: pushoverUserInput.trim() || null,
+          apiToken: null,
+          userKey: null,
           clearStoredCredentials: false,
           preferences: pushoverPrefs,
         },
       });
       setPushoverDto(updated);
       setPushoverPrefs(updated.preferences);
-      setPushoverTokenInput('');
-      setPushoverUserInput('');
       setPushoverFeedback({ text: 'Pushover settings saved', tone: 'ok' });
       setTimeout(() => setPushoverFeedback(null), 3500);
       onEmitSettingsStream?.('Save Pushover Notification Governance', [
@@ -199,21 +195,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const handleSendTestPushover = async () => {
     setIsTestingPushover(true);
     try {
-      // Save any pending form edits first so test reflects active UI selections
-      if (pushoverTokenInput.trim() || pushoverUserInput.trim()) {
-        const saved = await invoke<PushoverSettingsViewDto>('save_pushover_settings', {
-          input: {
-            apiToken: pushoverTokenInput.trim() || null,
-            userKey: pushoverUserInput.trim() || null,
-            clearStoredCredentials: false,
-            preferences: pushoverPrefs,
-          },
-        });
-        setPushoverDto(saved);
-        setPushoverTokenInput('');
-        setPushoverUserInput('');
-      }
-
       const receipt = await invoke<PushoverSendReceipt>('send_test_pushover_notification', {
         soundOverride: pushoverPrefs.updateSound,
       });
@@ -841,40 +822,24 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 />
               </label>
 
-              {/* Credentials & Device Target */}
+              {/* Read-Only Credentials & Device Target */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2 border-t border-slate-200 dark:border-slate-800">
                 <div>
                   <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
-                    App API Token (DPAPI Sealed)
+                    App API Token (SSOT)
                   </label>
-                  <input
-                    type="password"
-                    value={pushoverTokenInput}
-                    onChange={(e) => setPushoverTokenInput(e.target.value)}
-                    placeholder={
-                      pushoverDto?.configured
-                        ? `Keep active (${pushoverDto.maskedToken})`
-                        : 'Enter Pushover API Token'
-                    }
-                    className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-orange-500"
-                  />
+                  <div className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300">
+                    {pushoverDto?.configured ? pushoverDto.maskedToken : 'Not configured in .env.local.keys'}
+                  </div>
                 </div>
 
                 <div>
                   <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
-                    User / Group Key (DPAPI Sealed)
+                    User / Group Key (SSOT)
                   </label>
-                  <input
-                    type="password"
-                    value={pushoverUserInput}
-                    onChange={(e) => setPushoverUserInput(e.target.value)}
-                    placeholder={
-                      pushoverDto?.configured
-                        ? `Keep active (${pushoverDto.maskedUser})`
-                        : 'Enter Pushover User Key'
-                    }
-                    className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-orange-500"
-                  />
+                  <div className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300">
+                    {pushoverDto?.configured ? pushoverDto.maskedUser : 'Not configured in .env.local.keys'}
+                  </div>
                 </div>
 
                 <div>
@@ -893,21 +858,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
               </div>
 
-              {/* Trusted Home / VPN Network Gate Anchors */}
+              {/* Read-Only Trusted Home / VPN Network Gate Anchors */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-slate-200 dark:border-slate-800">
                 <div>
                   <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
                     Expected WSH Split-DNS / Private IP
                   </label>
-                  <input
-                    type="text"
-                    value={pushoverPrefs.expectedWshIp}
-                    onChange={(e) =>
-                      setPushoverPrefs((prev) => ({ ...prev, expectedWshIp: e.target.value }))
-                    }
-                    placeholder="172.25.25.5"
-                    className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-orange-500"
-                  />
+                  <div className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300">
+                    {pushoverPrefs.expectedWshIp}
+                  </div>
                   <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1 font-mono">
                     Suppresses alerts when roaming on external Wi-Fi without VPN.
                   </p>
@@ -917,15 +876,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
                     Independent Home Network Canary Host
                   </label>
-                  <input
-                    type="text"
-                    value={pushoverPrefs.canaryHost}
-                    onChange={(e) =>
-                      setPushoverPrefs((prev) => ({ ...prev, canaryHost: e.target.value }))
-                    }
-                    placeholder="ui.panoramadr.com"
-                    className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-orange-500"
-                  />
+                  <div className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300">
+                    {pushoverPrefs.canaryHost}
+                  </div>
                   <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1 font-mono">
                     Proves home/VPN reachability even if DietPi WSH itself crashes.
                   </p>
@@ -959,8 +912,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       }))
                     }
                     options={[
+                      { value: '0', label: 'Normal (0) — Recommended Default' },
                       { value: '1', label: 'High (1) — Bypass Quiet Hours' },
-                      { value: '0', label: 'Normal (0)' },
                       { value: '-1', label: 'Low / Quiet (-1)' },
                     ]}
                   />
