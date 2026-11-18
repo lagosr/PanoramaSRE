@@ -17,6 +17,7 @@ const PUSHOVER_MESSAGES_API_URL: &str = "https://api.pushover.net/1/messages.jso
 const SETTING_PUSHOVER_TOKEN_DPAPI: &str = "pushover_api_token_dpapi";
 const SETTING_PUSHOVER_USER_DPAPI: &str = "pushover_user_key_dpapi";
 const SETTING_PUSHOVER_PREFS: &str = "pushover_preferences_v1";
+const SETTING_DISMISSED_BACKUP_KEYS: &str = "dismissed_backup_incident_keys";
 
 /// Soft target length for mobile scannability (per Pushover UX guidelines; hard API cap is 1,024 chars).
 pub const MAX_SCANNABLE_MESSAGE_CHARS: usize = 900;
@@ -879,6 +880,52 @@ pub fn summarize_apt_upgradable(raw: &str) -> (usize, Vec<String>, String) {
     (pkg_names.len(), pkg_names, digest)
 }
 
+/// Decodes `vcgencmd get_throttled` hex bitmask and returns `true` ONLY when active
+/// lower bits (0..=3: under-voltage, freq-capped, throttled, soft-temp-limit) are set.
+/// Historical sticky bits since boot (bits 16..=19, e.g. `0xe0000`) are ignored.
+pub fn is_rpi_actively_throttled(raw: &str) -> bool {
+    let trimmed = raw.trim();
+    let hex_str = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+        .unwrap_or(trimmed);
+    if hex_str.is_empty() {
+        return false;
+    }
+    match u32::from_str_radix(hex_str, 16) {
+        Ok(val) => (val & 0x0F) != 0,
+        Err(_) => false,
+    }
+}
+
+pub fn load_dismissed_backup_keys(db: &SreDatabase) -> Vec<String> {
+    db.get_setting(SETTING_DISMISSED_BACKUP_KEYS)
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok())
+        .unwrap_or_default()
+}
+
+pub fn record_dismissed_backup_key(db: &SreDatabase, key: &str) -> Result<Vec<String>, String> {
+    let clean = key.trim();
+    if clean.is_empty() {
+        return Ok(load_dismissed_backup_keys(db));
+    }
+    let mut keys = load_dismissed_backup_keys(db);
+    if !keys.iter().any(|k| k == clean) {
+        keys.push(clean.to_string());
+        if keys.len() > 30 {
+            let excess = keys.len() - 30;
+            keys.drain(0..excess);
+        }
+        let serialized = serde_json::to_string(&keys)
+            .map_err(|e| format!("Failed serializing dismissed backup keys: {}", e))?;
+        db.set_setting(SETTING_DISMISSED_BACKUP_KEYS, &serialized)
+            .map_err(|e| format!("Failed saving dismissed backup keys: {}", e))?;
+    }
+    Ok(keys)
+}
+
 fn ssl_severity_rank(status: &str, drift_status: &str) -> u8 {
     if status == "EXPIRED" || status == "SELF_SIGNED" || drift_status == "SELF_SIGNED" {
         3
@@ -1022,6 +1069,7 @@ pub fn plan_pushover_batches_from_sync(
     let now_iso = now_utc.to_rfc3339();
     let mut failure_items: Vec<FormattedBulletItem> = Vec::new();
     let mut failure_keys: Vec<String> = Vec::new();
+    let mut single_app_failure_url: Option<(String, String)> = None;
     let mut update_items: Vec<FormattedBulletItem> = Vec::new();
     let mut update_keys: Vec<String> = Vec::new();
     let mut update_url: Option<(String, String)> = None;
@@ -1101,6 +1149,13 @@ pub fn plan_pushover_batches_from_sync(
                             label: app.display_name.clone(),
                             detail,
                         });
+                        if !app.base_path.trim().is_empty() {
+                            let clean_bp = app.base_path.trim().trim_end_matches('/');
+                            single_app_failure_url = Some((
+                                format!("https://wsh.panoramadr.com{}", clean_bp),
+                                format!("Open {}", app.display_name),
+                            ));
+                        }
                     }
                     IncidentTransition::Recovered if prefs.categories.recovery_alerts => {
                         recovery_keys.push(key);
@@ -1186,12 +1241,9 @@ pub fn plan_pushover_batches_from_sync(
                 }
             }
 
-            // RPi 5 thermal / undervoltage throttle flag
+            // RPi 5 active thermal / undervoltage throttle flag (bits 0..=3 only; ignore sticky bits like 0xe0000)
             let throttled_trimmed = wsh.rpi_throttled.trim();
-            let is_throttled_bad = !throttled_trimmed.is_empty()
-                && throttled_trimmed != "0x0"
-                && throttled_trimmed != "0x00000";
-            let th_fp = if is_throttled_bad {
+            let th_fp = if is_rpi_actively_throttled(throttled_trimmed) {
                 Some(throttled_trimmed)
             } else {
                 None
@@ -1515,14 +1567,22 @@ pub fn plan_pushover_batches_from_sync(
             None,
             MAX_SCANNABLE_MESSAGE_CHARS,
         );
+        let (fail_url, fail_url_title) = if count == 1 && failure_keys[0].starts_with("app_health:") {
+            match single_app_failure_url {
+                Some((u, t)) => (Some(u), Some(t)),
+                None => (None, None),
+            }
+        } else {
+            (None, None)
+        };
         batches.push(PlannedPushoverBatch {
             kind: OutboundBatchKind::Failure,
             title,
             html_message,
             priority: prefs.failure_priority.clamp(-2, 1),
             sound: prefs.failure_sound.clone(),
-            url: Some("https://wsh.panoramadr.com/auth".to_string()),
-            url_title: Some("Open PanoramaDrSuite".to_string()),
+            url: fail_url,
+            url_title: fail_url_title,
             dedup_keys_notified: failure_keys,
         });
     }
@@ -1851,8 +1911,8 @@ pub async fn send_test_pushover_notification(
         0,
         Some(chosen_sound.as_str()),
         device_opt,
-        Some("https://wsh.panoramadr.com/auth"),
-        Some("Open PanoramaDrSuite"),
+        None,
+        None,
     )
     .await?;
 
@@ -1925,7 +1985,16 @@ pub async fn evaluate_and_notify_sync(
 
     let planned_batches = {
         let guard = db.lock().map_err(|e| format!("DB mutex poisoned: {}", e))?;
-        plan_pushover_batches_from_sync(&guard, &prefs, &verdict, &input, chrono::Utc::now())
+        let mut sanitized_input = input.clone();
+        if let Some(ref mut bk) = sanitized_input.backup {
+            if let Some(ref key) = bk.incident_key {
+                let dismissed = load_dismissed_backup_keys(&guard);
+                if dismissed.iter().any(|d| d == key) {
+                    bk.incident_key = None;
+                }
+            }
+        }
+        plan_pushover_batches_from_sync(&guard, &prefs, &verdict, &sanitized_input, chrono::Utc::now())
     };
 
     if planned_batches.is_empty() {
@@ -2003,6 +2072,30 @@ pub async fn evaluate_and_notify_sync(
         dispatched_batches,
         notified_keys,
     })
+}
+
+#[tauri::command]
+pub async fn get_dismissed_backup_incidents(
+    db: tauri::State<'_, Arc<Mutex<SreDatabase>>>,
+) -> Result<Vec<String>, String> {
+    let guard = db.lock().map_err(|e| format!("DB mutex poisoned: {}", e))?;
+    Ok(load_dismissed_backup_keys(&guard))
+}
+
+#[tauri::command]
+pub async fn dismiss_backup_incident(
+    db: tauri::State<'_, Arc<Mutex<SreDatabase>>>,
+    incident_key: String,
+) -> Result<Vec<String>, String> {
+    let guard = db.lock().map_err(|e| format!("DB mutex poisoned: {}", e))?;
+    let updated = record_dismissed_backup_key(&guard, &incident_key)?;
+    let _ = guard.log_action(
+        "BACKUP",
+        "INFO",
+        &format!("Globally dismissed backup incident '{}'", incident_key.trim()),
+        None,
+    );
+    Ok(updated)
 }
 
 #[cfg(test)]
@@ -2183,5 +2276,54 @@ mod tests {
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].kind, OutboundBatchKind::Failure);
         assert_eq!(batches[0].dedup_keys_notified, vec!["wsh:host_reachable".to_string()]);
+        assert_eq!(batches[0].url, None);
+    }
+
+    #[test]
+    fn rpi_throttled_ignores_historical_sticky_bits_and_alerts_only_on_active_bits() {
+        assert!(!is_rpi_actively_throttled("0x0"));
+        assert!(!is_rpi_actively_throttled("0xe0000"));
+        assert!(!is_rpi_actively_throttled("0x50000"));
+        assert!(is_rpi_actively_throttled("0x1"));
+        assert!(is_rpi_actively_throttled("0x50005"));
+        assert!(is_rpi_actively_throttled("0xe0004"));
+        assert!(!is_rpi_actively_throttled(""));
+
+        let db = SreDatabase::new(":memory:").unwrap();
+        let prefs = PushoverPreferences::default();
+        let home = trusted_verdict_both_up();
+        let mut input = SyncAlertEvaluationInput::default();
+        input.wsh = Some(WshObservationDto {
+            dietpi_version: "9.8.0".to_string(),
+            dietpi_update_available: String::new(),
+            reboot_required: false,
+            kernel: "6.12.20".to_string(),
+            rpi_throttled: "0xe0000".to_string(),
+            lighttpd_status: "active".to_string(),
+            docker_status: "active".to_string(),
+            ssh_status: "active".to_string(),
+            apt_upgradable_raw: String::new(),
+            security_violation_count: 0,
+            failing_invariants: Vec::new(),
+        });
+
+        assert!(plan_pushover_batches_from_sync(&db, &prefs, &home, &input, chrono::Utc::now()).is_empty());
+
+        input.wsh.as_mut().unwrap().rpi_throttled = "0xe0004".to_string();
+        let active = plan_pushover_batches_from_sync(&db, &prefs, &home, &input, chrono::Utc::now());
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].dedup_keys_notified, vec!["wsh:throttled".to_string()]);
+        assert_eq!(active[0].url, None);
+    }
+
+    #[test]
+    fn dismissed_backup_incident_keys_persist_globally() {
+        let db = SreDatabase::new(":memory:").unwrap();
+        assert!(load_dismissed_backup_keys(&db).is_empty());
+        let saved = record_dismissed_backup_key(&db, "missed:2026-11-12").expect("save");
+        assert_eq!(saved, vec!["missed:2026-11-12".to_string()]);
+        // Duplicate insert is idempotent
+        let dup = record_dismissed_backup_key(&db, "missed:2026-11-12").expect("dup");
+        assert_eq!(dup.len(), 1);
     }
 }

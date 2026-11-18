@@ -75,6 +75,14 @@ export const App: React.FC = () => {
   const [tunnelVersionStatus, setTunnelVersionStatus] = useState<CloudflareTunnelVersionStatus | null>(null);
   const [isCheckingTunnelVersion, setIsCheckingTunnelVersion] = useState<boolean>(false);
   const [backupLedger, setBackupLedger] = useState<BackupLedgerSummary | null>(null);
+  const [dismissedBackupIncidentKeys, setDismissedBackupIncidentKeys] = useState<string[]>(() => {
+    try {
+      const legacy = localStorage.getItem('panorama_sre_dismissed_backup_incident');
+      return legacy ? [legacy] : [];
+    } catch {
+      return [];
+    }
+  });
   const [sslFleet, setSslFleet] = useState<SslFleetSummary | null>(null);
   const [mcpStatus, setMcpStatus] = useState<McpBridgeStatus | null>(null);
   const [smokeRuns, setSmokeRuns] = useState<SmokeTestRun[]>([]);
@@ -263,31 +271,49 @@ export const App: React.FC = () => {
   const maintenanceSuppressedRef = useRef<boolean>(false);
   maintenanceSuppressedRef.current =
     isHostRebooting || isDeployingAll || currentRunningDeployJobIdRef.current !== null;
+  const dismissedBackupKeysRef = useRef<string[]>(dismissedBackupIncidentKeys);
+  dismissedBackupKeysRef.current = dismissedBackupIncidentKeys;
   const refreshSmokeHistoryRef = useRef<(() => Promise<void>) | null>(null);
 
+  // Hydrate global dismissed backup incident keys from sre.sqlite (and migrate any legacy localStorage key)
+  useEffect(() => {
+    (async () => {
+      try {
+        const dbKeys = await invoke<string[]>('get_dismissed_backup_incidents');
+        let merged = Array.isArray(dbKeys) ? [...dbKeys] : [];
+        const legacy = localStorage.getItem('panorama_sre_dismissed_backup_incident');
+        if (legacy && !merged.includes(legacy)) {
+          merged = await invoke<string[]>('dismiss_backup_incident', { incidentKey: legacy });
+        }
+        setDismissedBackupIncidentKeys(merged);
+      } catch (err) {
+        console.warn('Failed to load dismissed backup incidents from SQLite:', err);
+      }
+    })();
+  }, []);
+
   const computeBackupIncidentKey = useCallback((ledger: BackupLedgerSummary | null | undefined) => {
-    let dismissedKey: string | null = null;
-    try {
-      dismissedKey = localStorage.getItem('panorama_sre_dismissed_backup_incident');
-    } catch {
-      dismissedKey = null;
-    }
     if (!ledger) return { rawFailures: 0, incidentKey: null as string | null, isDismissed: false };
-    const rawFailures =
-      ledger.last_run_status?.toLowerCase() === 'failed'
-        ? ledger.latest_app_details.filter((a) => a.status.toLowerCase() === 'failed').length || 1
-        : ledger.failed_runs_7d || 0;
+    const isLatestFailed = ledger.last_run_status?.toLowerCase() === 'failed';
+    const rawFailures = isLatestFailed
+      ? ledger.latest_app_details.filter((a) => a.status.toLowerCase() === 'failed').length || 1
+      : ledger.failed_runs_7d || 0;
+    const failedDates = (ledger.daily_pips_7d || [])
+      .filter((p) => p.status !== 'Success')
+      .map((p) => p.date)
+      .join(',');
     const incidentKey =
       rawFailures > 0
-        ? `${ledger.last_run_timestamp || 'unknown'}|${ledger.last_run_status || ''}|${ledger.failed_runs_7d || 0}|${(ledger.daily_pips_7d || [])
-            .filter((p) => p.status !== 'Success')
-            .map((p) => p.date)
-            .join(',')}`
+        ? isLatestFailed
+          ? `failed:${ledger.last_run_timestamp || 'unknown'}|${failedDates}`
+          : failedDates
+          ? `missed:${failedDates}`
+          : `missed:7d:${ledger.failed_runs_7d || 0}`
         : null;
     return {
       rawFailures,
       incidentKey,
-      isDismissed: Boolean(incidentKey && dismissedKey === incidentKey),
+      isDismissed: Boolean(incidentKey && dismissedBackupKeysRef.current.includes(incidentKey)),
     };
   }, []);
 
@@ -2086,10 +2112,34 @@ export const App: React.FC = () => {
   const unhealthyCount = apps.filter((a) => a.health && a.health.status !== 'healthy').length;
   const prodHealthyCount = apps.filter((a) => a.health?.status === 'healthy').length;
 
-  const backupFailureCount =
-    backupLedger?.last_run_status?.toLowerCase() === 'failed'
-      ? backupLedger?.latest_app_details.filter((a) => a.status.toLowerCase() === 'failed').length || 1
-      : backupLedger?.failed_runs_7d || 0;
+  const {
+    rawFailures: rawBackupFailureCount,
+    incidentKey: backupIncidentKey,
+    isDismissed: isBackupIncidentDismissed,
+  } = computeBackupIncidentKey(backupLedger);
+
+  const backupFailureCount = isBackupIncidentDismissed ? 0 : rawBackupFailureCount;
+
+  const handleDismissBackupIncident = useCallback(() => {
+    if (!backupIncidentKey) return;
+    setDismissedBackupIncidentKeys((prev) =>
+      prev.includes(backupIncidentKey) ? prev : [...prev, backupIncidentKey]
+    );
+    try {
+      localStorage.setItem('panorama_sre_dismissed_backup_incident', backupIncidentKey);
+    } catch {
+      // Ignore storage quota / private mode errors
+    }
+    void invoke<string[]>('dismiss_backup_incident', { incidentKey: backupIncidentKey })
+      .then((updated) => {
+        if (Array.isArray(updated)) {
+          setDismissedBackupIncidentKeys(updated);
+        }
+      })
+      .catch((err) => {
+        console.warn('Failed persisting dismissed backup incident globally:', err);
+      });
+  }, [backupIncidentKey]);
 
   // Count apps requiring release deployment (drifted, ahead, dirty, diverged, or unhealthy/unreachable)
   const behindReleasesCount = apps.filter(isAppDeployCandidate).length;

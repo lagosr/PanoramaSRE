@@ -39,8 +39,9 @@ use db::SreDatabase;
 use dev_supervisor::{get_dev_servers_status, start_dev_server, stop_dev_server, DevSupervisor};
 use job_manager::JobManager;
 use pushover::{
-    evaluate_and_notify_sync, get_pushover_settings, reset_pushover_alert_baseline,
-    save_pushover_settings, send_test_pushover_notification,
+    dismiss_backup_incident, evaluate_and_notify_sync, get_dismissed_backup_incidents,
+    get_pushover_settings, reset_pushover_alert_baseline, save_pushover_settings,
+    send_test_pushover_notification,
 };
 use scheduler::{TelemetryScheduler, update_scheduler_intervals};
 use std::sync::{Arc, Mutex};
@@ -151,7 +152,9 @@ pub fn run() {
             save_pushover_settings,
             reset_pushover_alert_baseline,
             send_test_pushover_notification,
-            evaluate_and_notify_sync
+            evaluate_and_notify_sync,
+            get_dismissed_backup_incidents,
+            dismiss_backup_incident
         ])
         .setup(move |app| {
             // Setup System Tray
