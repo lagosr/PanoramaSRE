@@ -75,20 +75,20 @@ export function LocalBackupHydratorPanel({
   const liveSchemaVersion = selectedApp?.devServer?.sqlite_user_version ?? 1;
 
   return (
-    <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-sm">
+    <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-sm">
       {/* Header & Controls */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
         <div>
           <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">
             Interactive Backup-to-Local (ApplyLocal) Hydrator
           </h3>
-          <p className="text-xs text-slate-500 mt-0.5">
+          <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
             Safely stops locking dev processes, extracts remote SQLite snapshots, and restarts local dev.
           </p>
         </div>
 
-        <div className="flex items-center gap-3 w-full sm:w-auto">
-          <div className="w-60">
+        <div className="flex items-center gap-3 w-full sm:w-auto flex-wrap sm:flex-nowrap">
+          <div className="w-full sm:w-60">
             <CustomSelect
               value={selectedAppId}
               onChange={setSelectedAppId}
@@ -98,7 +98,7 @@ export function LocalBackupHydratorPanel({
 
           <button
             onClick={() => selectedApp && onTriggerBackupPull(selectedApp)}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition-colors whitespace-nowrap shadow-sm"
+            className="btn-primary text-xs flex items-center gap-1.5 shrink-0"
           >
             <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
@@ -110,21 +110,21 @@ export function LocalBackupHydratorPanel({
 
       {/* Archives Table */}
       {isLoading ? (
-        <div className="py-12 text-center text-xs text-slate-500">
+        <div className="py-12 text-center text-xs text-slate-600 dark:text-slate-400">
           Scanning local backup archives...
         </div>
       ) : archives.length === 0 ? (
-        <div className="py-12 text-center rounded-lg border border-dashed border-slate-200 dark:border-slate-800 p-8">
+        <div className="py-12 text-center rounded-xl border border-dashed border-slate-200 dark:border-slate-800 p-8">
           <p className="text-sm font-medium text-slate-700 dark:text-slate-300">No backup archives found locally</p>
-          <p className="text-xs text-slate-500 mt-1">
+          <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">
             Click &quot;Pull Fresh Prod Backup&quot; to download a live snapshot from WSH.
           </p>
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
+        <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
-              <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-500 dark:text-slate-400 font-mono uppercase text-[10px]">
+              <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-600 dark:text-slate-400 font-mono uppercase text-[10px]">
                 <th className="py-3 px-4">Archive Filename</th>
                 <th className="py-3 px-4">Backup Date & Time</th>
                 <th className="py-3 px-4">Type</th>
@@ -144,7 +144,7 @@ export function LocalBackupHydratorPanel({
                     <td className="py-3 px-4 font-medium text-slate-900 dark:text-slate-200">
                       {arc.file_name}
                     </td>
-                    <td className="py-3 px-4 text-slate-700 dark:text-slate-300">
+                    <td className="py-3 px-4 text-slate-700 dark:text-slate-300 tabular-nums">
                       {arc.timestamp_str}
                     </td>
                     <td className="py-3 px-4">
@@ -153,15 +153,15 @@ export function LocalBackupHydratorPanel({
                           AUTO GFS
                         </span>
                       ) : (
-                        <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-500/10 text-slate-600 dark:text-slate-400 border border-slate-500/20">
+                        <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-500/10 text-slate-700 dark:text-slate-400 border border-slate-500/20">
                           MANUAL
                         </span>
                       )}
                     </td>
-                    <td className="py-3 px-4 text-slate-500 dark:text-slate-400">
+                    <td className="py-3 px-4 text-slate-600 dark:text-slate-400 tabular-nums">
                       {formatBytes(arc.size_bytes)}
                     </td>
-                    <td className="py-3 px-4">
+                    <td className="py-3 px-4 tabular-nums">
                       {isSchemaMatch ? (
                         <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20">
                           v{arc.schema_version} MATCH
@@ -176,7 +176,7 @@ export function LocalBackupHydratorPanel({
                       <button
                         onClick={() => setPendingApplyArchive(arc)}
                         disabled={isApplying}
-                        className="px-3 py-1 rounded text-xs font-medium bg-emerald-600/10 hover:bg-emerald-600/20 dark:bg-emerald-600/20 dark:hover:bg-emerald-600/30 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 transition-colors"
+                        className="btn-tonal text-xs"
                       >
                         Apply Local
                       </button>

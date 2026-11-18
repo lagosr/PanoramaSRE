@@ -694,10 +694,10 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
               <button
                 type="button"
                 onClick={() => onClearTab(activeTab.id)}
-                className="p-1 rounded hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 transition-colors shrink-0"
+                className="min-w-[36px] min-h-[36px] flex items-center justify-center p-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 transition-colors shrink-0 cursor-pointer"
                 title="Clear current tab"
               >
-                <Trash2 className="w-3 h-3" />
+                <Trash2 className="w-3.5 h-3.5" />
               </button>
             )}
           </div>
@@ -719,7 +719,7 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
                 </div>
               ))
             ) : (
-              <div className="text-slate-500 dark:text-slate-600 italic">No output in stream.</div>
+              <div className="text-slate-600 dark:text-slate-400 italic">No output in stream.</div>
             )}
           </div>
 
@@ -727,12 +727,12 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
             <button
               type="button"
               onClick={pinToBottom}
-              className="absolute bottom-3 right-4 z-10 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg border border-emerald-400/50 transition-all whitespace-nowrap flex-shrink-0"
+              className="absolute bottom-3 right-4 z-10 inline-flex items-center gap-1.5 min-h-[36px] px-3 py-1.5 rounded-full text-xs font-semibold bg-[var(--color-brand)] hover:bg-[var(--color-brand-hover)] text-[var(--color-on-brand)] shadow-lg transition-all whitespace-nowrap flex-shrink-0 cursor-pointer"
             >
               <ArrowDownToLine className="w-3.5 h-3.5 shrink-0" />
               <span>Pin to Bottom</span>
               {unseenCount > 0 && (
-                <span className="px-1.5 py-0.2 rounded-full bg-white/20 text-[10px] font-mono">
+                <span className="px-1.5 py-0.2 rounded-full bg-black/15 dark:bg-black/20 text-[10px] font-mono tabular-nums">
                   {unseenCount} new
                 </span>
               )}
@@ -746,14 +746,14 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
             eventsHistory.map((ev) => (
               <div
                 key={ev.id}
-                className={`p-3 rounded-lg border flex items-start gap-3 transition-colors ${
+                className={`p-3 rounded-xl border flex items-start gap-3 transition-colors ${
                   ev.type === 'error'
                     ? 'bg-rose-50 dark:bg-rose-500/10 border-rose-200 dark:border-rose-500/20 text-rose-800 dark:text-rose-300'
                     : ev.type === 'pending'
                     ? 'bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/20 text-amber-800 dark:text-amber-300'
                     : ev.type === 'success'
                     ? 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 shadow-xs'
-                    : 'bg-white dark:bg-slate-900/60 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-300 shadow-xs'
+                    : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-300 shadow-xs'
                 }`}
               >
                 <div className="shrink-0 mt-0.5">

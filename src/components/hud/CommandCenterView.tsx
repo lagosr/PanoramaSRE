@@ -20,6 +20,7 @@ interface CommandCenterViewProps {
   appliances: ApplianceStatus[];
   sslFleet?: SslFleetSummary | null;
   backupLedger?: BackupLedgerSummary | null;
+  isBackupIncidentDismissed?: boolean;
   optInSnapshot?: OptInComplianceSnapshot | null;
   terminalTabs?: TerminalTab[];
   isLoading: boolean;
@@ -41,6 +42,7 @@ export function CommandCenterView({
   appliances, 
   sslFleet, 
   backupLedger,
+  isBackupIncidentDismissed = false,
   optInSnapshot,
   terminalTabs = [],
   isLoading,
@@ -85,7 +87,9 @@ export function CommandCenterView({
   const missedOrFailed7dPips = dailyPips.filter(
     (p) => p.status !== 'Success'
   );
-  const hasBackupIncident = (isLastBackupFailed && failedBackupApps.length > 0) || (backupLedger?.failed_runs_7d || 0) > 0;
+  const hasBackupIncident =
+    !isBackupIncidentDismissed &&
+    ((isLastBackupFailed && failedBackupApps.length > 0) || (backupLedger?.failed_runs_7d || 0) > 0);
 
   return (
     <div className="p-4 sm:p-6 md:p-8 max-w-7xl mx-auto w-full min-w-0 space-y-6 overflow-hidden">
@@ -102,7 +106,7 @@ export function CommandCenterView({
               </div>
               <div>
                 <div className="flex items-center gap-2">
-                  <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-rose-500 text-white uppercase tracking-wider">
+                  <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-rose-700 dark:bg-rose-600 text-white uppercase tracking-wider">
                     SECURITY INCIDENT ALERT
                   </span>
                   <span className="text-xs text-rose-600 dark:text-rose-400 font-mono">
@@ -125,7 +129,7 @@ export function CommandCenterView({
               {onReapplyHardening && (
                 <button
                   onClick={onReapplyHardening}
-                  className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white shadow-sm transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5"
+                  className="btn-danger text-xs py-1.5 px-3.5"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
                   <span>Re-Apply Hardening</span>
@@ -134,18 +138,18 @@ export function CommandCenterView({
               {onRunPenetrationAudit && (
                 <button
                   onClick={onRunPenetrationAudit}
-                  className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 shadow-sm transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5"
+                  className="btn-secondary text-xs py-1.5 px-3.5"
                 >
-                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
                   <span>Run Penetration Audit</span>
                 </button>
               )}
               {onNavigateToTopology && (
                 <button
                   onClick={onNavigateToTopology}
-                  className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 shadow-sm transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5"
+                  className="btn-secondary text-xs py-1.5 px-3.5"
                 >
-                  <Network className="w-3.5 h-3.5 text-indigo-500" />
+                  <Network className="w-3.5 h-3.5 text-[var(--color-accent-text)]" />
                   <span>Inspect Rules</span>
                 </button>
               )}
@@ -156,18 +160,18 @@ export function CommandCenterView({
 
       {/* Critical Database Automated Backup Incident Banner (Red Flag) */}
       {hasBackupIncident && (
-        <div className="rounded-xl border border-rose-500/80 bg-rose-50 dark:bg-rose-950/40 p-4 sm:p-5 shadow-[0_0_25px_rgba(244,63,94,0.15)] dark:shadow-[0_0_25px_rgba(244,63,94,0.35)] ring-1 ring-rose-500/50 space-y-3">
+        <div className="rounded-2xl border border-rose-500/80 bg-rose-50 dark:bg-rose-950/40 p-4 sm:p-5 shadow-[0_0_25px_rgba(244,63,94,0.15)] dark:shadow-[0_0_25px_rgba(244,63,94,0.35)] ring-1 ring-rose-500/50 space-y-3">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div className="flex items-start sm:items-center gap-3">
               <div className="w-10 h-10 rounded-lg bg-rose-500/20 border border-rose-500/50 flex items-center justify-center shrink-0">
-                <HardDriveDownload className="w-6 h-6 text-rose-500 dark:text-rose-400" />
+                <HardDriveDownload className="w-6 h-6 text-rose-600 dark:text-rose-400" />
               </div>
               <div>
                 <div className="flex items-center gap-2">
-                  <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-rose-500 text-white uppercase tracking-wider">
+                  <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-rose-700 dark:bg-rose-600 text-white uppercase tracking-wider">
                     DISASTER RECOVERY ALERT
                   </span>
-                  <span className="text-xs text-rose-600 dark:text-rose-400 font-mono">
+                  <span className="text-xs text-rose-700 dark:text-rose-400 font-mono">
                     {isLastBackupFailed
                       ? (backupLedger?.last_run_timestamp ? new Date(backupLedger.last_run_timestamp).toLocaleString() : 'Latest Run')
                       : '7-Day GFS Window'}
@@ -203,7 +207,7 @@ export function CommandCenterView({
               {onTriggerFullGfsBackup && isTodayActionable && (
                 <button
                   onClick={onTriggerFullGfsBackup}
-                  className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white shadow-sm transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5"
+                  className="btn-danger text-xs py-1.5 px-3.5"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
                   <span>{isLastBackupFailed ? 'Retry Backup' : 'Run Today\'s Backup'}</span>
@@ -217,7 +221,7 @@ export function CommandCenterView({
               {onNavigateToBackups && (
                 <button
                   onClick={onNavigateToBackups}
-                  className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 shadow-sm transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5"
+                  className="btn-secondary text-xs py-1.5 px-3.5"
                 >
                   <span>Inspect Ledger</span>
                 </button>
@@ -226,9 +230,9 @@ export function CommandCenterView({
           </div>
 
           {/* Root cause and diagnostic explanation box */}
-          <div className="p-3 rounded-lg bg-white/80 dark:bg-slate-950/60 border border-rose-200 dark:border-rose-900/40 text-xs font-mono space-y-1">
+          <div className="p-3 rounded-lg bg-white dark:bg-slate-950 border border-rose-200 dark:border-rose-900/40 text-xs font-mono space-y-1">
             <div className="flex items-center gap-2 text-rose-800 dark:text-rose-300">
-              <AlertTriangle className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400 shrink-0" />
+              <AlertTriangle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
               <span className="font-semibold text-slate-900 dark:text-white">Root Cause:</span>
               <span>
                 {isLastBackupFailed
@@ -242,10 +246,10 @@ export function CommandCenterView({
 
       {/* Critical Fleet Alert Banner (Red Flag) */}
       {unhealthyApps.length > 0 && (
-        <div className="rounded-xl border border-rose-500/80 bg-rose-50 dark:bg-rose-950/40 p-4 sm:p-5 shadow-[0_0_25px_rgba(244,63,94,0.15)] dark:shadow-[0_0_25px_rgba(244,63,94,0.3)] ring-1 ring-rose-500/50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 animate-pulse">
+        <div className="rounded-2xl border border-rose-500/80 bg-rose-50 dark:bg-rose-950/40 p-4 sm:p-5 shadow-[0_0_25px_rgba(244,63,94,0.15)] dark:shadow-[0_0_25px_rgba(244,63,94,0.3)] ring-1 ring-rose-500/50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 animate-pulse">
           <div className="flex items-start sm:items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-rose-500/20 border border-rose-500/50 flex items-center justify-center shrink-0">
-              <ShieldAlert className="w-6 h-6 text-rose-500 dark:text-rose-400" />
+              <ShieldAlert className="w-6 h-6 text-rose-600 dark:text-rose-400" />
             </div>
             <div>
               <h3 className="text-sm font-bold text-rose-900 dark:text-rose-200 tracking-wide">
@@ -259,12 +263,12 @@ export function CommandCenterView({
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-2 shrink-0 flex-wrap">
             {unhealthyApps.map((a) => (
               <button
                 key={a.manifest.slug}
                 onClick={() => setSelectedApp(a)}
-                className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white shadow-sm transition-all whitespace-nowrap"
+                className="btn-danger text-xs py-1.5 px-3"
               >
                 Inspect {a.manifest.displayName}
               </button>
@@ -279,13 +283,13 @@ export function CommandCenterView({
           <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100 truncate">
             Panorama Suite Applications
           </h2>
-          <p className="text-sm text-slate-500 mt-0.5">
+          <p className="text-sm text-slate-600 dark:text-slate-400 mt-0.5">
             Real-time Git provenance drift, container health, and release orchestration
           </p>
         </div>
 
         <div className="flex items-center gap-3 shrink-0">
-          <span className="text-xs font-mono text-slate-400">
+          <span className="text-xs font-mono tabular-nums text-slate-600 dark:text-slate-400">
             {apps.length} Applications Registered
           </span>
         </div>
@@ -297,7 +301,7 @@ export function CommandCenterView({
           {[1, 2, 3, 4, 5].map((i) => (
             <div
               key={i}
-              className="h-64 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 animate-pulse"
+              className="h-64 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 animate-pulse"
             />
           ))}
         </div>

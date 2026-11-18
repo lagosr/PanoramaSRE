@@ -79,21 +79,21 @@ networks:
         - subnet: 100.64.250.0/24`;
 
   return (
-    <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm p-6 space-y-6">
+    <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm p-6 space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
-          <div className="p-2.5 rounded-lg bg-sky-500/10 text-sky-600 dark:text-sky-400 border border-sky-500/20">
+          <div className="p-2.5 rounded-xl bg-[var(--color-accent-subtle)] text-[var(--color-accent-text)] border border-[var(--color-accent-ring)]">
             <Sliders className="w-5 h-5" />
           </div>
           <div>
             <h3 className="font-bold text-slate-900 dark:text-slate-100 text-base flex items-center gap-2">
               Docker Network Rules & Architecture Advisor
-              <span className="px-2 py-0.5 rounded-full text-xs font-mono font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+              <span className="px-2 py-0.5 rounded-full text-xs font-mono font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20 tabular-nums">
                 Score: {securityAudit.score}/100
               </span>
             </h3>
-            <p className="text-xs text-slate-500 font-mono">
+            <p className="text-xs text-slate-600 dark:text-slate-400 font-mono">
               Actionable network design configuration, bridge isolation rules, and optimization workflows
             </p>
           </div>
@@ -162,15 +162,15 @@ networks:
       {activeTab === 'invariants' && (
         <div className="space-y-4">
           {/* Action Bar & Audit Controls */}
-          <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
+          <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <span className="text-xs font-semibold text-slate-700 dark:text-slate-300 font-mono">
                 Hardening Status:
               </span>
-              <span className={`text-xs font-mono font-bold px-2 py-0.5 rounded ${
+              <span className={`text-xs font-mono font-bold px-2 py-0.5 rounded tabular-nums ${
                 securityAudit.securityViolationCount === 0
-                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
-                  : 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20 animate-pulse'
+                  ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20'
+                  : 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border border-rose-500/20 animate-pulse'
               }`}>
                 {securityAudit.securityViolationCount === 0
                   ? '100% PASS (8 / 8 Invariants Satisfied)'
@@ -178,11 +178,11 @@ networks:
               </span>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
               {onRunPenetrationAudit && (
                 <button
                   onClick={onRunPenetrationAudit}
-                  className="px-3 py-1.5 rounded-lg text-xs font-mono font-medium bg-emerald-600 hover:bg-emerald-500 text-white transition-colors flex items-center gap-1.5 shadow-sm cursor-pointer"
+                  className="btn-accent text-xs font-mono flex items-center gap-1.5"
                 >
                   <ShieldCheck className="w-3.5 h-3.5" />
                   Run Penetration Audit
@@ -191,7 +191,7 @@ networks:
               {onReapplyHardening && (
                 <button
                   onClick={onReapplyHardening}
-                  className="px-3 py-1.5 rounded-lg text-xs font-mono font-medium bg-slate-200 hover:bg-slate-300 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 transition-colors flex items-center gap-1.5 cursor-pointer"
+                  className="btn-secondary text-xs font-mono flex items-center gap-1.5"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
                   Re-Apply Hardening
@@ -205,7 +205,7 @@ networks:
             {(securityAudit.invariants || []).map((inv) => (
               <div
                 key={inv.id}
-                className={`p-4 rounded-xl border transition-all ${
+                className={`p-4 rounded-2xl border transition-all ${
                   inv.status === 'PASS'
                     ? 'border-emerald-500/30 bg-emerald-500/5 dark:bg-emerald-500/5'
                     : 'border-rose-500/60 bg-rose-50 dark:bg-rose-950/30 shadow-[0_0_15px_rgba(244,63,94,0.1)]'
@@ -216,7 +216,7 @@ networks:
                     <span className="font-mono text-xs font-bold px-2 py-0.5 rounded bg-slate-200 dark:bg-slate-800 text-slate-800 dark:text-slate-200">
                       {inv.id}
                     </span>
-                    <span className="text-[10px] font-mono px-2 py-0.5 rounded uppercase font-semibold bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20">
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded uppercase font-semibold bg-[var(--color-accent-subtle)] text-[var(--color-accent-text)] border border-[var(--color-accent-ring)]">
                       {inv.category}
                     </span>
                   </div>
@@ -348,7 +348,7 @@ networks:
                       spec.args
                     );
                   }}
-                  className="px-3 py-1.5 rounded-lg text-xs font-mono font-medium bg-emerald-600 hover:bg-emerald-500 text-white transition-colors flex items-center gap-1.5 shadow-sm"
+                  className="btn-accent text-xs font-mono flex items-center gap-1.5"
                 >
                   <Play className="w-3.5 h-3.5" />
                   Audit Active Bridges via SSH
@@ -360,16 +360,16 @@ networks:
           {/* Compose Network Snippet */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between text-xs font-mono">
-              <span className="text-slate-500">docker-compose.yml Network Definition:</span>
+              <span className="text-slate-600 dark:text-slate-400">docker-compose.yml Network Definition:</span>
               <button
                 onClick={() => handleCopy(sampleComposeNetworkBlock, 'compose')}
-                className="text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-1"
+                className="text-[var(--color-brand-text)] hover:underline flex items-center gap-1 cursor-pointer"
               >
                 {copiedKey === 'compose' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
                 Copy Snippet
               </button>
             </div>
-            <pre className="p-3 rounded-lg bg-[#050b14] border border-slate-800 text-emerald-400 font-mono text-xs overflow-x-auto">
+            <pre className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/90 text-emerald-900 dark:bg-[#050b14] dark:border-slate-800 dark:text-emerald-400 font-mono text-xs overflow-x-auto">
               {sampleComposeNetworkBlock}
             </pre>
           </div>
@@ -379,22 +379,22 @@ networks:
       {/* Tab 2: Inter-Container Communication (ICC) */}
       {activeTab === 'icc' && (
         <div className="space-y-4">
-          <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 space-y-2">
+          <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 space-y-2">
             <h4 className="font-bold text-slate-800 dark:text-slate-200 text-xs flex items-center gap-2">
-              <Shield className="w-4 h-4 text-emerald-500" />
+              <Shield className="w-4 h-4 text-[var(--color-brand-text)]" />
               Inter-Container Communication (ICC) Security Policy
             </h4>
             <p className="text-xs text-slate-600 dark:text-slate-400">
-              By default, Docker bridges operate with <code className="text-emerald-600 dark:text-emerald-400">icc=true</code>, allowing any container on the bridge to transmit packets to any other container. Setting <code className="text-emerald-600 dark:text-emerald-400">icc=false</code> drops inter-container traffic at the iptables FORWARD chain unless explicit container links are defined.
+              By default, Docker bridges operate with <code className="text-emerald-700 dark:text-emerald-400">icc=true</code>, allowing any container on the bridge to transmit packets to any other container. Setting <code className="text-emerald-700 dark:text-emerald-400">icc=false</code> drops inter-container traffic at the iptables FORWARD chain unless explicit container links are defined.
             </p>
           </div>
 
-          <div className="flex items-center justify-between p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+          <div className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
             <div>
               <span className="font-bold text-slate-800 dark:text-slate-200 text-xs block font-mono">
                 Probing Container L3 Isolation
               </span>
-              <span className="text-xs text-slate-500">
+              <span className="text-xs text-slate-600 dark:text-slate-400">
                 Execute a dry-run ping from tasty-basket to spendy-ledger to verify if direct subnet traffic is blocked.
               </span>
             </div>
@@ -411,9 +411,9 @@ networks:
                     spec.args
                   );
                 }}
-                className="px-3 py-1.5 rounded-lg text-xs font-mono font-medium bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 transition-colors flex items-center gap-1.5"
+                className="btn-secondary text-xs font-mono flex items-center gap-1.5"
               >
-                <Terminal className="w-3.5 h-3.5 text-emerald-500" />
+                <Terminal className="w-3.5 h-3.5 text-[var(--color-accent-text)]" />
                 Test Container Ping
               </button>
             )}
@@ -424,23 +424,23 @@ networks:
       {/* Tab 3: Port Binding Scope Audit */}
       {activeTab === 'loopback' && (
         <div className="space-y-4">
-          <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 space-y-3">
+          <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 space-y-3">
             <div className="flex items-center justify-between">
               <span className="font-bold text-slate-800 dark:text-slate-200 text-xs flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                 Host Port Binding Scope Audit
               </span>
-              <span className="text-xs font-mono font-semibold text-emerald-600 dark:text-emerald-400">
+              <span className="text-xs font-mono font-semibold text-emerald-700 dark:text-emerald-400">
                 {securityAudit.zeroBindViolations.length === 0 ? 'ALL APPS PROTECTED' : 'VIOLATION DETECTED'}
               </span>
             </div>
 
             <p className="text-xs text-slate-600 dark:text-slate-400">
-              Rule Requirement: In order to enforce zero-trust proxying and authentication, all child application containers must bind exclusively to <code className="text-emerald-600 dark:text-emerald-400">127.0.0.1:PORT</code>. Binding to <code className="text-rose-500 font-bold">0.0.0.0:PORT</code> allows devices on the local LAN to access raw unauthenticated Next.js web servers.
+              Rule Requirement: In order to enforce zero-trust proxying and authentication, all child application containers must bind exclusively to <code className="text-emerald-700 dark:text-emerald-400">127.0.0.1:PORT</code>. Binding to <code className="text-rose-600 dark:text-rose-400 font-bold">0.0.0.0:PORT</code> allows devices on the local LAN to access raw unauthenticated Next.js web servers.
             </p>
 
-            <div className="pt-2 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between">
-              <span className="text-xs font-mono text-slate-500">
+            <div className="pt-2 border-t border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-mono text-slate-600 dark:text-slate-400 tabular-nums">
                 Verified Confined Containers: {topology.routes.length} / {topology.routes.length}
               </span>
 
@@ -456,7 +456,7 @@ networks:
                       spec.args
                     );
                   }}
-                  className="px-3 py-1.5 rounded-lg text-xs font-mono font-medium bg-emerald-600 hover:bg-emerald-500 text-white transition-colors flex items-center gap-1.5 shadow-sm"
+                  className="btn-accent text-xs font-mono flex items-center gap-1.5"
                 >
                   <Terminal className="w-3.5 h-3.5" />
                   Verify Port Bindings via SSH
@@ -470,28 +470,28 @@ networks:
       {/* Tab 4: Daemon Tuning & Userland Proxy */}
       {activeTab === 'daemon' && (
         <div className="space-y-4">
-          <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 space-y-2">
+          <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 space-y-2">
             <h4 className="font-bold text-slate-800 dark:text-slate-200 text-xs flex items-center gap-2">
-              <Cpu className="w-4 h-4 text-purple-500" />
+              <Cpu className="w-4 h-4 text-purple-600 dark:text-purple-400" />
               Docker Userland Proxy Memory Optimization
             </h4>
             <p className="text-xs text-slate-600 dark:text-slate-400">
-              By default, Docker launches a separate <code className="text-purple-600 dark:text-purple-400">docker-proxy</code> process in userland for every exposed port. On resource-constrained hardware like the Raspberry Pi running DietPi, disabling this via <code className="text-purple-600 dark:text-purple-400">"userland-proxy": false</code> delegates all NAT forwarding to the Linux kernel Netfilter (iptables), reducing idle RAM consumption.
+              By default, Docker launches a separate <code className="text-purple-700 dark:text-purple-400">docker-proxy</code> process in userland for every exposed port. On resource-constrained hardware like the Raspberry Pi running DietPi, disabling this via <code className="text-purple-700 dark:text-purple-400">"userland-proxy": false</code> delegates all NAT forwarding to the Linux kernel Netfilter (iptables), reducing idle RAM consumption.
             </p>
           </div>
 
           <div className="space-y-1.5">
             <div className="flex items-center justify-between text-xs font-mono">
-              <span className="text-slate-500">Recommended /etc/docker/daemon.json:</span>
+              <span className="text-slate-600 dark:text-slate-400">Recommended /etc/docker/daemon.json:</span>
               <button
                 onClick={() => handleCopy(sampleDaemonJson, 'daemon')}
-                className="text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-1"
+                className="text-[var(--color-brand-text)] hover:underline flex items-center gap-1 cursor-pointer"
               >
                 {copiedKey === 'daemon' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
                 Copy JSON
               </button>
             </div>
-            <pre className="p-3 rounded-lg bg-[#050b14] border border-slate-800 text-emerald-400 font-mono text-xs overflow-x-auto">
+            <pre className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/90 text-emerald-900 dark:bg-[#050b14] dark:border-slate-800 dark:text-emerald-400 font-mono text-xs overflow-x-auto">
               {sampleDaemonJson}
             </pre>
           </div>
@@ -509,7 +509,7 @@ networks:
                   <span className="font-mono text-xs font-bold px-2 py-0.5 rounded bg-slate-200 dark:bg-slate-800 text-slate-800 dark:text-slate-200">
                     {selectedInvariant.id}
                   </span>
-                  <span className="text-[10px] font-mono px-2 py-0.5 rounded uppercase font-semibold bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20">
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded uppercase font-semibold bg-[var(--color-accent-subtle)] text-[var(--color-accent-text)] border border-[var(--color-accent-ring)]">
                     {selectedInvariant.category}
                   </span>
                   <span
@@ -528,7 +528,8 @@ networks:
               </div>
               <button
                 onClick={() => setSelectedInvariant(null)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                aria-label="Close inspector"
+                className="min-w-[44px] min-h-[44px] flex items-center justify-center p-2 rounded-xl text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -537,28 +538,28 @@ networks:
             {/* Scrollable Modal Body */}
             <div className="flex-1 overflow-y-auto py-4 space-y-4">
               {/* Invariant Details */}
-              <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800 text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
+              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
                 {selectedInvariant.details}
               </div>
 
               {/* Remediation if Failed */}
               {selectedInvariant.status !== 'PASS' && (
-                <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-xs text-rose-700 dark:text-rose-300 font-mono">
+                <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-700 dark:text-rose-300 font-mono">
                   <span className="font-bold">Required Remediation:</span> {selectedInvariant.remediation}
                 </div>
               )}
 
               {/* Verification Command / Probe Script */}
               <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-mono font-semibold text-slate-500 dark:text-slate-400 uppercase">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs font-mono font-semibold text-slate-600 dark:text-slate-400 uppercase">
                     Verification Command / SSH Probe
                   </span>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-nowrap">
                     {selectedInvariant.commandSnippet && (
                       <button
                         onClick={() => handleCopy(selectedInvariant.commandSnippet!, 'modal_cmd')}
-                        className="px-2.5 py-1 rounded text-xs font-mono bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 flex items-center gap-1 transition-colors cursor-pointer"
+                        className="btn-secondary text-xs font-mono flex items-center gap-1"
                       >
                         {copiedKey === 'modal_cmd' ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
                         <span>{copiedKey === 'modal_cmd' ? 'Copied' : 'Copy Command'}</span>
@@ -575,7 +576,7 @@ networks:
                           );
                           setSelectedInvariant(null);
                         }}
-                        className="px-2.5 py-1 rounded text-xs font-mono bg-emerald-600 hover:bg-emerald-500 text-white flex items-center gap-1.5 transition-colors cursor-pointer font-medium"
+                        className="btn-accent text-xs font-mono flex items-center gap-1.5"
                       >
                         <Play className="w-3.5 h-3.5" />
                         <span>Run Live SSH Probe</span>
@@ -584,7 +585,7 @@ networks:
                   </div>
                 </div>
 
-                <pre className="p-3 rounded-xl bg-slate-950 text-emerald-400 font-mono text-xs overflow-x-auto border border-slate-800 leading-relaxed select-text">
+                <pre className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/90 text-emerald-900 dark:bg-[#050b14] dark:border-slate-800 dark:text-emerald-400 font-mono text-xs overflow-x-auto leading-relaxed select-text">
                   {selectedInvariant.commandSnippet || 'N/A'}
                 </pre>
               </div>
@@ -592,17 +593,17 @@ networks:
               {/* Colorized Script & Probe Output Evidence */}
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-mono font-semibold text-slate-500 dark:text-slate-400 uppercase">
+                  <span className="text-xs font-mono font-semibold text-slate-600 dark:text-slate-400 uppercase">
                     Captured Script Output & Telemetry Trace
                   </span>
                   {selectedInvariant.evaluatedAt && (
-                    <span className="text-[11px] font-mono text-slate-500">
+                    <span className="text-[11px] font-mono text-slate-600 dark:text-slate-400 tabular-nums">
                       Evaluated: {new Date(selectedInvariant.evaluatedAt).toLocaleString()}
                     </span>
                   )}
                 </div>
 
-                <div className="p-4 rounded-xl bg-[#050b14] border border-slate-800 font-mono text-xs overflow-x-auto max-h-80 space-y-1 shadow-inner select-text">
+                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/90 text-slate-900 dark:bg-[#050b14] dark:border-slate-800 dark:text-slate-100 font-mono text-xs overflow-x-auto max-h-80 space-y-1 shadow-inner select-text">
                   {selectedInvariant.evidence ? (
                     selectedInvariant.evidence.split('\n').map((line, idx) => (
                       <div key={idx} className="leading-relaxed whitespace-pre font-mono">
@@ -620,7 +621,7 @@ networks:
             <div className="pt-4 border-t border-slate-200 dark:border-slate-800 flex items-center justify-end">
               <button
                 onClick={() => setSelectedInvariant(null)}
-                className="px-4 py-2 rounded-lg text-xs font-medium bg-slate-200 hover:bg-slate-300 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 transition-colors cursor-pointer"
+                className="btn-secondary text-xs"
               >
                 Close Inspector
               </button>

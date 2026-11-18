@@ -2518,7 +2518,7 @@ export const App: React.FC = () => {
   );
 
   return (
-    <div className="flex flex-col h-screen w-screen bg-slate-50 dark:bg-[#050b14] text-slate-900 dark:text-slate-100 overflow-hidden font-sans">
+    <div className="flex flex-col h-screen w-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 overflow-hidden font-sans">
       {/* Upper Area: Sidebar Navigation + Main Application Content */}
       <div className="flex flex-1 min-h-0 w-full overflow-hidden relative">
         <SidebarRail
@@ -2561,6 +2561,7 @@ export const App: React.FC = () => {
               appliances={appliances}
               sslFleet={sslFleet}
               backupLedger={backupLedger}
+              isBackupIncidentDismissed={isBackupIncidentDismissed}
               optInSnapshot={optInSnapshot}
               terminalTabs={terminalTabs}
               isLoading={apps.length === 0}
@@ -2822,6 +2823,8 @@ export const App: React.FC = () => {
               onOpenInBottomConsole={handleOpenInBottomConsole}
               onAbortJob={handleAbortJob}
               onClearTab={handleClearTab}
+              isIncidentDismissed={isBackupIncidentDismissed}
+              onDismissIncident={handleDismissBackupIncident}
             />
           )}
 

@@ -13,6 +13,7 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import { CustomSelect, SelectOption } from '../ui/CustomSelect';
+import { ToggleSwitch } from '@lagosr/panorama-ui-kit';
 
 export interface BatchDeployOptions {
   selectedApps: DiscoveredApp[];
@@ -145,26 +146,27 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-slate-900/80 backdrop-blur-sm">
-      <div className="w-full max-w-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl p-6 relative flex flex-col max-h-[92vh] overflow-hidden">
+      <div className="w-full max-w-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl p-6 relative flex flex-col max-h-[92vh] overflow-hidden">
         {/* Close Button */}
         <button
           onClick={onCancel}
           disabled={isProcessing}
-          className="absolute top-5 right-5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors"
+          aria-label="Close modal"
+          className="absolute top-4 right-4 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
         >
           <X className="w-5 h-5" />
         </button>
 
         {/* Modal Header */}
-        <div className="flex items-center gap-3 text-emerald-600 dark:text-emerald-400 mb-2 shrink-0">
-          <div className="p-2.5 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
+        <div className="flex items-center gap-3 text-[var(--color-brand-text)] mb-2 shrink-0">
+          <div className="p-2.5 bg-[var(--color-brand-subtle)] border border-[var(--color-brand-ring)] rounded-xl">
             <Layers className="w-6 h-6" />
           </div>
           <div>
             <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100">
               Orchestrate Batch Suite Deployment
             </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 font-mono">
+            <p className="text-xs text-slate-600 dark:text-slate-400 font-mono">
               Customize target selection and execution sequence
             </p>
           </div>
@@ -300,7 +302,7 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
         </div>
 
         {/* Global Pipeline Parameters (SemVer Bump & Dirty Tree) */}
-        <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800/80 space-y-3 shrink-0">
+        <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-3 shrink-0">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
             <div className="flex items-center gap-2 flex-1">
               <span className="text-slate-600 dark:text-slate-400 whitespace-nowrap">SemVer Bump:</span>
@@ -313,21 +315,18 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
               </div>
             </div>
 
-            <label className="flex items-center gap-2 cursor-pointer text-slate-600 dark:text-slate-400 text-xs">
-              <input
-                type="checkbox"
-                checked={allowDirty}
-                onChange={(e) => setAllowDirty(e.target.checked)}
-                disabled={isProcessing}
-                className="rounded border-slate-300 dark:border-slate-700 text-emerald-500 focus:ring-0"
-              />
-              <span>Allow dirty git tree</span>
-            </label>
+            <ToggleSwitch
+              size="sm"
+              checked={allowDirty}
+              onChange={setAllowDirty}
+              disabled={isProcessing}
+              label="Allow dirty git tree"
+            />
           </div>
 
           {/* Safety & Order Warning */}
           <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
-            <Info className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+            <Info className="w-4 h-4 text-[var(--color-brand-text)] shrink-0" />
             <span>
               Deployments execute sequentially. If any application fails post-deployment verification, the circuit-breaker halts all subsequent steps immediately.
             </span>
@@ -338,7 +337,7 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
         <div className="pt-4 border-t border-slate-200 dark:border-slate-800 mt-3 space-y-3 shrink-0">
           <div className="flex items-center gap-3">
             <label className="text-xs font-mono text-slate-600 dark:text-slate-400 whitespace-nowrap">
-              Type <span className="text-emerald-600 dark:text-emerald-400 font-bold">DEPLOY</span> to confirm:
+              Type <span className="text-[var(--color-brand-text)] font-bold">DEPLOY</span> to confirm:
             </label>
             <input
               type="text"
@@ -346,7 +345,7 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
               onChange={(e) => setConfirmText(e.target.value)}
               disabled={isProcessing || executionQueue.length === 0}
               placeholder="DEPLOY"
-              className="flex-1 px-3 py-1.5 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-mono text-slate-900 dark:text-slate-100 focus:border-emerald-500 focus:outline-none"
+              className="flex-1 px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-mono text-slate-900 dark:text-slate-100 focus:border-[var(--color-brand)] focus:outline-none"
             />
           </div>
 
@@ -355,7 +354,7 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
               type="button"
               onClick={onCancel}
               disabled={isProcessing}
-              className="px-4 py-2 text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors"
+              className="btn-secondary text-xs"
             >
               Cancel
             </button>
@@ -363,7 +362,7 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
               type="button"
               onClick={handleStartDeployment}
               disabled={!isConfirmed || executionQueue.length === 0 || isProcessing}
-              className="px-5 py-2 text-xs font-bold bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg shadow-lg transition-all flex items-center gap-2"
+              className="btn-primary text-xs font-bold flex items-center gap-2"
             >
               <Rocket className="w-4 h-4" />
               <span>

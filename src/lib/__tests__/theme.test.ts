@@ -41,6 +41,7 @@ describe('PanoramaSRE Theme System & Light Mode', () => {
           mockClasses.delete(cls);
         },
       },
+      setAttribute: vi.fn(),
       style: mockStyle,
     };
 
@@ -89,6 +90,7 @@ describe('PanoramaSRE Theme System & Light Mode', () => {
     expect(mockClasses.has('light')).toBe(true);
     expect(mockClasses.has('dark')).toBe(false);
     expect(mockStyle['colorScheme']).toBe('light');
+    expect(mockClasses.size).toBe(1);
   });
 
   it('applies dark theme correctly to the HTML DOM root', () => {
@@ -102,10 +104,11 @@ describe('PanoramaSRE Theme System & Light Mode', () => {
     expect(mockStyle['colorScheme']).toBe('dark');
   });
 
-  it('resolves system theme matching prefers-color-scheme media query', () => {
+  it('resolves system theme matching prefers-color-scheme media query and sets sre brand attribute', () => {
     const resolved = applyThemeToDom('system');
     expect(resolved).toBe('light');
     expect(mockClasses.has('light')).toBe(true);
     expect(mockStyle['colorScheme']).toBe('light');
+    expect((document.documentElement as unknown as { setAttribute: ReturnType<typeof vi.fn> }).setAttribute).toHaveBeenCalledWith('data-brand', 'sre');
   });
 });

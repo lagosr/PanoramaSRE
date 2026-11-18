@@ -41,7 +41,7 @@ export function TopLiveSyncBar({
   const hasFleetAlert = totalAppCount > 0 && prodHealthyCount < totalAppCount;
 
   return (
-    <header className="h-16 border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-900/50 backdrop-blur-md px-3 sm:px-4 lg:px-6 flex items-center justify-between gap-3 lg:gap-4 z-10 select-none overflow-hidden">
+    <header className="h-16 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 sm:px-4 lg:px-6 flex items-center justify-between gap-3 lg:gap-4 z-10 select-none overflow-hidden">
       {/* 2-Row Telemetry & Status Grid (Matches SidebarRail h-16 height, no aggressive hiding) */}
       <div className="flex-1 flex flex-col justify-center gap-1.5 min-w-0 py-1">
         {/* Row 1: Infrastructure Network Posture, Dev & Fleet Health Counters, Telemetry Sync */}
@@ -56,7 +56,7 @@ export function TopLiveSyncBar({
                 >
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 dark:bg-emerald-400 animate-pulse shrink-0" />
                   <span>LAN DIRECT</span>
-                  <span className="font-mono font-medium text-emerald-700/80 dark:text-emerald-300/80"> (172.25.25.5)</span>
+                  <span className="font-mono font-medium tabular-nums text-emerald-800 dark:text-emerald-300"> (172.25.25.5)</span>
                 </span>
               )}
               {networkPosture === 'WAN_CLOUDFLARE' && (
@@ -84,9 +84,9 @@ export function TopLiveSyncBar({
               className="flex items-center gap-1 text-[11px] text-slate-600 dark:text-slate-400 border-l border-slate-200 dark:border-slate-800 pl-2 sm:pl-2.5 shrink-0 whitespace-nowrap"
               title={`Dev Servers: ${devRunningCount} of ${totalAppCount} currently active`}
             >
-              <span className="font-medium text-slate-500 dark:text-slate-400">Dev:</span>
+              <span className="font-medium text-slate-600 dark:text-slate-400">Dev:</span>
               <span
-                className={`font-mono font-medium ${
+                className={`font-mono font-medium tabular-nums ${
                   devRunningCount === totalAppCount
                     ? 'text-emerald-700 dark:text-emerald-400'
                     : devRunningCount > 0
@@ -103,16 +103,16 @@ export function TopLiveSyncBar({
               className="flex items-center gap-1 text-[11px] text-slate-600 dark:text-slate-400 border-l border-slate-200 dark:border-slate-800 pl-2 sm:pl-2.5 shrink-0 whitespace-nowrap"
               title={`Production Fleet: ${prodHealthyCount} of ${totalAppCount} containers healthy`}
             >
-              <span className="font-medium text-slate-500 dark:text-slate-400">Prod:</span>
+              <span className="font-medium text-slate-600 dark:text-slate-400">Prod:</span>
               {hasFleetAlert ? (
-                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-rose-500/20 text-rose-800 dark:text-rose-300 border border-rose-500/50 shadow-[0_0_8px_rgba(244,63,94,0.3)] animate-pulse font-semibold shrink-0">
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-rose-500/20 text-rose-800 dark:text-rose-300 border border-rose-500/50 shadow-[0_0_8px_rgba(244,63,94,0.3)] animate-pulse font-semibold tabular-nums shrink-0">
                   <AlertCircle className="w-3 h-3 text-rose-600 dark:text-rose-400 shrink-0" />
                   <span>CRITICAL: {totalAppCount - prodHealthyCount} DOWN</span>
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1 shrink-0">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 dark:bg-emerald-400 shrink-0" />
-                  <span className="font-mono font-medium text-emerald-700 dark:text-emerald-400">
+                  <span className="font-mono font-medium tabular-nums text-emerald-700 dark:text-emerald-400">
                     {prodHealthyCount}/{totalAppCount} healthy
                   </span>
                 </span>
@@ -123,11 +123,11 @@ export function TopLiveSyncBar({
           {/* Row 1 Right: Last Telemetry Sync Timestamp */}
           {lastSyncTime && (
             <div
-              className="flex items-center text-[11px] text-slate-500 dark:text-slate-400 whitespace-nowrap shrink-0"
+              className="flex items-center text-[11px] text-slate-600 dark:text-slate-400 whitespace-nowrap shrink-0"
               title={`Last telemetry sync from host: ${lastSyncTime}`}
             >
-              <span className="text-slate-400 dark:text-slate-500 mr-1">Last sync:</span>
-              <span className="font-mono text-slate-700 dark:text-slate-300 font-medium">{lastSyncTime}</span>
+              <span className="text-slate-600 dark:text-slate-400 mr-1">Last sync:</span>
+              <span className="font-mono tabular-nums text-slate-700 dark:text-slate-300 font-medium">{lastSyncTime}</span>
             </div>
           )}
         </div>
@@ -149,14 +149,14 @@ export function TopLiveSyncBar({
                 <Bot className="w-3 h-3 shrink-0" />
                 <span>MCP: {mcpStatus.isOnline ? 'Online' : 'Offline'}</span>
                 {mcpStatus.pid && (
-                  <span className="font-mono text-[10px] text-slate-500 dark:text-slate-400">
+                  <span className="font-mono tabular-nums text-[10px] text-slate-600 dark:text-slate-400">
                     PID {mcpStatus.pid}
                   </span>
                 )}
               </button>
             ) : (
-              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] text-slate-500 border border-slate-200 dark:border-slate-800 shrink-0">
-                <Bot className="w-3 h-3 text-slate-400 shrink-0" />
+              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-800 shrink-0">
+                <Bot className="w-3 h-3 text-slate-500 dark:text-slate-400 shrink-0" />
                 <span>MCP: Standby</span>
               </span>
             )}
@@ -165,10 +165,10 @@ export function TopLiveSyncBar({
             {backupFailureCount > 0 && (
               <button
                 onClick={onNavigateToBackups}
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/20 hover:bg-rose-500/30 text-rose-700 dark:text-rose-300 border border-rose-500/60 shadow-[0_0_8px_rgba(244,63,94,0.4)] animate-pulse font-semibold text-[11px] transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/20 hover:bg-rose-500/30 text-rose-700 dark:text-rose-300 border border-rose-500/60 shadow-[0_0_8px_rgba(244,63,94,0.4)] animate-pulse font-semibold tabular-nums text-[11px] transition-colors cursor-pointer whitespace-nowrap shrink-0"
                 title={`Automated daily database backup failed for ${backupFailureCount} app(s)! Click to inspect.`}
               >
-                <AlertCircle className="w-3 h-3 text-rose-500 dark:text-rose-400 shrink-0" />
+                <AlertCircle className="w-3 h-3 text-rose-600 dark:text-rose-400 shrink-0" />
                 <span>BACKUP INCIDENT: {backupFailureCount} FAILED</span>
               </button>
             )}
@@ -177,10 +177,10 @@ export function TopLiveSyncBar({
             {securityViolationCount > 0 && (
               <button
                 onClick={onNavigateToTopology}
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/20 hover:bg-rose-500/30 text-rose-700 dark:text-rose-300 border border-rose-500/60 shadow-[0_0_8px_rgba(244,63,94,0.4)] animate-pulse font-semibold text-[11px] transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/20 hover:bg-rose-500/30 text-rose-700 dark:text-rose-300 border border-rose-500/60 shadow-[0_0_8px_rgba(244,63,94,0.4)] animate-pulse font-semibold tabular-nums text-[11px] transition-colors cursor-pointer whitespace-nowrap shrink-0"
                 title={`WSH Network or Container Security Invariant Violation Detected (${securityViolationCount} checks failed)! Click to inspect topology.`}
               >
-                <ShieldAlert className="w-3 h-3 text-rose-500 dark:text-rose-400 shrink-0" />
+                <ShieldAlert className="w-3 h-3 text-rose-600 dark:text-rose-400 shrink-0" />
                 <span>SECURITY VIOLATION: {securityViolationCount} FAILED</span>
               </button>
             )}
@@ -190,13 +190,13 @@ export function TopLiveSyncBar({
           {lastSecurityAuditTime && (
             <button
               onClick={onNavigateToTopology}
-              className="inline-flex items-center gap-1 text-[11px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 transition-colors cursor-pointer select-none whitespace-nowrap shrink-0"
+              className="inline-flex items-center gap-1 text-[11px] text-slate-600 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 transition-colors cursor-pointer select-none whitespace-nowrap shrink-0"
               title={`WSH Network Hardening & Penetration Audit Last Checked at ${lastSecurityAuditTime} (every ${securityAuditInterval}m). Click to inspect topology & rules advisor.`}
             >
-              <ShieldCheck className="w-3 h-3 text-emerald-500 shrink-0" />
-              <span className="text-slate-400 dark:text-slate-500">Audit:</span>
-              <span className="font-mono text-slate-700 dark:text-slate-300 font-medium">{lastSecurityAuditTime}</span>
-              <span className="text-[10px] font-mono text-slate-400 ml-0.5">({securityAuditInterval}m)</span>
+              <ShieldCheck className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <span className="text-slate-600 dark:text-slate-400">Audit:</span>
+              <span className="font-mono tabular-nums text-slate-700 dark:text-slate-300 font-medium">{lastSecurityAuditTime}</span>
+              <span className="text-[10px] font-mono tabular-nums text-slate-600 dark:text-slate-400 ml-0.5">({securityAuditInterval}m)</span>
             </button>
           )}
         </div>
@@ -210,7 +210,7 @@ export function TopLiveSyncBar({
         {/* Quick Theme Toggle Button */}
         <button
           onClick={toggleTheme}
-          className="h-9 w-9 flex items-center justify-center rounded-lg text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 transition-colors shrink-0 cursor-pointer"
+          className="h-9 w-9 flex items-center justify-center rounded-xl text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 transition-colors shrink-0 cursor-pointer"
           title={`Active theme: ${theme} (resolved: ${resolvedTheme}). Click to toggle.`}
           aria-label="Toggle color theme"
         >
@@ -225,12 +225,12 @@ export function TopLiveSyncBar({
         <button
           onClick={onRefresh}
           disabled={isSyncing}
-          className={`h-9 flex items-center gap-2 px-3.5 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+          className={`h-9 flex items-center gap-2 px-3.5 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
             isSyncing ? 'opacity-50 cursor-not-allowed' : ''
           }`}
           title="Sync telemetry from WSH host and local dev servers now"
         >
-          <RefreshCw className={`w-3.5 h-3.5 shrink-0 ${isSyncing ? 'animate-spin text-orange-500' : ''}`} />
+          <RefreshCw className={`w-3.5 h-3.5 shrink-0 ${isSyncing ? 'animate-spin text-[var(--color-brand-text)]' : ''}`} />
           <span>{isSyncing ? 'Syncing...' : 'Sync Now'}</span>
         </button>
       </div>

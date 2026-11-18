@@ -26,6 +26,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { CustomSelect } from '../ui/CustomSelect';
 import { WorkStreamContainer } from '../ui/WorkStreamContainer';
+import { SegmentedControl, ToggleSwitch } from '@lagosr/panorama-ui-kit';
 import { formatConsoleLine, stripAnsiCodes } from '../layout/ConsoleColorizer';
 import { useSmartAutoScroll } from '../../hooks/useSmartAutoScroll';
 import { APP_VERSION_INFO } from '../../lib/version';
@@ -411,13 +412,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-slate-50 dark:bg-[#050b14] overflow-hidden">
+    <div className="flex-1 flex flex-col h-full bg-slate-50 dark:bg-slate-950 overflow-hidden">
       {/* View Header */}
-      <div className="h-14 border-b border-slate-200 dark:border-slate-800 px-6 flex items-center justify-between bg-white dark:bg-transparent">
+      <div className="h-14 border-b border-slate-200 dark:border-slate-800 px-6 flex items-center justify-between bg-white dark:bg-slate-900">
         <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">Settings & SRE Governance</h2>
         <button
           onClick={handleSave}
-          className="flex items-center space-x-1.5 px-3 py-1.5 text-xs bg-orange-600 hover:bg-orange-500 text-white rounded-lg transition-colors font-medium cursor-pointer shadow-sm"
+          className="btn-primary text-xs flex items-center space-x-1.5"
         >
           {isSaved ? <Check className="w-3.5 h-3.5" /> : <RefreshCw className="w-3.5 h-3.5" />}
           <span>{isSaved ? 'Saved!' : 'Save Changes'}</span>
@@ -425,11 +426,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       </div>
 
       {/* 4-Tab Bar */}
-      <div className="border-b border-slate-200 dark:border-slate-800 px-6 flex space-x-6 bg-white dark:bg-transparent">
+      <div className="border-b border-slate-200 dark:border-slate-800 px-6 flex space-x-6 bg-white dark:bg-slate-900 overflow-x-auto">
         <button
           onClick={() => setActiveTab('general')}
-          className={`py-3 text-sm font-medium border-b-2 flex items-center space-x-2 transition-colors ${
-            activeTab === 'general' ? 'border-orange-500 text-orange-600 dark:text-orange-400 font-semibold' : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+          className={`py-3 min-h-[44px] text-sm font-medium border-b-2 flex items-center space-x-2 transition-colors whitespace-nowrap cursor-pointer ${
+            activeTab === 'general' ? 'border-[var(--color-brand)] text-[var(--color-brand-text)] font-semibold' : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
           }`}
         >
           <Sliders className="w-4 h-4" />
@@ -437,8 +438,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </button>
         <button
           onClick={() => setActiveTab('ssh')}
-          className={`py-3 text-sm font-medium border-b-2 flex items-center space-x-2 transition-colors ${
-            activeTab === 'ssh' ? 'border-orange-500 text-orange-600 dark:text-orange-400 font-semibold' : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+          className={`py-3 min-h-[44px] text-sm font-medium border-b-2 flex items-center space-x-2 transition-colors whitespace-nowrap cursor-pointer ${
+            activeTab === 'ssh' ? 'border-[var(--color-brand)] text-[var(--color-brand-text)] font-semibold' : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
           }`}
         >
           <Shield className="w-4 h-4" />
@@ -446,8 +447,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </button>
         <button
           onClick={() => setActiveTab('logs')}
-          className={`py-3 text-sm font-medium border-b-2 flex items-center space-x-2 transition-colors ${
-            activeTab === 'logs' ? 'border-orange-500 text-orange-600 dark:text-orange-400 font-semibold' : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+          className={`py-3 min-h-[44px] text-sm font-medium border-b-2 flex items-center space-x-2 transition-colors whitespace-nowrap cursor-pointer ${
+            activeTab === 'logs' ? 'border-[var(--color-brand)] text-[var(--color-brand-text)] font-semibold' : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
           }`}
         >
           <Terminal className="w-4 h-4" />
@@ -455,8 +456,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </button>
         <button
           onClick={() => setActiveTab('database')}
-          className={`py-3 text-sm font-medium border-b-2 flex items-center space-x-2 transition-colors ${
-            activeTab === 'database' ? 'border-orange-500 text-orange-600 dark:text-orange-400 font-semibold' : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+          className={`py-3 min-h-[44px] text-sm font-medium border-b-2 flex items-center space-x-2 transition-colors whitespace-nowrap cursor-pointer ${
+            activeTab === 'database' ? 'border-[var(--color-brand)] text-[var(--color-brand-text)] font-semibold' : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
           }`}
         >
           <Database className="w-4 h-4" />
@@ -469,86 +470,57 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         {activeTab === 'general' && (
           <div className="max-w-4xl space-y-6">
             {/* Appearance & Color Scheme Preference */}
-            <div className="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4 shadow-sm">
-              <div className="flex items-center justify-between">
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4 shadow-sm">
+              <div className="flex items-center justify-between gap-2">
                 <div>
                   <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Appearance & Theme Preference</h3>
-                  <p className="text-xs text-slate-500">Select your preferred user theme. Synchronized across PanoramaDrSuite.</p>
+                  <p className="text-xs text-slate-600 dark:text-slate-400">Select your preferred user theme. Synchronized across PanoramaDrSuite.</p>
                 </div>
-                <span className="text-xs font-mono px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 uppercase">
+                <span className="text-xs font-mono px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 uppercase">
                   Active: {resolvedTheme}
                 </span>
               </div>
 
-              <div className="grid grid-cols-3 gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setTheme('dark')}
-                  className={`p-3 rounded-lg border flex flex-col items-center gap-2 transition-all cursor-pointer ${
-                    theme === 'dark'
-                      ? 'bg-orange-500/10 border-orange-500 text-orange-600 dark:text-orange-400 ring-1 ring-orange-500/50'
-                      : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700/80 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:border-slate-300 dark:hover:border-slate-600'
-                  }`}
-                >
-                  <Moon className="w-5 h-5" />
-                  <span className="text-xs font-medium">Dark Mode</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setTheme('light')}
-                  className={`p-3 rounded-lg border flex flex-col items-center gap-2 transition-all cursor-pointer ${
-                    theme === 'light'
-                      ? 'bg-orange-500/10 border-orange-500 text-orange-600 dark:text-orange-400 ring-1 ring-orange-500/50'
-                      : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700/80 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:border-slate-300 dark:hover:border-slate-600'
-                  }`}
-                >
-                  <Sun className="w-5 h-5" />
-                  <span className="text-xs font-medium">Light Mode</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setTheme('system')}
-                  className={`p-3 rounded-lg border flex flex-col items-center gap-2 transition-all cursor-pointer ${
-                    theme === 'system'
-                      ? 'bg-orange-500/10 border-orange-500 text-orange-600 dark:text-orange-400 ring-1 ring-orange-500/50'
-                      : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700/80 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:border-slate-300 dark:hover:border-slate-600'
-                  }`}
-                >
-                  <Laptop className="w-5 h-5" />
-                  <span className="text-xs font-medium">System Sync</span>
-                </button>
-              </div>
+              <SegmentedControl<'dark' | 'light' | 'system'>
+                activeVariant="brand"
+                fullWidth
+                value={theme}
+                onChange={setTheme}
+                options={[
+                  { value: 'dark', label: 'Dark Mode', icon: <Moon className="w-4 h-4" /> },
+                  { value: 'light', label: 'Light Mode', icon: <Sun className="w-4 h-4" /> },
+                  { value: 'system', label: 'System Sync', icon: <Laptop className="w-4 h-4" /> },
+                ]}
+              />
             </div>
 
             {/* Suite Repositories & Workspace Directory Configuration */}
-            <div className="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4 shadow-sm">
-              <div className="flex items-center justify-between">
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4 shadow-sm">
+              <div className="flex items-center justify-between gap-2">
                 <div>
                   <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Suite Repositories Workspace</h3>
-                  <p className="text-xs text-slate-500">Root folder containing child application repositories with panorama.app.json manifests.</p>
+                  <p className="text-xs text-slate-600 dark:text-slate-400">Root folder containing child application repositories with panorama.app.json manifests.</p>
                 </div>
                 {workspaceFeedback && (
-                  <span className="text-xs font-mono px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
+                  <span className="text-xs font-mono px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30">
                     {workspaceFeedback}
                   </span>
                 )}
               </div>
 
               <div className="space-y-2">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
                   <input
                     type="text"
                     value={workspaceRoot}
                     onChange={(e) => setWorkspaceRoot(e.target.value)}
                     placeholder="e.g. C:\Users\<Username>\Documents\AG Projects"
-                    className="flex-1 px-3 py-2 text-xs font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-orange-500"
+                    className="flex-1 min-w-[200px] px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
                   />
                   <button
                     type="button"
                     onClick={handleSelectWorkspaceFolder}
-                    className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
+                    className="btn-secondary text-xs flex items-center gap-1.5"
                     title="Browse for folder"
                   >
                     <FolderOpen className="w-4 h-4" />
@@ -557,79 +529,77 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <button
                     type="button"
                     onClick={handleSaveWorkspaceRoot}
-                    className="px-3 py-2 rounded-lg bg-orange-600 hover:bg-orange-500 text-white text-xs font-semibold shadow-sm transition-colors cursor-pointer"
+                    className="btn-primary text-xs"
                   >
                     Apply
                   </button>
                 </div>
-                <p className="text-[11px] text-slate-400 dark:text-slate-500 font-mono">
-                  Default search path: <span className="text-slate-600 dark:text-slate-400">%USERPROFILE%\Documents\AG Projects</span>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
+                  Default search path: <span className="text-slate-700 dark:text-slate-300">%USERPROFILE%\Documents\AG Projects</span>
                 </p>
               </div>
             </div>
 
             {/* Version & Build Provenance Card */}
-            <div className="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-3 shadow-sm">
-              <div className="flex items-center justify-between">
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-3 shadow-sm">
+              <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center space-x-2">
-                  <Info className="w-4 h-4 text-orange-500 dark:text-orange-400" />
+                  <Info className="w-4 h-4 text-[var(--color-brand-text)]" />
                   <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-200">PanoramaSRE Build Provenance</h3>
                 </div>
-                <span className="px-2 py-0.5 rounded text-xs font-mono font-semibold bg-orange-500/10 text-orange-700 dark:text-orange-400 border border-orange-500/30">
+                <span className="px-2 py-0.5 rounded text-xs font-mono font-semibold bg-[var(--color-brand-subtle)] text-[var(--color-brand-text)] border border-[var(--color-brand-ring)] tabular-nums">
                   {APP_VERSION_INFO.fullVersionString}
                 </span>
               </div>
-              <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-100 dark:border-slate-800/80 font-mono text-xs">
+              <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-100 dark:border-slate-800 font-mono text-xs tabular-nums">
                 <div>
-                  <span className="text-slate-500 block text-[11px]">Semantic Version:</span>
+                  <span className="text-slate-600 dark:text-slate-400 block text-[11px]">Semantic Version:</span>
                   <span className="text-slate-800 dark:text-slate-300 font-semibold">{APP_VERSION_INFO.version}</span>
                 </div>
                 <div>
-                  <span className="text-slate-500 block text-[11px]">Git Commit SHA:</span>
-                  <span className="text-teal-600 dark:text-cyan-400 font-semibold">{APP_VERSION_INFO.buildHash}</span>
+                  <span className="text-slate-600 dark:text-slate-400 block text-[11px]">Git Commit SHA:</span>
+                  <span className="text-[var(--color-accent-text)] font-semibold">{APP_VERSION_INFO.buildHash}</span>
                 </div>
                 <div>
-                  <span className="text-slate-500 block text-[11px]">Build Timestamp:</span>
+                  <span className="text-slate-600 dark:text-slate-400 block text-[11px]">Build Timestamp:</span>
                   <span className="text-slate-800 dark:text-slate-300">{APP_VERSION_INFO.buildDate || 'Local Dev'}</span>
                 </div>
                 <div>
-                  <span className="text-slate-500 block text-[11px]">Build Identifier:</span>
+                  <span className="text-slate-600 dark:text-slate-400 block text-[11px]">Build Identifier:</span>
                   <span className="text-slate-800 dark:text-slate-300">{APP_VERSION_INFO.buildNumber}</span>
                 </div>
               </div>
             </div>
 
-            <div className="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4 shadow-sm">
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4 shadow-sm">
               <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-200">System Tray & Window Lifecycle</h3>
               
-              <label className="flex items-center justify-between cursor-pointer">
+              <div className="flex items-center justify-between gap-4">
                 <div>
                   <div className="text-sm text-slate-800 dark:text-slate-300">Minimize to System Tray on Close (X)</div>
-                  <div className="text-xs text-slate-500">Keeps background telemetry scheduler and local dev servers active.</div>
+                  <div className="text-xs text-slate-600 dark:text-slate-400">Keeps background telemetry scheduler and local dev servers active.</div>
                 </div>
-                <input
-                  type="checkbox"
+                <ToggleSwitch
                   checked={minimizeToTray}
-                  onChange={(e) => setMinimizeToTray(e.target.checked)}
-                  className="w-4 h-4 accent-orange-500 rounded bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-700"
+                  onChange={setMinimizeToTray}
+                  activeColor="brand"
                 />
-              </label>
+              </div>
 
-              <label className="flex items-center justify-between cursor-pointer">
+              <div className="flex items-center justify-between gap-4">
                 <div>
                   <div className="text-sm text-slate-800 dark:text-slate-300">Windows 11 Toast Notifications</div>
-                  <div className="text-xs text-slate-500">Edge-triggered alerts on app outage, 75°C thermals, or SSL expiry.</div>
+                  <div className="text-xs text-slate-600 dark:text-slate-400">Edge-triggered alerts on app outage, 75°C thermals, or SSL expiry.</div>
                 </div>
-                <input
-                  type="checkbox"
+                <ToggleSwitch
                   checked={toastAlerts}
-                  onChange={(e) => setToastAlerts(e.target.checked)}
-                  className="w-4 h-4 accent-orange-500 rounded bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-700"
+                  onChange={setToastAlerts}
+                  activeColor="brand"
                 />
-              </label>
+              </div>
             </div>
 
-            <div className="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4 shadow-sm">
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-200">Telemetry & Unified 4-Tier Schedule</h3>
                 {onRunHourlyChecksNow && (
@@ -637,9 +607,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     type="button"
                     onClick={onRunHourlyChecksNow}
                     disabled={isCheckingHourly}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-medium bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-colors disabled:opacity-50 whitespace-nowrap flex-shrink-0 cursor-pointer"
+                    className="btn-secondary text-xs font-mono flex items-center gap-1.5"
                   >
-                    <RefreshCw className={`w-3.5 h-3.5 text-sky-600 dark:text-sky-400 ${isCheckingHourly ? 'animate-spin' : ''}`} />
+                    <RefreshCw className={`w-3.5 h-3.5 text-[var(--color-accent-text)] ${isCheckingHourly ? 'animate-spin' : ''}`} />
                     <span>{isCheckingHourly ? 'Running Hourly Checks...' : 'Run Hourly Checks Now'}</span>
                   </button>
                 )}
@@ -661,7 +631,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     { value: '60', label: '60 seconds' },
                   ]}
                 />
-                <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1 font-mono">
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 font-mono">
                   Local-only polling of dev servers and the Named Pipe MCP bridge (zero LAN/WAN traffic).
                 </p>
               </div>
@@ -688,12 +658,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     { value: '30', label: '30 minutes (Low Resource)' },
                   ]}
                 />
-                <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1 font-mono">
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 font-mono">
                   Probes network posture, 6 suite health endpoints, local Git composition, and WSH --fast SSH snapshot.
                 </p>
               </div>
 
-              <div className="pt-2 border-t border-slate-200 dark:border-slate-800 space-y-2">
+              <div className="pt-2 border-t border-slate-200 dark:border-slate-800 space-y-2 tabular-nums">
                 <div className="flex items-center justify-between text-xs font-mono text-slate-600 dark:text-slate-400">
                   <span className="font-semibold text-slate-700 dark:text-slate-300">Active 4-Tier Background Schedule</span>
                   <span className="text-[11px] text-slate-500">
@@ -701,19 +671,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </span>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px] font-mono">
-                  <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800">
+                  <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
                     <div className="font-semibold text-slate-800 dark:text-slate-200">Tier 1 · {pollInterval}s (Local)</div>
                     <div className="text-slate-500">Dev Servers & Named Pipe MCP Bridge</div>
                   </div>
-                  <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800">
+                  <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
                     <div className="font-semibold text-slate-800 dark:text-slate-200">Tier 2 · 60s (LAN / Slots)</div>
                     <div className="text-slate-500">4 Appliances (pooled) & 4x/day Smoke Slot Check</div>
                   </div>
-                  <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800">
+                  <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
                     <div className="font-semibold text-slate-800 dark:text-slate-200">Tier 3 · {securityAuditInterval}m (Fleet + SSH)</div>
                     <div className="text-slate-500">Posture, 6x Health, 6x Git, WSH --fast SSH Snapshot</div>
                   </div>
-                  <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800">
+                  <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
                     <div className="font-semibold text-slate-800 dark:text-slate-200">Tier 4 · 1h + Startup (Slow/Upstream)</div>
                     <div className="text-slate-500">Cloudflare Tunnel Release (ETag), SSL Fleet, Backup Ledger</div>
                   </div>
@@ -736,7 +706,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
         {activeTab === 'ssh' && (
           <div className="max-w-4xl space-y-6">
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-3 font-mono text-xs shadow-sm">
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-3 font-mono text-xs shadow-sm">
               <div className="text-slate-600 dark:text-slate-400 font-semibold mb-2">TARGET HOST CONNECTION</div>
               <div className="text-slate-800 dark:text-slate-300"><span className="text-slate-500">Host:</span> wsh.panoramadr.com</div>
               <div className="text-slate-800 dark:text-slate-300"><span className="text-slate-500">User:</span> root</div>
@@ -745,16 +715,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
 
             {/* Pushover Mobile Notifications & Trusted-Network Gate Card */}
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-5 shadow-sm">
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-5 shadow-sm">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="space-y-1">
                   <div className="flex items-center gap-2">
-                    <Bell className="w-4 h-4 text-orange-500 dark:text-orange-400 shrink-0" />
+                    <Bell className="w-4 h-4 text-[var(--color-brand-text)] shrink-0" />
                     <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
                       Pushover Mobile Notifications & Roaming Gate
                     </h3>
                   </div>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                  <p className="text-xs text-slate-600 dark:text-slate-400">
                     Direct out-of-band Pushover REST alerts for new system updates, host/app outages, smoke failures, SSL drift, and backups.
                   </p>
                 </div>
@@ -782,7 +752,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     type="button"
                     onClick={loadPushoverSettings}
                     disabled={isLoadingPushover}
-                    className="p-1.5 rounded-lg text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 transition-colors flex-shrink-0 cursor-pointer"
+                    aria-label="Re-probe Trusted Home/VPN Network Gate"
+                    className="min-w-[36px] min-h-[36px] flex items-center justify-center p-1.5 rounded-xl text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 transition-colors flex-shrink-0 cursor-pointer"
                     title="Re-probe Trusted Home/VPN Network Gate"
                   >
                     <RefreshCw className={`w-3.5 h-3.5 ${isLoadingPushover ? 'animate-spin' : ''}`} />
@@ -791,9 +762,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
 
               {pushoverDto?.networkGate.reason && (
-                <div className="px-3 py-2 rounded-lg bg-slate-50 dark:bg-[#050b14] border border-slate-200 dark:border-slate-800 text-[11px] font-mono text-slate-600 dark:text-slate-300 flex flex-wrap items-center justify-between gap-2">
+                <div className="px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-[11px] font-mono text-slate-700 dark:text-slate-300 flex flex-wrap items-center justify-between gap-2">
                   <span>{pushoverDto.networkGate.reason}</span>
-                  <span className="text-slate-400 dark:text-slate-500">
+                  <span className="text-slate-500 dark:text-slate-400">
                     Credentials:{' '}
                     {pushoverDto.configured
                       ? `Active (${pushoverDto.credentialSource === 'dpapi' ? 'Windows DPAPI' : '.env.local.keys'} • ${pushoverDto.maskedToken})`
@@ -803,24 +774,23 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               )}
 
               {/* Master Toggle */}
-              <label className="flex items-center justify-between cursor-pointer pt-1">
+              <div className="flex items-center justify-between gap-4 pt-1">
                 <div>
                   <div className="text-sm font-medium text-slate-800 dark:text-slate-200">
                     Enable Automated Pushover Notifications
                   </div>
-                  <div className="text-xs text-slate-500">
+                  <div className="text-xs text-slate-600 dark:text-slate-400">
                     Sends strictly once per new actionable event while connected to your trusted home network or VPN.
                   </div>
                 </div>
-                <input
-                  type="checkbox"
+                <ToggleSwitch
                   checked={pushoverPrefs.enabled}
-                  onChange={(e) =>
-                    setPushoverPrefs((prev) => ({ ...prev, enabled: e.target.checked }))
+                  onChange={(val) =>
+                    setPushoverPrefs((prev) => ({ ...prev, enabled: val }))
                   }
-                  className="w-4 h-4 accent-orange-500 rounded bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-700"
+                  activeColor="brand"
                 />
-              </label>
+              </div>
 
               {/* Read-Only Credentials & Device Target */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2 border-t border-slate-200 dark:border-slate-800">
@@ -828,7 +798,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
                     App API Token (SSOT)
                   </label>
-                  <div className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300">
+                  <div className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300">
                     {pushoverDto?.configured ? pushoverDto.maskedToken : 'Not configured in .env.local.keys'}
                   </div>
                 </div>
@@ -837,7 +807,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
                     User / Group Key (SSOT)
                   </label>
-                  <div className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300">
+                  <div className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300">
                     {pushoverDto?.configured ? pushoverDto.maskedUser : 'Not configured in .env.local.keys'}
                   </div>
                 </div>
@@ -853,7 +823,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       setPushoverPrefs((prev) => ({ ...prev, device: e.target.value }))
                     }
                     placeholder="All subscribed devices"
-                    className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-orange-500"
+                    className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
                   />
                 </div>
               </div>
@@ -864,10 +834,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
                     Expected WSH Split-DNS / Private IP
                   </label>
-                  <div className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300">
+                  <div className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 tabular-nums">
                     {pushoverPrefs.expectedWshIp}
                   </div>
-                  <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1 font-mono">
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 font-mono">
                     Suppresses alerts when roaming on external Wi-Fi without VPN.
                   </p>
                 </div>
@@ -876,10 +846,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
                     Independent Home Network Canary Host
                   </label>
-                  <div className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300">
+                  <div className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300">
                     {pushoverPrefs.canaryHost}
                   </div>
-                  <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1 font-mono">
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 font-mono">
                     Proves home/VPN reachability even if DietPi WSH itself crashes.
                   </p>
                 </div>
@@ -891,7 +861,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
                     Notification Sound (Fixed App Signature)
                   </label>
-                  <div className="px-3 py-2 text-xs font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 flex items-center justify-between">
+                  <div className="px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 flex items-center justify-between">
                     <span>cosmic</span>
                     <span className="text-[11px] text-slate-500 dark:text-slate-400">
                       Always used for all PanoramaSRE alerts
@@ -965,33 +935,33 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       },
                     ] as const
                   ).map((item) => (
-                    <label
+                    <div
                       key={item.key}
-                      className="flex items-start justify-between gap-3 p-2.5 rounded-lg bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 cursor-pointer"
+                      className="flex items-start justify-between gap-3 p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800"
                     >
                       <div>
                         <div className="font-semibold text-slate-800 dark:text-slate-200">
                           {item.title}
                         </div>
-                        <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                        <div className="text-[11px] text-slate-600 dark:text-slate-400">
                           {item.desc}
                         </div>
                       </div>
-                      <input
-                        type="checkbox"
+                      <ToggleSwitch
+                        size="sm"
                         checked={pushoverPrefs.categories[item.key]}
-                        onChange={(e) =>
+                        onChange={(val) =>
                           setPushoverPrefs((prev) => ({
                             ...prev,
                             categories: {
                               ...prev.categories,
-                              [item.key]: e.target.checked,
+                              [item.key]: val,
                             },
                           }))
                         }
-                        className="mt-0.5 w-4 h-4 accent-orange-500 rounded bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-700 shrink-0"
+                        activeColor="brand"
                       />
-                    </label>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -1003,7 +973,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     type="button"
                     onClick={handleSavePushover}
                     disabled={isSavingPushover}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-orange-600 hover:bg-orange-500 text-white shadow-sm transition-colors disabled:opacity-50 whitespace-nowrap flex-shrink-0 cursor-pointer"
+                    className="btn-primary text-xs flex items-center gap-1.5"
                   >
                     <Check className="w-3.5 h-3.5" />
                     <span>{isSavingPushover ? 'Saving...' : 'Save Pushover Settings'}</span>
@@ -1013,7 +983,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     type="button"
                     onClick={handleSendTestPushover}
                     disabled={isTestingPushover}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm transition-colors disabled:opacity-50 whitespace-nowrap flex-shrink-0 cursor-pointer"
+                    className="btn-accent text-xs flex items-center gap-1.5"
                   >
                     <Send className="w-3.5 h-3.5" />
                     <span>{isTestingPushover ? 'Sending Test...' : 'Send Test Alert'}</span>
@@ -1022,7 +992,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <button
                     type="button"
                     onClick={handleResetPushoverLedger}
-                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-colors whitespace-nowrap flex-shrink-0 cursor-pointer"
+                    className="btn-secondary text-xs flex items-center gap-1.5 tabular-nums"
                     title="Clears remembered alert fingerprints so current updates/failures re-notify once on next sync"
                   >
                     <RotateCcw className="w-3.5 h-3.5" />
@@ -1060,7 +1030,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         {activeTab === 'logs' && (
           <div className="flex flex-col space-y-3 h-full">
             {/* Log Controls Header */}
-            <div className="flex flex-wrap items-center justify-between gap-3 bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl p-3 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-3 shadow-sm">
               <div className="flex items-center gap-2 flex-1 min-w-[200px]">
                 <Search className="w-4 h-4 text-slate-400 shrink-0" />
                 <input
@@ -1096,13 +1066,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   type="button"
                   onClick={handleCopyFilteredLogs}
                   disabled={filteredLogs.length === 0}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap flex-shrink-0 cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 min-h-[36px] rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap flex-shrink-0 cursor-pointer"
                   title="Copy filtered application logs for debugging"
                 >
                   {copiedLogs ? (
                     <>
                       <Check className="w-3.5 h-3.5 text-emerald-500" />
-                      <span className="text-emerald-600 dark:text-emerald-400">Copied!</span>
+                      <span className="text-emerald-700 dark:text-emerald-400">Copied!</span>
                     </>
                   ) : (
                     <>
@@ -1115,10 +1085,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <button
                   type="button"
                   onClick={pinLogsToBottom}
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-mono font-medium transition-colors border whitespace-nowrap flex-shrink-0 cursor-pointer ${
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 min-h-[36px] rounded-xl text-xs font-mono font-medium transition-colors border whitespace-nowrap flex-shrink-0 cursor-pointer ${
                     isLogsPinned
-                      ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
-                      : 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30'
+                      ? 'bg-[var(--color-accent-subtle)] text-[var(--color-accent-text)] border-[var(--color-accent-ring)]'
+                      : 'bg-amber-500/10 text-amber-800 dark:text-amber-300 border-amber-500/30'
                   }`}
                   title={isLogsPinned ? 'Pinned to latest log tail' : 'Click to pin scroll to bottom'}
                 >
@@ -1129,9 +1099,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <button
                   type="button"
                   onClick={() => setAutoRefreshLogs(!autoRefreshLogs)}
-                  className={`px-2.5 py-1.5 rounded-lg text-xs font-mono font-medium transition-colors border whitespace-nowrap flex-shrink-0 cursor-pointer ${
+                  className={`px-2.5 py-1.5 min-h-[36px] rounded-xl text-xs font-mono font-medium transition-colors border whitespace-nowrap flex-shrink-0 cursor-pointer ${
                     autoRefreshLogs
-                      ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
+                      ? 'bg-[var(--color-accent-subtle)] text-[var(--color-accent-text)] border-[var(--color-accent-ring)]'
                       : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700'
                   }`}
                   title="Toggle 3s live polling"
@@ -1143,7 +1113,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   type="button"
                   onClick={fetchLogs}
                   disabled={isLoadingLogs}
-                  className="p-1.5 rounded-lg text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors flex-shrink-0 cursor-pointer"
+                  aria-label="Manual Refresh"
+                  className="min-w-[36px] min-h-[36px] flex items-center justify-center p-1.5 rounded-xl text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors flex-shrink-0 cursor-pointer"
                   title="Manual Refresh"
                 >
                   <RefreshCw className={`w-4 h-4 ${isLoadingLogs ? 'animate-spin' : ''}`} />
@@ -1152,7 +1123,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <button
                   type="button"
                   onClick={handleClearLogs}
-                  className="p-1.5 rounded-lg text-rose-500 dark:text-rose-400 hover:text-rose-600 dark:hover:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-500/10 border border-rose-200 dark:border-rose-500/20 transition-colors flex-shrink-0 cursor-pointer"
+                  aria-label="Clear All Logs"
+                  className="min-w-[36px] min-h-[36px] flex items-center justify-center p-1.5 rounded-xl text-rose-600 dark:text-rose-400 hover:text-rose-700 dark:hover:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-500/10 border border-rose-200 dark:border-rose-500/20 transition-colors flex-shrink-0 cursor-pointer"
                   title="Clear All Logs"
                 >
                   <Trash2 className="w-4 h-4" />
@@ -1165,10 +1137,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <div
                 ref={logsContainerRef}
                 onScroll={handleLogsScroll}
-                className="flex-1 bg-slate-50 dark:bg-[#050b14] border border-slate-200 dark:border-slate-800 rounded-xl p-4 font-mono text-xs overflow-y-auto space-y-1 select-text"
+                className="flex-1 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 font-mono text-xs overflow-y-auto space-y-1 select-text"
               >
                 {filteredLogs.length === 0 ? (
-                  <div className="text-slate-500 dark:text-slate-600 italic py-8 text-center">
+                  <div className="text-slate-600 dark:text-slate-500 italic py-8 text-center">
                     No log entries found. Perform actions or run commands to stream logs.
                   </div>
                 ) : (
@@ -1177,7 +1149,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     const isError = log.level === 'ERROR';
                     return (
                       <div key={log.id} className="leading-relaxed hover:bg-slate-200/50 dark:hover:bg-slate-900/40 px-1 rounded flex items-start gap-2">
-                        <span className="text-slate-500 shrink-0 text-[11px] select-none font-mono">
+                        <span className="text-slate-500 shrink-0 text-[11px] select-none font-mono tabular-nums">
                           [{log.created_at.slice(11, 19)}]
                         </span>
                         <span
@@ -1209,7 +1181,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <button
                   type="button"
                   onClick={pinLogsToBottom}
-                  className="absolute bottom-3 right-4 z-10 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg transition-colors cursor-pointer"
+                  className="absolute bottom-3 right-4 z-10 inline-flex items-center gap-1.5 px-3.5 py-2 min-h-[36px] rounded-full text-xs font-semibold bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-[var(--color-on-accent)] shadow-lg transition-colors cursor-pointer tabular-nums"
                 >
                   <ArrowDownToLine className="w-3.5 h-3.5" />
                   <span>{unseenLogsCount > 0 ? `Pin to Bottom (${unseenLogsCount} new)` : 'Pin to Bottom'}</span>
@@ -1221,10 +1193,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
         {activeTab === 'database' && (
           <div className="max-w-4xl space-y-6">
-            <div className="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-3 shadow-sm">
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-3 shadow-sm">
               <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-200">Local SQLite Telemetry Storage</h3>
               <p className="text-xs text-slate-600 dark:text-slate-400">Stores audit logs, system telemetry, and command run history locally in WAL mode.</p>
-              <div className="text-xs font-mono text-slate-500">Database file: data/sre.sqlite (WAL enabled)</div>
+              <div className="text-xs font-mono text-slate-600 dark:text-slate-400">Database file: data/sre.sqlite (WAL enabled)</div>
             </div>
 
             <WorkStreamContainer

@@ -41,6 +41,8 @@ interface BackupsRecoveryViewProps {
   onAbortJob?: (tabId: string) => void;
   onClearTab?: (tabId: string) => void;
   isApplying?: boolean;
+  isIncidentDismissed?: boolean;
+  onDismissIncident?: () => void;
 }
 
 interface TablePaginationProps {
@@ -89,15 +91,15 @@ function TablePagination({
         </button>
 
         {totalPages <= 6 ? (
-          <div className="flex items-center gap-1 px-1">
+          <div className="flex items-center gap-1 px-1 tabular-nums">
             {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => (
               <button
                 key={pageNum}
                 onClick={() => onPageChange(pageNum)}
-                className={`w-6 h-6 rounded text-xs font-semibold flex items-center justify-center transition-colors cursor-pointer ${
+                className={`w-7 h-7 rounded-lg text-xs font-semibold flex items-center justify-center transition-colors cursor-pointer ${
                   pageNum === currentPage
-                    ? 'bg-emerald-600 text-white shadow-sm'
-                    : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-200 dark:hover:bg-slate-800'
+                    ? 'bg-[var(--color-brand)] text-[var(--color-on-brand)] shadow-sm'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-200 dark:hover:bg-slate-800'
                 }`}
               >
                 {pageNum}
@@ -105,7 +107,7 @@ function TablePagination({
             ))}
           </div>
         ) : (
-          <span className="text-xs text-slate-600 dark:text-slate-400 font-medium px-2">
+          <span className="text-xs text-slate-600 dark:text-slate-400 font-medium px-2 tabular-nums">
             Page <span className="font-bold text-slate-900 dark:text-slate-100">{currentPage}</span> of <span className="font-bold text-slate-900 dark:text-slate-100">{totalPages}</span>
           </span>
         )}
@@ -138,6 +140,8 @@ export function BackupsRecoveryView({
   onAbortJob,
   onClearTab,
   isApplying = false,
+  isIncidentDismissed = false,
+  onDismissIncident,
 }: BackupsRecoveryViewProps) {
   // Filter only DietPi WSH applications backed by an operational SQLite database (exclude Cloudflare Pages / D1 apps)
   const dbApps = apps.filter(
@@ -353,29 +357,29 @@ export function BackupsRecoveryView({
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="min-w-0">
           <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-            <HardDrive className="w-5 h-5 text-emerald-400 shrink-0" />
+            <HardDrive className="w-5 h-5 text-[var(--color-brand-text)] shrink-0" />
             <span className="truncate">Database Backups & Disaster Recovery</span>
           </h2>
-          <p className="text-xs sm:text-sm text-slate-500 mt-0.5 line-clamp-1 sm:line-clamp-none">
+          <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 mt-0.5 line-clamp-1 sm:line-clamp-none">
             Single control plane to inspect SQLite database snapshots, trigger automated GFS runs, and hydrate data across environments
           </p>
         </div>
 
-        <div className="flex items-center gap-2 sm:gap-3 flex-wrap shrink-0">
+        <div className="flex items-center gap-2 sm:gap-3 flex-wrap sm:flex-nowrap shrink-0">
           <button
             onClick={() => {
               onRefresh();
               scanAllArchives();
             }}
             disabled={isLoading || isScanningArchives}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors whitespace-nowrap"
+            className="btn-secondary text-xs flex items-center gap-2"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isLoading || isScanningArchives ? 'animate-spin' : ''}`} />
             Refresh All
           </button>
           <button
             onClick={onTriggerFullGfsBackup}
-            className="flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition-colors whitespace-nowrap"
+            className="btn-primary text-xs flex items-center gap-2"
           >
             <Archive className="w-3.5 h-3.5" />
             Trigger Full GFS DB Backup
@@ -384,7 +388,7 @@ export function BackupsRecoveryView({
       </div>
 
       {/* Critical Automated Backup Incident Alert Banner */}
-      {(ledger?.last_run_status?.toLowerCase() === 'failed' || (ledger?.failed_runs_7d || 0) > 0) && (() => {
+      {!isIncidentDismissed && (ledger?.last_run_status?.toLowerCase() === 'failed' || (ledger?.failed_runs_7d || 0) > 0) && (() => {
         const isLastFailed = ledger?.last_run_status?.toLowerCase() === 'failed';
         const dailyPips = ledger?.daily_pips_7d || [];
         const todayPip = dailyPips.length > 0 ? dailyPips[dailyPips.length - 1] : undefined;
@@ -392,18 +396,18 @@ export function BackupsRecoveryView({
         const isActionableNow = isLastFailed || (todayPip !== undefined && todayPip.status !== 'Success');
         const missedOrFailedDays = dailyPips.filter((p) => p.status !== 'Success');
         return (
-          <div className="rounded-xl border border-rose-500/80 bg-rose-50 dark:bg-rose-950/40 p-5 shadow-[0_0_25px_rgba(244,63,94,0.15)] dark:shadow-[0_0_25px_rgba(244,63,94,0.35)] ring-1 ring-rose-500/50 space-y-3">
+          <div className="rounded-2xl border border-rose-300 dark:border-rose-500/80 bg-rose-50 dark:bg-rose-950/40 p-5 shadow-sm ring-1 ring-rose-500/30 space-y-3">
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
               <div className="flex items-start sm:items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-rose-500/20 border border-rose-500/50 flex items-center justify-center shrink-0">
-                  <XCircle className="w-6 h-6 text-rose-500 dark:text-rose-400" />
+                <div className="w-10 h-10 rounded-xl bg-rose-500/15 border border-rose-500/40 flex items-center justify-center shrink-0">
+                  <XCircle className="w-6 h-6 text-rose-600 dark:text-rose-400" />
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-rose-500 text-white uppercase tracking-wider">
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-rose-700 dark:bg-rose-600 text-white uppercase tracking-wider">
                       {isActionableNow ? 'CRITICAL DR INCIDENT' : '7-DAY SLA GAP'}
                     </span>
-                    <span className="text-xs text-rose-600 dark:text-rose-400 font-mono">
+                    <span className="text-xs text-rose-700 dark:text-rose-400 font-mono tabular-nums">
                       {isLastFailed
                         ? (ledger?.last_run_timestamp ? formatLocalDateTime(ledger.last_run_timestamp) : 'Latest Automated Run')
                         : '7-Day Rolling GFS Window'}
@@ -414,7 +418,7 @@ export function BackupsRecoveryView({
                       ? 'Automated Database Backup Run Failed'
                       : `Missed or Failed Daily Backup Run (${ledger?.failed_runs_7d} of ${ledger?.runs_7d || 7} Days Failed)`}
                   </h3>
-                  <p className="text-xs text-rose-800 dark:text-rose-300/90 mt-0.5">
+                  <p className="text-xs text-rose-800 dark:text-rose-300 mt-0.5">
                     {isLastFailed
                       ? 'The automated nightly database backup run failed. Immediate remediation is required to ensure database snapshot integrity.'
                       : todayAlreadySucceeded
@@ -424,30 +428,39 @@ export function BackupsRecoveryView({
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 shrink-0 flex-wrap">
+              <div className="flex items-center gap-2 shrink-0 flex-wrap sm:flex-nowrap">
                 {isActionableNow ? (
                   <button
                     onClick={onTriggerFullGfsBackup}
                     disabled={isLoading}
-                    className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white shadow-sm transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5"
+                    className="btn-danger text-xs flex items-center gap-1.5"
                   >
                     <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
                     <span>{isLastFailed ? 'Retry Full GFS Backup Now' : 'Run Today\'s GFS Backup Now'}</span>
                   </button>
                 ) : (
                   <span
-                    className="px-3 py-1.5 rounded-lg text-xs font-mono font-semibold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 whitespace-nowrap flex items-center gap-1.5"
+                    className="px-3 py-1.5 rounded-lg text-xs font-mono font-semibold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 whitespace-nowrap flex items-center gap-1.5 tabular-nums"
                     title="Today's GFS backup snapshot is already captured and verified. No manual backup action is needed today."
                   >
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 dark:text-emerald-400 shrink-0" />
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
                     <span>Today&apos;s Snapshot Verified ({todayPip?.date}) • No Action Needed</span>
                   </span>
+                )}
+                {onDismissIncident && (
+                  <button
+                    onClick={onDismissIncident}
+                    className="px-3 py-2 min-h-[36px] rounded-xl text-xs font-semibold bg-white dark:bg-slate-900 hover:bg-rose-50 dark:hover:bg-slate-800 text-rose-700 dark:text-rose-300 border border-rose-300 dark:border-rose-700/70 transition-all whitespace-nowrap flex-shrink-0 cursor-pointer"
+                    title="Dismiss this backup incident from the UI until a new failure occurs"
+                  >
+                    Dismiss
+                  </button>
                 )}
               </div>
             </div>
 
             {/* Root cause and failure details */}
-            <div className="p-3.5 rounded-lg bg-white/80 dark:bg-black/40 border border-rose-200 dark:border-rose-900/60 text-xs font-mono space-y-2">
+            <div className="p-3.5 rounded-xl bg-white dark:bg-slate-900 border border-rose-200 dark:border-rose-900/60 text-xs font-mono space-y-2">
               <div className="flex items-center gap-2 text-rose-800 dark:text-rose-300 font-semibold">
                 <AlertTriangle className="w-4 h-4 text-amber-500 dark:text-amber-400 shrink-0" />
                 <span className="text-slate-900 dark:text-white">Failure Root Cause Diagnosis:</span>
@@ -462,7 +475,7 @@ export function BackupsRecoveryView({
                 <div className="space-y-1.5 pt-1 border-t border-rose-200 dark:border-rose-900/50">
                   <p className="text-[11px] font-semibold text-rose-800 dark:text-rose-300 uppercase tracking-wider">Failed Application Details:</p>
                   {ledger.latest_app_details.filter((a) => a.status.toLowerCase() === 'failed').map((app) => (
-                    <div key={app.app_name} className="text-[11px] bg-rose-100/60 dark:bg-rose-950/30 p-2 rounded border border-rose-200 dark:border-rose-900/40">
+                    <div key={app.app_name} className="text-[11px] bg-rose-100/80 dark:bg-rose-950/40 p-2 rounded-lg border border-rose-200 dark:border-rose-900/40">
                       <span className="font-semibold text-rose-900 dark:text-rose-200">{app.app_name}: </span>
                       <span className="text-slate-700 dark:text-slate-300 break-all">{app.error || 'Execution failed with exit code 1'}</span>
                     </div>
@@ -477,36 +490,36 @@ export function BackupsRecoveryView({
       {/* Top Metrics Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 2xl:grid-cols-4 gap-4">
         {/* Card 1: 7-Day Backup Reliability */}
-        <div className={`rounded-xl border p-4 shadow-sm transition-all flex flex-col justify-between min-h-[175px] ${
+        <div className={`rounded-2xl border p-4 shadow-sm transition-all flex flex-col justify-between min-h-[175px] ${
           (ledger?.failed_runs_7d || 0) > 0
             ? 'border-rose-300 dark:border-rose-500/60 bg-rose-50 dark:bg-rose-950/20'
             : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900'
         }`}>
           <div>
             <div className="flex items-center justify-between gap-2">
-              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider truncate">7-Day Reliability</p>
-              <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold shrink-0 ${
+              <p className="text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider truncate">7-Day Reliability</p>
+              <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold shrink-0 tabular-nums ${
                 (ledger?.failed_runs_7d || 0) > 0
-                  ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/30'
-                  : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30'
+                  ? 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border border-rose-500/30'
+                  : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30'
               }`}>
                 {(ledger?.failed_runs_7d || 0) === 0 ? <CheckCircle2 className="w-3 h-3 shrink-0" /> : <AlertTriangle className="w-3 h-3 shrink-0" />}
                 <span>{(ledger?.failed_runs_7d || 0) === 0 ? 'Healthy' : `${ledger?.failed_runs_7d} Failed`}</span>
               </span>
             </div>
             <div className="flex items-baseline gap-2 mt-2">
-              <span className={`text-2xl font-bold font-mono ${
+              <span className={`text-2xl font-bold font-mono tabular-nums ${
                 (ledger?.failed_runs_7d || 0) > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'
               }`}>
                 {ledger?.runs_7d ? `${Math.round(((ledger.successful_runs_7d || 0) / ledger.runs_7d) * 100)}%` : '100%'}
               </span>
-              <span className="text-xs text-slate-500 font-mono truncate">
+              <span className="text-xs text-slate-600 dark:text-slate-400 font-mono truncate tabular-nums">
                 ({ledger?.successful_runs_7d || 0}/{ledger?.runs_7d || 0} runs)
               </span>
             </div>
           </div>
 
-          <div className="mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between gap-2">
+          <div className="mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2">
             <div className="flex items-center gap-1.5 shrink-0">
               {ledger?.daily_pips_7d && ledger.daily_pips_7d.length > 0 ? (
                 ledger.daily_pips_7d.map((pip) => (
@@ -520,14 +533,14 @@ export function BackupsRecoveryView({
                         ? 'bg-emerald-500 dark:bg-emerald-400 shadow-[0_0_6px_rgba(16,185,129,0.4)]'
                         : 'bg-rose-500 shadow-[0_0_6px_rgba(244,63,94,0.4)]'
                     }`} />
-                    <span className={`text-[9px] font-mono leading-none ${pip.status === 'Success' ? 'text-slate-400' : 'text-rose-500 dark:text-rose-400 font-bold'}`}>{pip.day_label[0]}</span>
+                    <span className={`text-[9px] font-mono leading-none ${pip.status === 'Success' ? 'text-slate-500 dark:text-slate-400' : 'text-rose-600 dark:text-rose-400 font-bold'}`}>{pip.day_label[0]}</span>
                   </div>
                 ))
               ) : (
-                <span className="text-[11px] text-slate-400">No recent runs</span>
+                <span className="text-[11px] text-slate-500 dark:text-slate-400">No recent runs</span>
               )}
             </div>
-            <span className="text-[11px] text-slate-500 dark:text-slate-400 font-mono text-right whitespace-nowrap shrink-0">
+            <span className="text-[11px] text-slate-600 dark:text-slate-400 font-mono text-right whitespace-nowrap shrink-0 tabular-nums">
               {(ledger?.failed_runs_7d || 0) > 0
                 ? `${ledger?.failed_runs_7d} failed`
                 : '0 failed'}
@@ -536,27 +549,27 @@ export function BackupsRecoveryView({
         </div>
 
         {/* Card 2: On-Disk GFS Retention Tiers with App Carousel */}
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm flex flex-col justify-between min-h-[175px]">
+        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm flex flex-col justify-between min-h-[175px]">
           <div>
             {/* Top row: Title and Carousel < 1/6 > Controls */}
             <div className="flex items-center justify-between gap-2">
-              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider truncate">GFS Retention</p>
+              <p className="text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider truncate">GFS Retention</p>
               
-              <div className="flex items-center gap-1 shrink-0 bg-slate-100 dark:bg-slate-800/80 rounded-lg p-0.5 border border-slate-200 dark:border-slate-700/60">
+              <div className="flex items-center gap-1 shrink-0 bg-slate-100 dark:bg-slate-800 rounded-lg p-0.5 border border-slate-200 dark:border-slate-700">
                 <button
                   onClick={handlePrevApp}
                   title="Previous application"
-                  className="p-1 rounded hover:bg-white dark:hover:bg-slate-700 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 transition-colors cursor-pointer"
+                  className="p-1.5 rounded hover:bg-white dark:hover:bg-slate-700 text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 transition-colors cursor-pointer"
                 >
                   <ChevronLeft className="w-3.5 h-3.5" />
                 </button>
-                <span className="text-[10px] font-mono font-semibold px-1 text-slate-600 dark:text-slate-300 select-none">
+                <span className="text-[10px] font-mono font-semibold px-1 text-slate-700 dark:text-slate-300 select-none tabular-nums">
                   {carouselIndex + 1}/{carouselItems.length}
                 </span>
                 <button
                   onClick={handleNextApp}
                   title="Next application"
-                  className="p-1 rounded hover:bg-white dark:hover:bg-slate-700 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 transition-colors cursor-pointer"
+                  className="p-1.5 rounded hover:bg-white dark:hover:bg-slate-700 text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 transition-colors cursor-pointer"
                 >
                   <ChevronRight className="w-3.5 h-3.5" />
                 </button>
@@ -565,12 +578,12 @@ export function BackupsRecoveryView({
 
             {/* Dedicated App Name Bar with full prominence */}
             <div className="flex items-center gap-1.5 min-w-0 mt-2">
-              <span className={`w-2 h-2 rounded-full shrink-0 ${currentSlide?.isSuiteTotal ? 'bg-sky-500' : 'bg-emerald-500'}`} />
+              <span className={`w-2 h-2 rounded-full shrink-0 ${currentSlide?.isSuiteTotal ? 'bg-sky-500' : 'bg-[var(--color-brand)]'}`} />
               <span className="text-xs font-bold text-slate-900 dark:text-slate-100 truncate font-mono" title={currentSlide?.displayName}>
                 {currentSlide?.displayName}
               </span>
               {currentSlide?.port && (
-                <span className="text-[10px] font-mono text-slate-400 shrink-0">
+                <span className="text-[10px] font-mono text-slate-500 dark:text-slate-400 shrink-0 tabular-nums">
                   :{currentSlide.port}
                 </span>
               )}
@@ -578,56 +591,56 @@ export function BackupsRecoveryView({
 
             {/* Active Snapshots Counter */}
             <div className="flex items-baseline gap-1.5 mt-1">
-              <span className="text-xl font-bold font-mono text-slate-900 dark:text-slate-100">
+              <span className="text-xl font-bold font-mono text-slate-900 dark:text-slate-100 tabular-nums">
                 {currentBreakdown.total_archives}
               </span>
-              <span className="text-xs text-slate-500 font-mono truncate">active archives</span>
+              <span className="text-xs text-slate-600 dark:text-slate-400 font-mono truncate">active archives</span>
             </div>
           </div>
 
           {/* 3 Tier Boxes with Perfect Vertical Alignment */}
-          <div className="mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-800/80 space-y-2">
+          <div className="mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-800 space-y-2">
             <div className="grid grid-cols-3 gap-1.5 text-center font-mono">
               {/* Daily Box */}
-              <div className="bg-slate-50 dark:bg-slate-950/60 py-1.5 px-1 rounded-lg border border-slate-100 dark:border-slate-800/80 flex flex-col justify-between min-w-0">
+              <div className="bg-slate-50 dark:bg-slate-950 py-1.5 px-1 rounded-lg border border-slate-200 dark:border-slate-800 flex flex-col justify-between min-w-0">
                 <div>
-                  <span className="block text-[10px] font-semibold text-slate-400 uppercase tracking-tight truncate leading-none">Daily</span>
-                  <span className="block text-[9px] text-slate-500 leading-none mt-1">&le;7d</span>
+                  <span className="block text-[10px] font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-tight truncate leading-none">Daily</span>
+                  <span className="block text-[9px] text-slate-500 dark:text-slate-400 leading-none mt-1">&le;7d</span>
                 </div>
-                <span className="text-sm font-bold text-emerald-600 dark:text-emerald-400 mt-1">
+                <span className="text-sm font-bold text-emerald-700 dark:text-emerald-400 mt-1 tabular-nums">
                   {currentBreakdown.daily_count}
                 </span>
               </div>
 
               {/* Weekly Box */}
-              <div className="bg-slate-50 dark:bg-slate-950/60 py-1.5 px-1 rounded-lg border border-slate-100 dark:border-slate-800/80 flex flex-col justify-between min-w-0">
+              <div className="bg-slate-50 dark:bg-slate-950 py-1.5 px-1 rounded-lg border border-slate-200 dark:border-slate-800 flex flex-col justify-between min-w-0">
                 <div>
-                  <span className="block text-[10px] font-semibold text-slate-400 uppercase tracking-tight truncate leading-none">Weekly</span>
-                  <span className="block text-[9px] text-slate-500 leading-none mt-1">&le;30d</span>
+                  <span className="block text-[10px] font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-tight truncate leading-none">Weekly</span>
+                  <span className="block text-[9px] text-slate-500 dark:text-slate-400 leading-none mt-1">&le;30d</span>
                 </div>
-                <span className="text-sm font-bold text-sky-600 dark:text-sky-400 mt-1">
+                <span className="text-sm font-bold text-sky-700 dark:text-sky-400 mt-1 tabular-nums">
                   {currentBreakdown.weekly_count}
                 </span>
               </div>
 
               {/* Monthly Box */}
-              <div className="bg-slate-50 dark:bg-slate-950/60 py-1.5 px-1 rounded-lg border border-slate-100 dark:border-slate-800/80 flex flex-col justify-between min-w-0">
+              <div className="bg-slate-50 dark:bg-slate-950 py-1.5 px-1 rounded-lg border border-slate-200 dark:border-slate-800 flex flex-col justify-between min-w-0">
                 <div>
-                  <span className="block text-[10px] font-semibold text-slate-400 uppercase tracking-tight truncate leading-none">Monthly</span>
-                  <span className="block text-[9px] text-slate-500 leading-none mt-1">&gt;30d</span>
+                  <span className="block text-[10px] font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-tight truncate leading-none">Monthly</span>
+                  <span className="block text-[9px] text-slate-500 dark:text-slate-400 leading-none mt-1">&gt;30d</span>
                 </div>
-                <span className="text-sm font-bold text-indigo-600 dark:text-indigo-400 mt-1">
+                <span className="text-sm font-bold text-violet-700 dark:text-violet-400 mt-1 tabular-nums">
                   {currentBreakdown.monthly_count}
                 </span>
               </div>
             </div>
 
             {/* Bottom Pruned Counter */}
-            <div className="flex items-center justify-between text-[10px] font-mono text-slate-400">
-              <span className="truncate flex items-center gap-1">
-                <span className="text-emerald-500 font-semibold">{currentPrunedCount}</span> pruned
+            <div className="flex items-center justify-between text-[10px] font-mono text-slate-600 dark:text-slate-400">
+              <span className="truncate flex items-center gap-1 tabular-nums">
+                <span className="text-emerald-700 dark:text-emerald-400 font-semibold">{currentPrunedCount}</span> pruned
               </span>
-              <span className="text-[10px] text-slate-500 uppercase tracking-wider shrink-0">
+              <span className="text-[10px] text-slate-500 dark:text-slate-400 uppercase tracking-wider shrink-0">
                 {currentSlide?.isSuiteTotal ? 'Suite' : 'Active'}
               </span>
             </div>
@@ -635,60 +648,60 @@ export function BackupsRecoveryView({
         </div>
 
         {/* Card 3: Last Automated GFS Run */}
-        <div className={`rounded-xl border p-4 shadow-sm transition-all flex flex-col justify-between min-h-[175px] ${
+        <div className={`rounded-2xl border p-4 shadow-sm transition-all flex flex-col justify-between min-h-[175px] ${
           ledger?.last_run_status === 'Failed'
             ? 'border-rose-300 dark:border-rose-500/60 bg-rose-50 dark:bg-rose-950/20'
             : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900'
         }`}>
           <div>
-            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider truncate">Latest GFS Run</p>
+            <p className="text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider truncate">Latest GFS Run</p>
             <div className="mt-2">
-              <p className="text-base font-bold text-slate-900 dark:text-slate-100 font-mono leading-tight">
+              <p className="text-base font-bold text-slate-900 dark:text-slate-100 font-mono leading-tight tabular-nums">
                 {ledger?.last_run_timestamp ? formatLocalDate(ledger.last_run_timestamp) : 'Never'}
               </p>
-              <p className="text-xs text-slate-400 font-mono mt-0.5">
+              <p className="text-xs text-slate-500 dark:text-slate-400 font-mono mt-0.5 tabular-nums">
                 {ledger?.last_run_timestamp ? formatLocalTime(ledger.last_run_timestamp) : ''}
               </p>
             </div>
           </div>
-          <div className="mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between gap-1 text-[11px] font-mono">
+          <div className="mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-1 text-[11px] font-mono">
             <div className="flex items-center gap-1.5 shrink-0">
               {ledger?.last_run_status === 'Success' ? (
-                <span className="text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1">
+                <span className="text-emerald-700 dark:text-emerald-400 font-semibold flex items-center gap-1">
                   <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> Success
                 </span>
               ) : ledger?.last_run_status === 'Failed' ? (
-                <span className="text-rose-600 dark:text-rose-400 font-bold flex items-center gap-1">
-                  <XCircle className="w-3.5 h-3.5 shrink-0 text-rose-500" /> Failed
+                <span className="text-rose-700 dark:text-rose-400 font-bold flex items-center gap-1">
+                  <XCircle className="w-3.5 h-3.5 shrink-0 text-rose-600 dark:text-rose-500" /> Failed
                 </span>
               ) : (
-                <span className="text-slate-400 font-semibold">
+                <span className="text-slate-600 dark:text-slate-400 font-semibold">
                   {ledger?.last_run_status || 'Pending'}
                 </span>
               )}
             </div>
-            <span className="text-slate-400 whitespace-nowrap shrink-0">
+            <span className="text-slate-600 dark:text-slate-400 whitespace-nowrap shrink-0 tabular-nums">
               {ledger?.latest_app_details?.length || 0} Apps Protected
             </span>
           </div>
         </div>
 
         {/* Card 4: Lifetime Execution Ledger */}
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm flex flex-col justify-between min-h-[175px]">
+        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm flex flex-col justify-between min-h-[175px]">
           <div>
-            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider truncate">Lifetime Ledger</p>
+            <p className="text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider truncate">Lifetime Ledger</p>
             <div className="flex items-baseline gap-1.5 mt-2">
-              <span className="text-2xl font-bold font-mono text-slate-900 dark:text-slate-100">
+              <span className="text-2xl font-bold font-mono text-slate-900 dark:text-slate-100 tabular-nums">
                 {ledger?.total_runs || 0}
               </span>
-              <span className="text-xs text-slate-500 font-mono">total runs</span>
+              <span className="text-xs text-slate-600 dark:text-slate-400 font-mono">total runs</span>
             </div>
           </div>
-          <div className="mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between gap-1 text-[11px] font-mono">
-            <div className="flex items-center gap-2 shrink-0">
-              <span className="text-emerald-600 dark:text-emerald-400 font-semibold">{ledger?.successful_runs || 0} OK</span>
+          <div className="mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-1 text-[11px] font-mono">
+            <div className="flex items-center gap-2 shrink-0 tabular-nums">
+              <span className="text-emerald-700 dark:text-emerald-400 font-semibold">{ledger?.successful_runs || 0} OK</span>
               <span className="text-slate-400">•</span>
-              <span className="text-slate-500" title="Historical retries / remediated failures">
+              <span className="text-slate-600 dark:text-slate-400" title="Historical retries / remediated failures">
                 {ledger?.failed_runs || 0} Past
               </span>
             </div>
@@ -703,7 +716,7 @@ export function BackupsRecoveryView({
                 }
               }}
               disabled={!ledger?.ledger_source_path}
-              className="text-slate-400 hover:text-emerald-400 hover:underline cursor-pointer flex items-center gap-1 shrink-0 disabled:cursor-default"
+              className="text-slate-600 dark:text-slate-400 hover:text-[var(--color-brand-text)] hover:underline cursor-pointer flex items-center gap-1 shrink-0 disabled:cursor-default"
               title={`Click to reveal ledger in folder: ${ledger?.ledger_source_path || ''}`}
             >
               <span>History</span>
@@ -714,14 +727,14 @@ export function BackupsRecoveryView({
       </div>
 
       {/* SECTION 1: UNIFIED BACKUP RESTORATION & HYDRATION PANEL */}
-      <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-6 shadow-sm space-y-6">
+      <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-6 shadow-sm space-y-6">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800 pb-4">
           <div className="min-w-0">
             <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-              <Laptop className="w-5 h-5 text-emerald-400 shrink-0" />
+              <Laptop className="w-5 h-5 text-[var(--color-brand-text)] shrink-0" />
               <span>SQLite Database Snapshot & Hydration Engine</span>
             </h3>
-            <p className="text-xs text-slate-500 mt-0.5">
+            <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
               Select a database-backed application to inspect its available SQLite archives (.tar.gz) and restore data to Local Dev or Production (binaries and source code remain in Git).
             </p>
           </div>
@@ -737,16 +750,16 @@ export function BackupsRecoveryView({
 
             <button
               onClick={() => selectedApp && onTriggerAppBackup(selectedApp)}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 whitespace-nowrap transition-colors shrink-0"
+              className="btn-secondary text-xs flex items-center gap-2 shrink-0"
             >
-              <DownloadCloud className="w-3.5 h-3.5 text-emerald-400" />
+              <DownloadCloud className="w-3.5 h-3.5 text-[var(--color-brand-text)]" />
               Capture Remote Snapshot
             </button>
           </div>
         </div>
 
         {/* Directory & Environment Banner */}
-        <div className="flex flex-wrap items-center justify-between gap-3 text-xs bg-slate-50 dark:bg-slate-950/60 p-3 rounded-lg border border-slate-100 dark:border-slate-800/80 font-mono">
+        <div className="flex flex-wrap items-center justify-between gap-3 text-xs bg-slate-50 dark:bg-slate-950 p-3 rounded-xl border border-slate-200 dark:border-slate-800 font-mono">
           <button
             onClick={async () => {
               if (backupDir) {
@@ -763,46 +776,46 @@ export function BackupsRecoveryView({
               }
             }}
             disabled={!backupDir}
-            className="flex items-center gap-2 text-slate-400 hover:text-emerald-400 transition-colors group cursor-pointer truncate max-w-xl text-left disabled:cursor-default"
+            className="flex items-center gap-2 text-slate-700 dark:text-slate-300 hover:text-[var(--color-brand-text)] transition-colors group cursor-pointer truncate max-w-xl text-left disabled:cursor-default"
             title="Click to open directory in File Explorer"
           >
-            <FolderOpen className="w-4 h-4 text-emerald-400 shrink-0 group-hover:scale-110 transition-transform" />
-            <span className="text-slate-300 font-semibold shrink-0">Backup Directory:</span>
-            <span className="truncate underline decoration-dotted decoration-slate-600 underline-offset-4 group-hover:decoration-emerald-400">
+            <FolderOpen className="w-4 h-4 text-[var(--color-brand-text)] shrink-0 group-hover:scale-110 transition-transform" />
+            <span className="text-slate-900 dark:text-slate-100 font-semibold shrink-0">Backup Directory:</span>
+            <span className="truncate underline decoration-dotted decoration-slate-400 dark:decoration-slate-600 underline-offset-4 group-hover:decoration-[var(--color-brand)]">
               {backupDir || 'Resolving...'}
             </span>
-            <ExternalLink className="w-3.5 h-3.5 text-slate-500 shrink-0 group-hover:text-emerald-400" />
+            <ExternalLink className="w-3.5 h-3.5 text-slate-500 shrink-0 group-hover:text-[var(--color-brand-text)]" />
           </button>
-          <div className="flex items-center gap-4 text-slate-400">
+          <div className="flex items-center gap-4 text-slate-600 dark:text-slate-400 tabular-nums">
             <span>
               Local SQLite PRAGMA:{' '}
-              <span className="text-emerald-400 font-bold">
+              <span className="text-emerald-700 dark:text-emerald-400 font-bold">
                 {selectedApp?.devServer?.sqlite_user_version !== undefined && selectedApp?.devServer?.sqlite_user_version !== null
                   ? `v${selectedApp.devServer.sqlite_user_version}`
                   : 'N/A'}
               </span>
             </span>
             <span>
-              Archives Found: <span className="text-slate-200 font-bold">{archives.length}</span>
+              Archives Found: <span className="text-slate-900 dark:text-slate-100 font-bold">{archives.length}</span>
             </span>
           </div>
         </div>
 
         {/* Archives Table with Date column & Dual Apply Options */}
         {isScanningArchives ? (
-          <div className="flex flex-col items-center justify-center py-12 border border-slate-200 dark:border-slate-800 rounded-lg bg-slate-50/50 dark:bg-slate-950/40 text-slate-400 space-y-3">
-            <RefreshCw className="w-6 h-6 animate-spin text-emerald-400" />
+          <div className="flex flex-col items-center justify-center py-12 border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-950 text-slate-600 dark:text-slate-400 space-y-3">
+            <RefreshCw className="w-6 h-6 animate-spin text-[var(--color-brand-text)]" />
             <p className="text-xs font-mono font-medium">Scanning backup archives for {selectedApp?.manifest.displayName}...</p>
-            <p className="text-[11px] text-slate-500">Checking Google Drive storage and archive health snapshots</p>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">Checking Google Drive storage and archive health snapshots</p>
           </div>
         ) : archives.length === 0 ? (
-          <div className="text-center py-10 border border-dashed border-slate-200 dark:border-slate-800 rounded-lg text-slate-500 text-xs font-mono">
+          <div className="text-center py-10 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl text-slate-600 dark:text-slate-400 text-xs font-mono">
             No backup archives (.tar.gz) found for this application.
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
+          <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
             <table className="w-full text-left text-xs font-mono min-w-[700px]">
-              <thead className="bg-slate-50 dark:bg-slate-950/60 border-b border-slate-200 dark:border-slate-800 text-slate-500 text-[11px] uppercase tracking-wider">
+              <thead className="bg-slate-50 dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 text-[11px] uppercase tracking-wider">
                 <tr>
                   <th className="py-2.5 px-3 font-semibold">Date of Backup</th>
                   <th className="py-2.5 px-3 font-semibold">Archive Filename</th>
@@ -822,12 +835,12 @@ export function BackupsRecoveryView({
                   return (
                     <tr key={archive.file_name} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
                       {/* Date of Backup Column (Local Time) */}
-                      <td className="py-3 px-3 text-slate-900 dark:text-slate-200 font-semibold whitespace-nowrap">
+                      <td className="py-3 px-3 text-slate-900 dark:text-slate-200 font-semibold whitespace-nowrap tabular-nums">
                         <div className="flex items-center gap-1.5">
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400"></span>
                           <span>{formatLocalIsoDate(archive.timestamp_str)}</span>
                         </div>
-                        <span className="text-[10px] text-slate-500 font-normal block pl-3">
+                        <span className="text-[10px] text-slate-500 dark:text-slate-400 font-normal block pl-3">
                           {formatLocalTime(archive.timestamp_str)}
                         </span>
                       </td>
@@ -843,7 +856,7 @@ export function BackupsRecoveryView({
                               console.warn('Failed to reveal archive file:', err);
                             }
                           }}
-                          className="truncate block hover:text-emerald-600 dark:hover:text-emerald-300 hover:underline cursor-pointer text-left w-full"
+                          className="truncate block hover:text-[var(--color-brand-text)] hover:underline cursor-pointer text-left w-full"
                           title={`Click to reveal file in folder: ${archive.full_path}`}
                         >
                           {archive.file_name}
@@ -855,10 +868,10 @@ export function BackupsRecoveryView({
                         <span
                           className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold font-mono ${
                             archive.gfs_tier === 'Daily'
-                              ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30'
+                              ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30'
                               : archive.gfs_tier === 'Weekly'
-                              ? 'bg-sky-500/10 text-sky-600 dark:text-sky-400 border border-sky-500/30'
-                              : 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/30'
+                              ? 'bg-sky-500/10 text-sky-700 dark:text-sky-400 border border-sky-500/30'
+                              : 'bg-violet-500/10 text-violet-700 dark:text-violet-400 border border-violet-500/30'
                           }`}
                         >
                           {archive.gfs_tier || 'Daily'}
@@ -866,7 +879,7 @@ export function BackupsRecoveryView({
                       </td>
 
                       {/* Schema Version */}
-                      <td className="py-3 px-3 whitespace-nowrap">
+                      <td className="py-3 px-3 whitespace-nowrap tabular-nums">
                         <span
                           className={`inline-block px-2 py-0.5 rounded text-[11px] font-semibold ${
                             isSchemaMismatch
@@ -879,17 +892,17 @@ export function BackupsRecoveryView({
                       </td>
 
                       {/* Size */}
-                      <td className="py-3 px-3 text-slate-500 dark:text-slate-400 font-mono whitespace-nowrap">{formatBytes(archive.size_bytes)}</td>
+                      <td className="py-3 px-3 text-slate-600 dark:text-slate-400 font-mono whitespace-nowrap tabular-nums">{formatBytes(archive.size_bytes)}</td>
 
                       {/* Health Snapshot */}
-                      <td className="py-3 px-3 whitespace-nowrap">
+                      <td className="py-3 px-3 whitespace-nowrap tabular-nums">
                         {health ? (
                           <div className="flex items-center gap-1.5">
                             <span
                               className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold ${
                                 isHealthy
-                                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                                  : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                                  ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30'
+                                  : 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border border-rose-500/30'
                               }`}
                             >
                               <Activity className="w-3 h-3" />
@@ -897,21 +910,21 @@ export function BackupsRecoveryView({
                             </span>
                           </div>
                         ) : (
-                          <span className="text-slate-600 text-[11px] italic">No snapshot</span>
+                          <span className="text-slate-500 text-[11px] italic">No snapshot</span>
                         )}
                       </td>
 
                       {/* Actions: Apply to Local OR Restore to Production */}
-                      <td className="py-3 text-right">
-                        <div className="flex items-center justify-end gap-2">
+                      <td className="py-3 px-3 text-right">
+                        <div className="flex items-center justify-end gap-2 flex-nowrap">
                           {/* Apply to Local Dev */}
                           <button
                             onClick={() => setPendingLocalApplyArchive(archive)}
                             disabled={isApplying}
-                            className="px-2.5 py-1 rounded text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition-colors flex items-center gap-1 shadow-sm whitespace-nowrap"
+                            className="btn-primary text-xs flex items-center gap-1"
                             title="Extract snapshot to local development SQLite database"
                           >
-                            <Laptop className="w-3 h-3" />
+                            <Laptop className="w-3.5 h-3.5" />
                             Apply to Local Dev
                           </button>
 
@@ -919,10 +932,10 @@ export function BackupsRecoveryView({
                           <button
                             onClick={() => setPendingRemoteRestoreArchive(archive)}
                             disabled={isApplying}
-                            className="px-2.5 py-1 rounded text-xs font-semibold bg-rose-950/60 hover:bg-rose-900 text-rose-300 border border-rose-800/80 transition-colors flex items-center gap-1 shadow-sm whitespace-nowrap"
+                            className="btn-danger text-xs flex items-center gap-1"
                             title="Upload and restore archive directly into production container"
                           >
-                            <Server className="w-3 h-3" />
+                            <Server className="w-3.5 h-3.5" />
                             Restore to Production
                           </button>
                         </div>
@@ -980,25 +993,25 @@ export function BackupsRecoveryView({
       />
 
       {/* SECTION 2: PARTICIPANT APPLICATIONS BACKUP INVENTORY (LATEST GFS RUN) */}
-      <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4">
+      <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4">
         <div className="flex items-center justify-between">
           <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm flex items-center gap-2">
-            <Layers className="w-4 h-4 text-emerald-400" />
+            <Layers className="w-4 h-4 text-[var(--color-brand-text)]" />
             Suite Database Backup Inventory (Latest GFS Run)
           </h3>
-          <span className="text-xs text-slate-500 font-mono">
+          <span className="text-xs text-slate-600 dark:text-slate-400 font-mono tabular-nums">
             {ledger?.latest_app_details?.length || 0} Registered Databases
           </span>
         </div>
 
         {(!ledger?.latest_app_details || ledger.latest_app_details.length === 0) ? (
-          <div className="text-center py-8 text-xs text-slate-500 font-mono">
+          <div className="text-center py-8 text-xs text-slate-600 dark:text-slate-400 font-mono">
             No per-application archive telemetry found in the latest backup run.
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
+          <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
             <table className="w-full text-left text-xs font-mono min-w-[700px]">
-              <thead className="bg-slate-50 dark:bg-slate-950/60 border-b border-slate-200 dark:border-slate-800 text-slate-500 text-[11px] uppercase tracking-wider">
+              <thead className="bg-slate-50 dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 text-[11px] uppercase tracking-wider">
                 <tr>
                   <th className="py-2.5 px-3 font-semibold">Date of Backup</th>
                   <th className="py-2.5 px-3 font-semibold">Application</th>
@@ -1014,43 +1027,47 @@ export function BackupsRecoveryView({
                   const runTime = formatLocalTime(ledger.last_run_timestamp);
                   return (
                     <tr key={app.app_name} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
-                      <td className="py-3 px-3 text-slate-400 whitespace-nowrap">
-                        <div className="text-slate-300 font-medium">{runDate}</div>
-                        <div className="text-[10px] text-slate-500">{runTime}</div>
+                      <td className="py-3 px-3 text-slate-600 dark:text-slate-400 whitespace-nowrap tabular-nums">
+                        <div className="text-slate-900 dark:text-slate-200 font-medium">{runDate}</div>
+                        <div className="text-[10px] text-slate-500 dark:text-slate-400">{runTime}</div>
                       </td>
-                      <td className="py-3 px-3 text-slate-200 font-semibold flex items-center gap-2">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                        {app.app_name}
+                      <td className="py-3 px-3 text-slate-900 dark:text-slate-100 font-semibold">
+                        <div className="flex items-center gap-2">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400 shrink-0"></span>
+                          {app.app_name}
+                        </div>
                       </td>
                       <td className="py-3 px-3">
                         {app.status === 'Success' ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30">
                             <CheckCircle2 className="w-3 h-3" /> Success
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-rose-500/10 text-rose-700 dark:text-rose-400 border border-rose-500/30">
                             <XCircle className="w-3 h-3" /> {app.status}
                           </span>
                         )}
                       </td>
-                      <td className="py-3 px-3 text-slate-300 font-mono max-w-sm">
+                      <td className="py-3 px-3 text-slate-700 dark:text-slate-300 font-mono max-w-sm">
                         {app.file || (
-                          <div className="text-[11px] text-rose-300 bg-rose-950/40 p-1.5 rounded border border-rose-900/50 break-all whitespace-pre-wrap">
-                            <span className="font-bold text-rose-400">Error: </span>
+                          <div className="text-[11px] text-rose-800 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/40 p-1.5 rounded border border-rose-200 dark:border-rose-900/50 break-all whitespace-pre-wrap">
+                            <span className="font-bold text-rose-700 dark:text-rose-400">Error: </span>
                             {app.error?.includes('Cannot answer interactive prompts in batch mode')
                               ? 'PuTTY Pageant not running (Cannot answer interactive prompts in batch mode)'
                               : app.error || 'Backup execution failed.'}
                           </div>
                         )}
                       </td>
-                      <td className="py-3 px-3 text-slate-400 font-mono">
+                      <td className="py-3 px-3 text-slate-600 dark:text-slate-400 font-mono tabular-nums">
                         {formatBytes(app.size_bytes)}
                       </td>
-                      <td className="py-3 px-3 text-slate-400 flex items-center gap-1">
-                        <Clock className="w-3 h-3 text-slate-500" />
-                        {app.duration_seconds !== null && app.duration_seconds !== undefined
-                          ? `${app.duration_seconds.toFixed(1)}s`
-                          : 'N/A'}
+                      <td className="py-3 px-3 text-slate-600 dark:text-slate-400 tabular-nums">
+                        <div className="flex items-center gap-1">
+                          <Clock className="w-3 h-3 text-slate-500" />
+                          {app.duration_seconds !== null && app.duration_seconds !== undefined
+                            ? `${app.duration_seconds.toFixed(1)}s`
+                            : 'N/A'}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -1084,19 +1101,19 @@ export function BackupsRecoveryView({
       </div>
 
       {/* SECTION 3: RECENT GFS AUDIT HISTORY LEDGER */}
-      <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4">
+      <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4">
         <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm">
           Recent GFS Automated Database Backup Runs & Retention History
         </h3>
 
         {(!ledger?.recent_records || ledger.recent_records.length === 0) ? (
-          <div className="text-center py-8 text-xs text-slate-500 font-mono">
+          <div className="text-center py-8 text-xs text-slate-600 dark:text-slate-400 font-mono">
             No backup history ledger found.
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
+          <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
             <table className="w-full text-left text-xs font-mono min-w-[700px]">
-              <thead className="bg-slate-50 dark:bg-slate-950/60 border-b border-slate-200 dark:border-slate-800 text-slate-500 text-[11px] uppercase tracking-wider">
+              <thead className="bg-slate-50 dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 text-[11px] uppercase tracking-wider">
                 <tr>
                   <th className="py-2.5 px-3 w-8"></th>
                   <th className="py-2.5 px-3 font-semibold">Date of Backup</th>
@@ -1122,60 +1139,60 @@ export function BackupsRecoveryView({
                         onClick={() => hasDetails && toggleRunExpand(globalIdx)}
                         className={`transition-colors ${
                           hasDetails ? 'cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/40' : ''
-                        } ${isExpanded ? 'bg-slate-800/30' : ''}`}
+                        } ${isExpanded ? 'bg-slate-100 dark:bg-slate-800/60' : ''}`}
                       >
                         <td className="py-3 px-3 text-slate-500 text-center">
                           {hasDetails ? (
                             isExpanded ? (
-                              <ChevronDown className="w-3.5 h-3.5 text-emerald-400 inline" />
+                              <ChevronDown className="w-3.5 h-3.5 text-[var(--color-brand-text)] inline" />
                             ) : (
-                              <ChevronRight className="w-3.5 h-3.5 inline text-slate-400" />
+                              <ChevronRight className="w-3.5 h-3.5 inline text-slate-500 dark:text-slate-400" />
                             )
                           ) : null}
                         </td>
-                        <td className="py-3 px-3 text-slate-700 dark:text-slate-300 font-medium whitespace-nowrap">{dateOnly}</td>
-                        <td className="py-3 px-3 text-slate-500 dark:text-slate-400 font-mono whitespace-nowrap">{timeOnly}</td>
+                        <td className="py-3 px-3 text-slate-800 dark:text-slate-200 font-medium whitespace-nowrap tabular-nums">{dateOnly}</td>
+                        <td className="py-3 px-3 text-slate-600 dark:text-slate-400 font-mono whitespace-nowrap tabular-nums">{timeOnly}</td>
                         <td className="py-3 px-3 whitespace-nowrap">
                           {r.status === 'Success' ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30">
                               <CheckCircle2 className="w-3 h-3" /> Success
                             </span>
                           ) : (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-rose-500/10 text-rose-700 dark:text-rose-400 border border-rose-500/20">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-rose-500/10 text-rose-700 dark:text-rose-400 border border-rose-500/30">
                               <XCircle className="w-3 h-3" /> Failed
                             </span>
                           )}
                         </td>
-                        <td className="py-3 px-3 text-slate-500 dark:text-slate-400 whitespace-nowrap">{r.run_type || 'Automated'}</td>
-                        <td className="py-3 px-3 text-slate-800 dark:text-slate-300 whitespace-nowrap font-semibold">{r.total_apps} apps</td>
-                        <td className="py-3 px-3 text-slate-500 dark:text-slate-400 font-mono whitespace-nowrap">{formatBytes(r.total_size_bytes)}</td>
-                        <td className="py-3 px-3 text-slate-500 truncate max-w-xs">{r.destination}</td>
+                        <td className="py-3 px-3 text-slate-600 dark:text-slate-400 whitespace-nowrap">{r.run_type || 'Automated'}</td>
+                        <td className="py-3 px-3 text-slate-800 dark:text-slate-300 whitespace-nowrap font-semibold tabular-nums">{r.total_apps} apps</td>
+                        <td className="py-3 px-3 text-slate-600 dark:text-slate-400 font-mono whitespace-nowrap tabular-nums">{formatBytes(r.total_size_bytes)}</td>
+                        <td className="py-3 px-3 text-slate-600 dark:text-slate-400 truncate max-w-xs">{r.destination}</td>
                       </tr>
 
                       {/* Collapsible Details Row */}
                       {isExpanded && (
-                        <tr className="bg-slate-950/40 border-t border-b border-slate-800">
+                        <tr className="bg-slate-50 dark:bg-slate-950 border-t border-b border-slate-200 dark:border-slate-800">
                           <td colSpan={8} className="p-4">
                             <div className="space-y-4">
                               {r.app_details && r.app_details.length > 0 && (
                                 <div className="space-y-2">
-                                  <p className="text-[11px] font-semibold uppercase text-slate-400 tracking-wider">
+                                  <p className="text-[11px] font-semibold uppercase text-slate-600 dark:text-slate-400 tracking-wider">
                                     Application Archives for this Run
                                   </p>
                                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
                                     {r.app_details.map((ad) => (
                                       <div
                                         key={ad.app_name}
-                                        className={`p-2.5 rounded-lg border text-xs flex flex-col justify-between gap-1.5 ${
+                                        className={`p-2.5 rounded-xl border text-xs flex flex-col justify-between gap-1.5 ${
                                           ad.status.toLowerCase() === 'failed'
                                             ? 'border-rose-300 dark:border-rose-800/80 bg-rose-50 dark:bg-rose-950/30'
-                                            : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60'
+                                            : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900'
                                         }`}
                                       >
                                         <div className="flex items-center justify-between">
                                           <div>
                                             <p className="font-semibold text-slate-900 dark:text-slate-200">{ad.app_name}</p>
-                                            <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate max-w-[180px]">
+                                            <p className="text-[11px] text-slate-600 dark:text-slate-400 truncate max-w-[180px]">
                                               {ad.file || (
                                                 <span className="text-rose-600 dark:text-rose-400 font-semibold flex items-center gap-1">
                                                   <XCircle className="w-2.5 h-2.5 inline" /> Failed
@@ -1183,15 +1200,15 @@ export function BackupsRecoveryView({
                                               )}
                                             </p>
                                           </div>
-                                          <div className="text-right">
+                                          <div className="text-right tabular-nums">
                                             <span className="text-slate-700 dark:text-slate-300 font-mono">{formatBytes(ad.size_bytes)}</span>
                                             {ad.duration_seconds !== null && ad.duration_seconds !== undefined && (
-                                              <p className="text-[10px] text-slate-500">{ad.duration_seconds.toFixed(1)}s</p>
+                                              <p className="text-[10px] text-slate-500 dark:text-slate-400">{ad.duration_seconds.toFixed(1)}s</p>
                                             )}
                                           </div>
                                         </div>
                                         {ad.error && (
-                                          <div className="p-1.5 rounded bg-rose-100/80 dark:bg-black/40 border border-rose-300 dark:border-rose-900/60 text-[10px] text-rose-800 dark:text-rose-300 font-mono break-all whitespace-pre-wrap">
+                                          <div className="p-1.5 rounded bg-rose-100/80 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-900/60 text-[10px] text-rose-800 dark:text-rose-300 font-mono break-all whitespace-pre-wrap">
                                             <span className="font-bold text-rose-600 dark:text-rose-400">Error: </span>
                                             {ad.error}
                                           </div>
@@ -1203,16 +1220,16 @@ export function BackupsRecoveryView({
                               )}
 
                               {r.pruned_files && Object.keys(r.pruned_files).length > 0 && (
-                                <div className="space-y-2 pt-2 border-t border-slate-800/80">
-                                  <p className="text-[11px] font-semibold uppercase text-amber-400 tracking-wider flex items-center gap-1.5">
-                                    <Trash2 className="w-3 h-3 text-amber-400" />
+                                <div className="space-y-2 pt-2 border-t border-slate-200 dark:border-slate-800">
+                                  <p className="text-[11px] font-semibold uppercase text-amber-700 dark:text-amber-400 tracking-wider flex items-center gap-1.5">
+                                    <Trash2 className="w-3 h-3 text-amber-600 dark:text-amber-400" />
                                     GFS Pruning Actions (Expired Daily Snapshots Reclaimed)
                                   </p>
                                   <div className="space-y-1">
                                     {Object.entries(r.pruned_files).map(([app, files]) => (
-                                      <div key={app} className="text-xs text-slate-400">
-                                        <span className="text-slate-300 font-semibold">{app}:</span>{' '}
-                                        <span className="font-mono text-[11px] text-slate-500">
+                                      <div key={app} className="text-xs text-slate-700 dark:text-slate-300">
+                                        <span className="text-slate-900 dark:text-slate-100 font-semibold">{app}:</span>{' '}
+                                        <span className="font-mono text-[11px] text-slate-600 dark:text-slate-400">
                                           {files.join(', ')}
                                         </span>
                                       </div>

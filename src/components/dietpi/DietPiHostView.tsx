@@ -59,10 +59,10 @@ export function DietPiHostView({
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-            <Server className="w-5 h-5 text-emerald-400" />
+            <Server className="w-5 h-5 text-[var(--color-brand-text)]" />
             DietPi Web Services Host (WSH)
           </h2>
-          <p className="text-sm text-slate-500 mt-0.5">
+          <p className="text-sm text-slate-600 dark:text-slate-400 mt-0.5">
             Raspberry Pi 5 OS health, APT packages, system services, and maintenance actions
           </p>
         </div>
@@ -71,11 +71,7 @@ export function DietPiHostView({
           <button
             onClick={onTriggerReboot}
             disabled={isRebooting}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold text-white transition-colors ${
-              isRebooting
-                ? 'bg-rose-800/60 cursor-not-allowed text-rose-300'
-                : 'bg-rose-600 hover:bg-rose-500'
-            }`}
+            className="btn-danger text-xs py-1.5 px-3"
             title="Initiate graceful reboot of DietPi WSH and verify recovery"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isRebooting ? 'animate-spin' : ''}`} />
@@ -85,7 +81,7 @@ export function DietPiHostView({
           <button
             onClick={onRefresh}
             disabled={isLoading}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors"
+            className="btn-secondary text-xs py-1.5 px-3"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
             Refresh Snapshot
@@ -95,14 +91,14 @@ export function DietPiHostView({
 
       {/* Reboot Banner if needed */}
       {(snapshot?.reboot_required || isRebooting) && (
-        <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 flex items-center justify-between">
+        <div className="rounded-2xl border border-rose-300 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/10 p-4 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <ShieldAlert className="w-5 h-5 text-rose-400 flex-shrink-0 animate-pulse" />
+            <ShieldAlert className="w-5 h-5 text-rose-600 dark:text-rose-400 flex-shrink-0 animate-pulse" />
             <div>
-              <p className="text-sm font-semibold text-rose-200">
+              <p className="text-sm font-semibold text-rose-900 dark:text-rose-200">
                 {isRebooting ? 'Reboot In Progress' : 'Reboot Required'}
               </p>
-              <p className="text-xs text-rose-300/80">
+              <p className="text-xs text-rose-800 dark:text-rose-300/80">
                 {isRebooting
                   ? 'Host is restarting and verifying recovery of SSH, Lighttpd, Docker, and apps...'
                   : 'Kernel or system libraries have been upgraded (/var/run/reboot-required)'}
@@ -112,11 +108,7 @@ export function DietPiHostView({
           <button
             onClick={onTriggerReboot}
             disabled={isRebooting}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold text-white whitespace-nowrap transition-colors flex items-center gap-1.5 ${
-              isRebooting
-                ? 'bg-rose-800/60 cursor-not-allowed text-rose-300'
-                : 'bg-rose-600 hover:bg-rose-500'
-            }`}
+            className="btn-danger text-xs py-1.5 px-3"
           >
             {isRebooting ? (
               <>
@@ -132,45 +124,45 @@ export function DietPiHostView({
 
       {/* Host Metrics & Hardware */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm">
-          <p className="text-xs font-medium text-slate-500">DietPi Version</p>
-          <p className="text-lg font-bold text-slate-900 dark:text-slate-100 mt-1 font-mono">
+        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm">
+          <p className="text-xs font-medium text-slate-600 dark:text-slate-400">DietPi Version</p>
+          <p className="text-lg font-bold tabular-nums text-slate-900 dark:text-slate-100 mt-1 font-mono">
             {snapshot?.dietpi_version || 'Loading...'}
           </p>
-          <p className="text-xs text-slate-400 mt-0.5 font-mono">Linux {snapshot?.kernel || 'kernel'}</p>
+          <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5 font-mono">Linux {snapshot?.kernel || 'kernel'}</p>
         </div>
 
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm">
-          <p className="text-xs font-medium text-slate-500">Host Uptime</p>
-          <p className="text-lg font-bold text-slate-900 dark:text-slate-100 mt-1 font-mono">
+        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm">
+          <p className="text-xs font-medium text-slate-600 dark:text-slate-400">Host Uptime</p>
+          <p className="text-lg font-bold tabular-nums text-slate-900 dark:text-slate-100 mt-1 font-mono">
             {snapshot ? formatUptime(snapshot.uptime_secs) : 'Loading...'}
           </p>
-          <p className="text-xs text-slate-400 mt-0.5">Host: {snapshot?.hostname || 'wsh'}</p>
+          <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">Host: {snapshot?.hostname || 'wsh'}</p>
         </div>
 
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm">
-          <p className="text-xs font-medium text-slate-500">RPi 5 Thermal State</p>
+        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm">
+          <p className="text-xs font-medium text-slate-600 dark:text-slate-400">RPi 5 Thermal State</p>
           <div className="flex items-center gap-2 mt-1">
-            <Cpu className="w-5 h-5 text-emerald-400" />
-            <span className="text-lg font-bold font-mono text-emerald-400">
+            <Cpu className="w-5 h-5 text-emerald-700 dark:text-emerald-400" />
+            <span className="text-lg font-bold font-mono tabular-nums text-emerald-700 dark:text-emerald-400">
               {snapshot?.rpi_throttled === '0x0' ? 'Normal (0x0)' : snapshot?.rpi_throttled || 'OK'}
             </span>
           </div>
-          <p className="text-xs text-slate-400 mt-0.5">vcgencmd get_throttled</p>
+          <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">vcgencmd get_throttled</p>
         </div>
 
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm">
-          <p className="text-xs font-medium text-slate-500">System Services</p>
+        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm">
+          <p className="text-xs font-medium text-slate-600 dark:text-slate-400">System Services</p>
           <div className="mt-1 space-y-1 font-mono text-xs">
             <div className="flex justify-between">
-              <span className="text-slate-400">Lighttpd:</span>
-              <span className={snapshot?.services.lighttpd === 'active' ? 'text-emerald-400' : 'text-slate-400'}>
+              <span className="text-slate-600 dark:text-slate-400">Lighttpd:</span>
+              <span className={snapshot?.services.lighttpd === 'active' ? 'text-emerald-700 dark:text-emerald-400 font-semibold' : 'text-slate-600 dark:text-slate-400'}>
                 {snapshot?.services.lighttpd || 'Checking'}
               </span>
             </div>
             <div className="flex justify-between">
-              <span className="text-slate-400">Docker:</span>
-              <span className={snapshot?.services.docker === 'active' ? 'text-emerald-400' : 'text-slate-400'}>
+              <span className="text-slate-600 dark:text-slate-400">Docker:</span>
+              <span className={snapshot?.services.docker === 'active' ? 'text-emerald-700 dark:text-emerald-400 font-semibold' : 'text-slate-600 dark:text-slate-400'}>
                 {snapshot?.services.docker || 'Checking'}
               </span>
             </div>
@@ -179,14 +171,14 @@ export function DietPiHostView({
       </div>
 
       {/* Upgradable APT Packages */}
-      <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4">
-        <div className="flex items-center justify-between">
+      <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4">
+        <div className="flex items-center justify-between gap-4">
           <div>
-            <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm flex items-center gap-2">
-              <Terminal className="w-4 h-4 text-emerald-400" />
+            <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm flex items-center gap-2 tabular-nums">
+              <Terminal className="w-4 h-4 text-[var(--color-brand-text)]" />
               Upgradable Debian APT Packages ({upgradablePkgs.length})
             </h3>
-            <p className="text-xs text-slate-500 mt-0.5">
+            <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
               Cached from apt list --upgradable via stateless read-only snapshot
             </p>
           </div>
@@ -199,7 +191,7 @@ export function DietPiHostView({
                 );
                 onTriggerAction('Upgrade APT Packages', sshCmd.command, sshCmd.args);
               }}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-600 hover:bg-emerald-500 text-white transition-colors"
+              className="btn-primary text-xs py-1.5 px-3"
             >
               Upgrade All Packages
             </button>
@@ -207,14 +199,14 @@ export function DietPiHostView({
         </div>
 
         {upgradablePkgs.length === 0 ? (
-          <div className="text-center py-6 text-xs text-slate-500 font-mono">
+          <div className="text-center py-6 text-xs text-slate-600 dark:text-slate-400 font-mono">
             All system packages are fully up-to-date.
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs font-mono">
               <thead>
-                <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-500">
+                <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-600 dark:text-slate-400">
                   <th className="pb-2">Package Name</th>
                   <th className="pb-2">Details</th>
                 </tr>
@@ -222,8 +214,8 @@ export function DietPiHostView({
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                 {upgradablePkgs.map((pkg, idx) => (
                   <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                    <td className="py-2 text-emerald-400 font-semibold">{pkg.pkg}</td>
-                    <td className="py-2 text-slate-400 truncate max-w-xl">{pkg.raw}</td>
+                    <td className="py-2 text-emerald-700 dark:text-emerald-400 font-semibold">{pkg.pkg}</td>
+                    <td className="py-2 text-slate-600 dark:text-slate-400 truncate max-w-xl">{pkg.raw}</td>
                   </tr>
                 ))}
               </tbody>

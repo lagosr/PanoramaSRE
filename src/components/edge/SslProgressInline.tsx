@@ -94,18 +94,18 @@ export const SslProgressInline: React.FC<SslProgressInlineProps> = ({ activeJob 
           </span>
 
           {batchProgress.isBatch && (
-            <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30">
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-[var(--color-accent-subtle)] text-[var(--color-accent-text)] border border-[var(--color-accent-ring)] tabular-nums">
               {batchProgress.completedDevices}/{batchProgress.totalDevices} Devices Processed
             </span>
           )}
 
-          <span className="text-slate-600 dark:text-slate-300 font-medium">
+          <span className="text-slate-700 dark:text-slate-300 font-medium">
             {stageInfo.subStep || 'Processing PKI operation'}
           </span>
         </div>
 
         {batchProgress.activeDeviceName && (
-          <span className="px-2 py-0.5 rounded text-[11px] font-mono font-semibold bg-slate-200/80 dark:bg-slate-800 text-slate-800 dark:text-slate-200 border border-slate-300 dark:border-slate-700">
+          <span className="px-2 py-0.5 rounded text-[11px] font-mono font-semibold bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700">
             Target: {batchProgress.activeDeviceName}
           </span>
         )}
@@ -129,7 +129,7 @@ export const SslProgressInline: React.FC<SslProgressInlineProps> = ({ activeJob 
                   ? 'bg-amber-500/10 border-amber-500/40 text-amber-800 dark:text-amber-300 ring-1 ring-amber-500/30'
                   : isDone
                   ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-400'
-                  : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-400 dark:text-slate-500'
+                  : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400'
               }`}
             >
               <div className="flex items-center justify-between">
@@ -155,10 +155,10 @@ export const SslProgressInline: React.FC<SslProgressInlineProps> = ({ activeJob 
 
       {/* Multi-Device Progress Checklist */}
       {batchProgress.devices.length > 0 && (
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5 space-y-2.5">
+        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5 space-y-2.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              <Layers className="w-4 h-4 text-emerald-500" />
+              <Layers className="w-4 h-4 text-[var(--color-brand-text)]" />
               <h5 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300 font-sans">
                 {batchProgress.isBatch ? 'Multi-Device Fleet Batch Checklist' : 'Device Deployment Checklist'}
               </h5>

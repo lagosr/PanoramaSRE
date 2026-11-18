@@ -42,10 +42,10 @@ export const NetworkBoundaryCanvas: React.FC<NetworkBoundaryCanvasProps> = ({
   return (
     <div className="space-y-6">
       {/* Route Quick Selector Strip */}
-      <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1.5 mr-1 font-mono">
-            <Radio className="w-3.5 h-3.5 text-emerald-500 animate-pulse" />
+          <span className="text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider flex items-center gap-1.5 mr-1 font-mono">
+            <Radio className="w-3.5 h-3.5 text-[var(--color-brand-text)] animate-pulse" />
             Active Target Route:
           </span>
           {topology.routes.map((rt) => {
@@ -502,11 +502,11 @@ export const NetworkBoundaryCanvas: React.FC<NetworkBoundaryCanvasProps> = ({
           </div>
 
           {/* Quick Action Trigger */}
-          <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/30 flex items-center justify-between text-xs font-mono">
-            <span className="text-slate-500">Inspect Deep Socket Details:</span>
+          <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 flex flex-wrap items-center justify-between gap-2 text-xs font-mono">
+            <span className="text-slate-600 dark:text-slate-400">Inspect Deep Socket Details:</span>
             <button
               onClick={() => onOpenInspector(activeRoute, null)}
-              className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium transition-colors shadow-sm flex items-center gap-1.5"
+              className="btn-accent text-xs flex items-center gap-1.5"
             >
               Open Inspector
               <ArrowRight className="w-3.5 h-3.5" />

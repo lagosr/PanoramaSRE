@@ -116,10 +116,10 @@ export const OptInComplianceView: React.FC<OptInComplianceViewProps> = ({
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="min-w-0">
           <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-            <MessageSquare className="w-5 h-5 text-emerald-500 shrink-0" />
+            <MessageSquare className="w-5 h-5 text-[var(--color-brand-text)] shrink-0" />
             <span>Parakith SMS Opt-In Compliance Ledger</span>
           </h2>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+          <p className="text-sm text-slate-600 dark:text-slate-400 mt-0.5">
             Cloudflare D1 carrier evidentiary records ({snapshot?.databaseName || 'parakith-opt-ins'} • WNAM)
           </p>
         </div>
@@ -129,7 +129,7 @@ export const OptInComplianceView: React.FC<OptInComplianceViewProps> = ({
             type="button"
             onClick={onSyncNow}
             disabled={isSyncing || !workspacePath}
-            className="px-3 py-2 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white transition-colors flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 shadow-sm cursor-pointer"
+            className="btn-primary text-xs flex items-center gap-1.5"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
             <span>{isSyncing ? 'Syncing D1...' : 'Sync D1 Now'}</span>
@@ -139,9 +139,9 @@ export const OptInComplianceView: React.FC<OptInComplianceViewProps> = ({
             type="button"
             onClick={() => onExport(filteredRecords, 'csv')}
             disabled={filteredRecords.length === 0}
-            className="px-3 py-2 rounded-lg text-xs font-semibold bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-colors flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 cursor-pointer"
+            className="btn-secondary text-xs flex items-center gap-1.5"
           >
-            <Download className="w-3.5 h-3.5 text-sky-500" />
+            <Download className="w-3.5 h-3.5 text-[var(--color-accent-text)]" />
             <span>Export CSV</span>
           </button>
 
@@ -149,7 +149,7 @@ export const OptInComplianceView: React.FC<OptInComplianceViewProps> = ({
             type="button"
             onClick={() => onExport(filteredRecords, 'json')}
             disabled={filteredRecords.length === 0}
-            className="px-3 py-2 rounded-lg text-xs font-semibold bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-colors flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 cursor-pointer"
+            className="btn-secondary text-xs flex items-center gap-1.5"
           >
             <FileJson className="w-3.5 h-3.5 text-amber-500" />
             <span>Export JSON</span>
@@ -159,10 +159,10 @@ export const OptInComplianceView: React.FC<OptInComplianceViewProps> = ({
 
       {/* Sync Error Alert */}
       {snapshot?.syncError && (
-        <div className="rounded-xl border border-rose-500/40 bg-white dark:bg-slate-900 p-4 shadow-sm flex items-start gap-3">
+        <div className="rounded-2xl border border-rose-500/40 bg-white dark:bg-slate-900 p-4 shadow-sm flex items-start gap-3">
           <AlertTriangle className="w-5 h-5 text-rose-500 shrink-0 mt-0.5" />
           <div className="min-w-0">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-rose-600 dark:text-rose-400">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-rose-700 dark:text-rose-400">
               Remote D1 Synchronization Warning
             </h3>
             <p className="text-xs font-mono text-slate-700 dark:text-slate-300 mt-1 break-words">
@@ -173,9 +173,9 @@ export const OptInComplianceView: React.FC<OptInComplianceViewProps> = ({
       )}
 
       {/* KPI Strip */}
-      <div className="grid grid-cols-2 lg:grid-cols-6 gap-4">
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm">
-          <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider block">
+      <div className="grid grid-cols-2 lg:grid-cols-6 gap-4 tabular-nums">
+        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm">
+          <span className="text-[11px] font-medium text-slate-600 dark:text-slate-400 uppercase tracking-wider block">
             Total Records
           </span>
           <span className="text-2xl font-bold font-mono text-slate-900 dark:text-slate-100 mt-1 block">
@@ -183,63 +183,63 @@ export const OptInComplianceView: React.FC<OptInComplianceViewProps> = ({
           </span>
         </div>
 
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm">
-          <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider block">
+        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm">
+          <span className="text-[11px] font-medium text-slate-600 dark:text-slate-400 uppercase tracking-wider block">
             Active Opt-Ins
           </span>
-          <span className="text-2xl font-bold font-mono text-emerald-600 dark:text-emerald-400 mt-1 block">
+          <span className="text-2xl font-bold font-mono text-emerald-700 dark:text-emerald-400 mt-1 block">
             {snapshot?.consentedCount ?? 0}
           </span>
         </div>
 
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm">
-          <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider block">
+        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm">
+          <span className="text-[11px] font-medium text-slate-600 dark:text-slate-400 uppercase tracking-wider block">
             Declined (no)
           </span>
-          <span className="text-2xl font-bold font-mono text-amber-600 dark:text-amber-400 mt-1 block">
+          <span className="text-2xl font-bold font-mono text-amber-700 dark:text-amber-400 mt-1 block">
             {snapshot?.declinedCount ?? 0}
           </span>
         </div>
 
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm">
-          <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider block">
+        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm">
+          <span className="text-[11px] font-medium text-slate-600 dark:text-slate-400 uppercase tracking-wider block">
             Last 7 Days
           </span>
-          <span className="text-2xl font-bold font-mono text-cyan-600 dark:text-cyan-400 mt-1 block">
+          <span className="text-2xl font-bold font-mono text-[var(--color-accent-text)] mt-1 block">
             {snapshot?.last7dCount ?? 0}
           </span>
         </div>
 
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm">
-          <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider block">
+        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm">
+          <span className="text-[11px] font-medium text-slate-600 dark:text-slate-400 uppercase tracking-wider block">
             D1 Binding (WNAM)
           </span>
           <div className="flex items-center gap-1.5 mt-1.5">
-            <Database className="w-4 h-4 text-emerald-500 shrink-0" />
+            <Database className="w-4 h-4 text-[var(--color-brand-text)] shrink-0" />
             <span className="text-xs font-mono font-semibold text-slate-800 dark:text-slate-200 truncate" title={d1DatabaseId}>
               {snapshot?.databaseName || 'parakith-opt-ins'}
             </span>
           </div>
-          <span className="text-[10px] font-mono text-slate-400 truncate block mt-0.5">
+          <span className="text-[10px] font-mono text-slate-600 dark:text-slate-400 truncate block mt-0.5">
             {d1DatabaseId.slice(0, 8)}...
           </span>
         </div>
 
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm">
-          <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider block">
+        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm">
+          <span className="text-[11px] font-medium text-slate-600 dark:text-slate-400 uppercase tracking-wider block">
             Last Synced
           </span>
           <span className="text-sm font-bold font-mono text-slate-800 dark:text-slate-200 mt-1 block truncate">
             {formatRelativeTime(snapshot?.lastSyncedAt)}
           </span>
-          <span className="text-[10px] font-mono text-slate-400 truncate block mt-0.5">
+          <span className="text-[10px] font-mono text-slate-600 dark:text-slate-400 truncate block mt-0.5">
             {snapshot?.lastSyncedAt ? formatLocalDateTime(snapshot.lastSyncedAt) : 'Cached locally'}
           </span>
         </div>
       </div>
 
       {/* Filters Toolbar */}
-      <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm flex flex-col md:flex-row items-stretch md:items-center gap-3">
+      <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm flex flex-col md:flex-row items-stretch md:items-center gap-3">
         <div className="relative flex-1 min-w-0">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
@@ -247,7 +247,7 @@ export const OptInComplianceView: React.FC<OptInComplianceViewProps> = ({
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search subscriber name, phone digits, or IP address..."
-            className="w-full pl-9 pr-3 py-2 rounded-lg text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-500"
+            className="w-full pl-9 pr-3 py-2 rounded-xl text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100 focus:outline-none focus:border-[var(--color-brand)]"
           />
         </div>
 

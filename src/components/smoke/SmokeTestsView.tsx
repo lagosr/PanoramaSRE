@@ -18,6 +18,7 @@ import { SmokeTestRun, TerminalTab } from '../../lib/types';
 import { parseUtcDate } from '../../lib/formatters';
 import { filterTabsForScope, getTabFinishedDetails } from '../../lib/stream-utils';
 import { WorkStreamContainer } from '../ui/WorkStreamContainer';
+import { SegmentedControl } from '@lagosr/panorama-ui-kit';
 
 interface SmokeTestsViewProps {
   runs: SmokeTestRun[];
@@ -504,10 +505,10 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2.5">
-            <FlaskConical className="w-6 h-6 text-indigo-500 dark:text-indigo-400" />
+            <FlaskConical className="w-6 h-6 text-[var(--color-brand-text)]" />
             Production Smoke Tests
           </h1>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+          <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">
             Automated end-to-end verification of suite health, live outbound notification gate, .env conformance, SSO/JWKS, and Zero-Trust API guards. Runs 4x daily ({scheduleSlots.join(', ')}) and on every deploy.
           </p>
         </div>
@@ -516,7 +517,7 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
           <button
             onClick={onRefreshHistory}
             disabled={isRunning}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 whitespace-nowrap flex-shrink-0 transition-colors cursor-pointer shadow-xs"
+            className="btn-secondary text-xs inline-flex items-center gap-1.5"
           >
             <RefreshCw className="w-3.5 h-3.5" />
             Refresh
@@ -525,7 +526,7 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
             onClick={onRegisterOsSchedule}
             disabled={isRunning}
             title="Register 4x/day Windows Task Scheduler job (08:00, 13:00, 17:00, 22:00)"
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 whitespace-nowrap flex-shrink-0 transition-colors cursor-pointer shadow-xs"
+            className="btn-secondary text-xs inline-flex items-center gap-1.5"
           >
             <CalendarClock className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400" />
             Sync OS Schedule
@@ -536,7 +537,7 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
               onClick={() => onRunNow(false)}
               disabled={isRunning}
               title="Run smoke suite (smart-gated: reuses recent live SMS if auth/spendy/basket unchanged within 8h)"
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-l-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/20 whitespace-nowrap flex-shrink-0 transition-colors cursor-pointer disabled:opacity-50"
+              className="inline-flex items-center justify-center gap-1.5 px-4 py-2 min-h-[44px] sm:min-h-[38px] rounded-l-xl text-xs font-semibold bg-[var(--color-brand)] hover:bg-[var(--color-brand-hover)] text-[var(--color-on-brand)] shadow-sm whitespace-nowrap flex-shrink-0 transition-colors cursor-pointer disabled:opacity-50"
             >
               {isRunning ? (
                 <RefreshCw className="w-3.5 h-3.5 animate-spin" />
@@ -555,7 +556,7 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
               }}
               aria-label="Smoke Suite Run Options"
               title="More Smoke Suite Actions (Run Smoke Suite or Force Live E2E SMS)"
-              className="inline-flex items-center justify-center w-7 rounded-r-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white border-l border-indigo-400/40 shadow-lg shadow-indigo-500/20 transition-colors cursor-pointer disabled:opacity-50 shrink-0"
+              className="inline-flex items-center justify-center w-8 min-h-[44px] sm:min-h-[38px] rounded-r-xl text-xs font-semibold bg-[var(--color-brand)] hover:bg-[var(--color-brand-hover)] text-[var(--color-on-brand)] border-l border-black/15 dark:border-white/15 shadow-sm transition-colors cursor-pointer disabled:opacity-50 shrink-0"
             >
               <ChevronDown className="w-3.5 h-3.5" />
             </button>
@@ -577,9 +578,9 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
                       setIsRunDropdownOpen(false);
                       onRunNow(false);
                     }}
-                    className="w-full px-3 py-2 text-xs flex items-center gap-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/80 text-slate-700 dark:text-slate-200 transition-colors cursor-pointer"
+                    className="w-full px-3 py-2 text-xs flex items-center gap-2.5 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 transition-colors cursor-pointer"
                   >
-                    <Play className="w-3.5 h-3.5 text-indigo-500 dark:text-indigo-400 shrink-0" />
+                    <Play className="w-3.5 h-3.5 text-[var(--color-brand-text)] shrink-0" />
                     <div className="text-left">
                       <div className="font-semibold">Run Smoke Suite</div>
                       <div className="text-[10px] text-slate-500 dark:text-slate-400">
@@ -599,10 +600,10 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
                     <Sparkles className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400 shrink-0" />
                     <div className="text-left">
                       <div className="font-semibold flex items-center gap-1.5">
-                        <MessageSquare className="w-3 h-3 text-emerald-500 dark:text-emerald-400" />
+                        <MessageSquare className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
                         Force Live E2E SMS
                       </div>
-                      <div className="text-[10px] text-emerald-600/80 dark:text-emerald-400/80">
+                      <div className="text-[10px] text-emerald-700/80 dark:text-emerald-400/80">
                         Bypass cooldown &amp; send Twilio SMS ($0.0166)
                       </div>
                     </div>
@@ -615,110 +616,93 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
       </div>
 
       {lastError && (
-        <div className="rounded-xl bg-rose-500/10 border border-rose-500/30 px-4 py-3 text-xs text-rose-700 dark:text-rose-200">
+        <div className="rounded-2xl bg-rose-500/10 border border-rose-500/30 px-4 py-3 text-xs text-rose-700 dark:text-rose-200">
           <span className="font-semibold">Smoke Runner Error:</span> {lastError}
         </div>
       )}
 
       {/* KPI Summary Cards (Position 2) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 shadow-sm">
-          <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Latest Status</div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 tabular-nums">
+        <div className="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 shadow-sm">
+          <div className="text-[11px] font-medium text-slate-600 dark:text-slate-400 uppercase tracking-wider">Latest Status</div>
           <div className="mt-2 flex items-center gap-2">
             {latestAllPass === null ? (
               <span className="text-lg font-bold text-slate-500 dark:text-slate-400">No Runs Yet</span>
             ) : latestAllPass ? (
               <>
-                <CheckCircle2 className="w-5 h-5 text-emerald-500 dark:text-emerald-400" />
-                <span className="text-lg font-bold text-emerald-600 dark:text-emerald-400">ALL PASS</span>
+                <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+                <span className="text-lg font-bold text-emerald-700 dark:text-emerald-400">ALL PASS</span>
               </>
             ) : (
               <>
-                <XCircle className="w-5 h-5 text-rose-500 dark:text-rose-400" />
-                <span className="text-lg font-bold text-rose-600 dark:text-rose-400">{latestRun?.failed} FAILING</span>
+                <XCircle className="w-5 h-5 text-rose-600 dark:text-rose-400" />
+                <span className="text-lg font-bold text-rose-700 dark:text-rose-400">{latestRun?.failed} FAILING</span>
               </>
             )}
           </div>
-          <div className="text-[11px] text-slate-500 mt-1">
+          <div className="text-[11px] text-slate-600 dark:text-slate-400 mt-1">
             {latestRun ? `${latestRun.passed}/${latestRun.total} checks passed` : 'Click Run Smoke Tests'}
           </div>
         </div>
 
-        <div className="rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 shadow-sm">
-          <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Last Execution</div>
+        <div className="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 shadow-sm">
+          <div className="text-[11px] font-medium text-slate-600 dark:text-slate-400 uppercase tracking-wider">Last Execution</div>
           <div className="mt-2 text-sm font-semibold text-slate-900 dark:text-slate-100 truncate">
             {latestRun ? formatRunTimestamp(latestRun.timestamp) : '—'}
           </div>
-          <div className="text-[11px] text-slate-500 mt-1">
-            Trigger: <span className="text-slate-700 dark:text-slate-300 font-mono">{latestRun?.triggeredBy || '—'}</span>
+          <div className="text-[11px] text-slate-600 dark:text-slate-400 mt-1">
+            Trigger: <span className="text-slate-800 dark:text-slate-300 font-mono">{latestRun?.triggeredBy || '—'}</span>
           </div>
         </div>
 
-        <div className="rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 shadow-sm">
-          <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">4x Daily Schedule</div>
+        <div className="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 shadow-sm">
+          <div className="text-[11px] font-medium text-slate-600 dark:text-slate-400 uppercase tracking-wider">4x Daily Schedule</div>
           <div className="mt-2 flex items-center gap-1.5 text-sm font-semibold text-slate-900 dark:text-slate-100">
-            <Clock className="w-4 h-4 text-indigo-500 dark:text-indigo-400" />
+            <Clock className="w-4 h-4 text-[var(--color-brand-text)]" />
             <span>{getNextScheduleSlot(scheduleSlots)}</span>
           </div>
-          <div className="text-[11px] text-slate-500 mt-1 font-mono">{scheduleSlots.join(' • ')}</div>
+          <div className="text-[11px] text-slate-600 dark:text-slate-400 mt-1 font-mono">{scheduleSlots.join(' • ')}</div>
         </div>
 
-        <div className="rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 shadow-sm">
-          <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Deploy Gate</div>
-          <div className="mt-2 flex items-center gap-1.5 text-sm font-semibold text-emerald-600 dark:text-emerald-300">
+        <div className="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 shadow-sm">
+          <div className="text-[11px] font-medium text-slate-600 dark:text-slate-400 uppercase tracking-wider">Deploy Gate</div>
+          <div className="mt-2 flex items-center gap-1.5 text-sm font-semibold text-emerald-700 dark:text-emerald-300">
             <ShieldCheck className="w-4 h-4" />
             <span>Auto-Revert Armed</span>
           </div>
-          <div className="text-[11px] text-slate-500 mt-1">Failed smoke gate reverts container</div>
+          <div className="text-[11px] text-slate-600 dark:text-slate-400 mt-1">Failed smoke gate reverts container</div>
         </div>
       </div>
 
       {/* Main Split (Position 3): Run History (Left) + Check Breakdown (Right) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Recent Runs */}
-        <div className="lg:col-span-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col shadow-sm">
+        <div className="lg:col-span-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col shadow-sm">
           <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-xs font-semibold text-slate-800 dark:text-slate-200 uppercase tracking-wider">
+            <h2 className="text-xs font-semibold text-slate-800 dark:text-slate-200 uppercase tracking-wider tabular-nums">
               Recent Runs ({filteredRuns.length})
             </h2>
-            <div className="inline-flex items-center rounded-lg bg-slate-100 dark:bg-slate-800 p-0.5 border border-slate-200 dark:border-slate-700/80">
-              <button
-                type="button"
-                onClick={() => {
-                  setHistoryMode('last10');
-                  setCurrentPage(1);
-                  if (selectedRunId && !runs.slice(0, PAGE_SIZE).some((r) => r.id === selectedRunId)) {
-                    setSelectedRunId(null);
-                    setManualTabOverrideId(null);
-                  }
-                }}
-                className={`px-2 py-0.5 rounded-md text-[11px] font-medium transition-colors cursor-pointer whitespace-nowrap ${
-                  historyMode === 'last10'
-                    ? 'bg-indigo-600 text-white shadow-sm'
-                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-                }`}
-              >
-                Last 10
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setHistoryMode('last7days');
-                  setCurrentPage(1);
-                }}
-                className={`px-2 py-0.5 rounded-md text-[11px] font-medium transition-colors cursor-pointer whitespace-nowrap ${
-                  historyMode === 'last7days'
-                    ? 'bg-indigo-600 text-white shadow-sm'
-                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-                }`}
-              >
-                Last 7 Days
-              </button>
-            </div>
+            <SegmentedControl<'last10' | 'last7days'>
+              activeVariant="brand"
+              size="sm"
+              value={historyMode}
+              onChange={(val) => {
+                setHistoryMode(val);
+                setCurrentPage(1);
+                if (val === 'last10' && selectedRunId && !runs.slice(0, PAGE_SIZE).some((r) => r.id === selectedRunId)) {
+                  setSelectedRunId(null);
+                  setManualTabOverrideId(null);
+                }
+              }}
+              options={[
+                { value: 'last10', label: 'Last 10' },
+                { value: 'last7days', label: 'Last 7 Days' },
+              ]}
+            />
           </div>
-          <div className="divide-y divide-slate-200 dark:divide-slate-800/70 max-h-[520px] overflow-y-auto flex-1">
+          <div className="divide-y divide-slate-200 dark:divide-slate-800 max-h-[520px] overflow-y-auto flex-1">
             {filteredRuns.length === 0 ? (
-              <div className="p-6 text-center text-xs text-slate-500">
+              <div className="p-6 text-center text-xs text-slate-600 dark:text-slate-400">
                 {runs.length === 0
                   ? 'No smoke test runs recorded yet.'
                   : 'No smoke test runs recorded in the last 7 days.'}
@@ -734,14 +718,14 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
                     onClick={() => handleSelectRun(run)}
                     className={`w-full text-left px-4 py-3 transition-colors cursor-pointer ${
                       isSelected
-                        ? 'bg-indigo-500/10 border-l-2 border-indigo-500 dark:border-indigo-400'
+                        ? 'bg-[var(--color-brand-subtle)] border-l-2 border-[var(--color-brand)]'
                         : 'hover:bg-slate-50 dark:hover:bg-slate-800/60'
                     }`}
                   >
                     <div className="flex items-center justify-between gap-2">
                       <span
-                        className={`inline-flex items-center gap-1 text-xs font-semibold ${
-                          ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'
+                        className={`inline-flex items-center gap-1 text-xs font-semibold tabular-nums ${
+                          ok ? 'text-emerald-700 dark:text-emerald-400' : 'text-rose-700 dark:text-rose-400'
                         }`}
                       >
                         {ok ? <CheckCircle2 className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}
@@ -766,14 +750,14 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
                         </span>
                       </div>
                     </div>
-                    <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">{formatRunTimestamp(run.timestamp)}</div>
+                    <div className="text-[11px] text-slate-600 dark:text-slate-400 mt-1 tabular-nums">{formatRunTimestamp(run.timestamp)}</div>
                   </button>
                 );
               })
             )}
           </div>
           {filteredRuns.length > 0 && (
-            <div className="px-4 py-2.5 border-t border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900/80 flex items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+            <div className="px-4 py-2.5 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 flex items-center justify-between gap-2 text-[11px] text-slate-600 dark:text-slate-400 tabular-nums">
               <span className="font-mono">
                 {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, filteredRuns.length)} of{' '}
                 {filteredRuns.length}
@@ -783,7 +767,7 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
                   type="button"
                   disabled={safePage <= 1}
                   onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  className="inline-flex items-center gap-0.5 px-2 py-1 rounded bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors"
+                  className="inline-flex items-center gap-0.5 px-2.5 py-1 min-h-[32px] rounded-lg bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors"
                 >
                   <ChevronLeft className="w-3.5 h-3.5" />
                   Prev
@@ -795,7 +779,7 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
                   type="button"
                   disabled={safePage >= totalPages}
                   onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                  className="inline-flex items-center gap-0.5 px-2 py-1 rounded bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors"
+                  className="inline-flex items-center gap-0.5 px-2.5 py-1 min-h-[32px] rounded-lg bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors"
                 >
                   Next
                   <ChevronRight className="w-3.5 h-3.5" />
@@ -806,10 +790,10 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
         </div>
 
         {/* Selected Run Checks */}
-        <div className="lg:col-span-8 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col shadow-sm">
+        <div className="lg:col-span-8 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col shadow-sm">
           <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
             <div>
-              <h2 className="text-xs font-semibold text-slate-800 dark:text-slate-200 uppercase tracking-wider">
+              <h2 className="text-xs font-semibold text-slate-800 dark:text-slate-200 uppercase tracking-wider tabular-nums">
                 Check Results {selectedRun ? `• ${formatRunTimestamp(selectedRun.timestamp)}` : ''}
               </h2>
             </div>
@@ -818,9 +802,9 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
                 <button
                   key={cat}
                   onClick={() => setCategoryFilter(cat)}
-                  className={`px-2 py-1 rounded text-[11px] font-medium capitalize cursor-pointer transition-colors ${
+                  className={`px-2.5 py-1 min-h-[32px] rounded-lg text-[11px] font-medium capitalize cursor-pointer transition-colors ${
                     categoryFilter === cat
-                      ? 'bg-indigo-600 text-white'
+                      ? 'bg-[var(--color-brand)] text-[var(--color-on-brand)] shadow-xs'
                       : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
                   }`}
                 >
@@ -830,9 +814,9 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
             </div>
           </div>
 
-          <div className="divide-y divide-slate-200 dark:divide-slate-800/70 max-h-[520px] overflow-y-auto">
+          <div className="divide-y divide-slate-200 dark:divide-slate-800 max-h-[520px] overflow-y-auto">
             {!selectedRun ? (
-              <div className="p-8 text-center text-xs text-slate-500">
+              <div className="p-8 text-center text-xs text-slate-600 dark:text-slate-400">
                 Select or run a smoke test to inspect individual assertions.
               </div>
             ) : (
@@ -840,9 +824,9 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
                 <div key={`${chk.name}-${idx}`} className="px-4 py-3 flex items-start justify-between gap-3">
                   <div className="flex items-start gap-2.5 min-w-0">
                     {chk.passed ? (
-                      <CheckCircle2 className="w-4 h-4 text-emerald-500 dark:text-emerald-400 mt-0.5 shrink-0" />
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
                     ) : (
-                      <XCircle className="w-4 h-4 text-rose-500 dark:text-rose-400 mt-0.5 shrink-0" />
+                      <XCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 mt-0.5 shrink-0" />
                     )}
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
@@ -853,14 +837,14 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
                       </div>
                       <p
                         className={`text-[11px] mt-0.5 break-words ${
-                          chk.passed ? 'text-slate-600 dark:text-slate-400' : 'text-rose-600 dark:text-rose-300 font-medium'
+                          chk.passed ? 'text-slate-600 dark:text-slate-400' : 'text-rose-700 dark:text-rose-300 font-medium'
                         }`}
                       >
                         {chk.detail}
                       </p>
                     </div>
                   </div>
-                  <span className="text-[11px] font-mono text-slate-500 whitespace-nowrap shrink-0">
+                  <span className="text-[11px] font-mono text-slate-600 dark:text-slate-400 whitespace-nowrap shrink-0 tabular-nums">
                     {chk.durationMs}ms
                   </span>
                 </div>

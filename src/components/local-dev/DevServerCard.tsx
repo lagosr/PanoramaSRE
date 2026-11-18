@@ -41,12 +41,12 @@ export function DevServerCard({
   };
 
   return (
-    <div className="flex flex-col justify-between rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm hover:border-slate-300 dark:hover:border-slate-700 transition-all overflow-hidden min-w-0">
+    <div className="flex flex-col justify-between rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm hover:border-slate-300 dark:hover:border-slate-700 transition-all overflow-hidden min-w-0">
       <div className="min-w-0">
         {/* Header: Title, URL, Port, and Status Badge */}
         <div className="flex items-start justify-between gap-2 mb-3 min-w-0">
           <div className="flex items-center gap-2.5 min-w-0 flex-1">
-            <div className="w-9 h-9 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 font-bold text-sm shrink-0">
+            <div className="w-9 h-9 rounded-xl bg-[var(--color-brand-subtle)] border border-[var(--color-brand-ring)] flex items-center justify-center text-[var(--color-brand-text)] font-bold text-sm shrink-0">
               {app.manifest.displayName.substring(0, 2).toUpperCase()}
             </div>
             <div className="min-w-0 flex-1">
@@ -57,7 +57,7 @@ export function DevServerCard({
                 href={normalizedHref}
                 target="_blank"
                 rel="noreferrer"
-                className="text-xs text-emerald-500 hover:text-emerald-400 font-mono hover:underline truncate block"
+                className="text-xs text-[var(--color-brand-text)] hover:underline font-mono truncate block tabular-nums"
               >
                 :{app.manifest.port}{cleanBasePath || '/'}
               </a>
@@ -66,19 +66,19 @@ export function DevServerCard({
 
           <div className="shrink-0">
             {isManaged && (
-              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 whitespace-nowrap">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30 whitespace-nowrap">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400 animate-pulse"></span>
                 MANAGED
               </span>
             )}
             {isExternal && (
-              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/30 whitespace-nowrap">
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/30 whitespace-nowrap">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 dark:bg-amber-400"></span>
                 EXTERNAL
               </span>
             )}
             {!isRunning && (
-              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-500/10 text-slate-400 border border-slate-500/30 whitespace-nowrap">
+              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-500/10 text-slate-600 dark:text-slate-400 border border-slate-500/30 whitespace-nowrap">
                 <span className="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
                 STOPPED
               </span>
@@ -87,15 +87,15 @@ export function DevServerCard({
         </div>
 
         {/* Database & Workspace Metrics */}
-        <div className="rounded-lg bg-slate-50 dark:bg-slate-950/60 border border-slate-100 dark:border-slate-800/80 p-3 mb-4 space-y-1.5 text-xs font-mono">
+        <div className="rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-3 mb-4 space-y-1.5 text-xs font-mono tabular-nums">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-slate-500 shrink-0">{isEdgePages ? 'Local D1:' : 'Local SQLite:'}</span>
+            <span className="text-slate-600 dark:text-slate-400 shrink-0">{isEdgePages ? 'Local D1:' : 'Local SQLite:'}</span>
             <span className="text-slate-800 dark:text-slate-300 truncate">
               {dev?.sqlite_size_bytes ? formatBytes(dev.sqlite_size_bytes) : 'Not found'}
             </span>
           </div>
           <div className="flex items-center justify-between gap-2">
-            <span className="text-slate-500 shrink-0">PRAGMA user_version:</span>
+            <span className="text-slate-600 dark:text-slate-400 shrink-0">PRAGMA user_version:</span>
             <span className="text-slate-800 dark:text-slate-300 truncate">
               {dev?.sqlite_user_version !== null && dev?.sqlite_user_version !== undefined
                 ? `v${dev.sqlite_user_version}`
@@ -103,21 +103,21 @@ export function DevServerCard({
             </span>
           </div>
           <div className="flex items-center justify-between gap-2">
-            <span className="text-slate-500 shrink-0">Command:</span>
-            <span className="text-slate-600 dark:text-slate-400 truncate text-right">
+            <span className="text-slate-600 dark:text-slate-400 shrink-0">Command:</span>
+            <span className="text-slate-700 dark:text-slate-400 truncate text-right">
               {activeDevCommand}
             </span>
           </div>
           {hasPreviewMode && (
-            <div className="pt-1.5 flex items-center justify-between gap-2 border-t border-slate-200/70 dark:border-slate-800/70 font-sans">
-              <span className="text-[11px] text-slate-500">Runtime Mode:</span>
-              <div className="inline-flex rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-0.5">
+            <div className="pt-1.5 flex items-center justify-between gap-2 border-t border-slate-200 dark:border-slate-800 font-sans">
+              <span className="text-[11px] text-slate-600 dark:text-slate-400">Runtime Mode:</span>
+              <div className="inline-flex rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-0.5">
                 <button
                   type="button"
                   onClick={() => setDevMode('dev')}
-                  className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-colors whitespace-nowrap ${
+                  className={`px-2 py-0.5 rounded-md text-[11px] font-semibold transition-colors whitespace-nowrap cursor-pointer ${
                     devMode === 'dev'
-                      ? 'bg-emerald-600 text-white'
+                      ? 'bg-[var(--color-brand)] text-[var(--color-on-brand)]'
                       : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
                   }`}
                 >
@@ -126,9 +126,9 @@ export function DevServerCard({
                 <button
                   type="button"
                   onClick={() => setDevMode('preview')}
-                  className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-colors whitespace-nowrap ${
+                  className={`px-2 py-0.5 rounded-md text-[11px] font-semibold transition-colors whitespace-nowrap cursor-pointer ${
                     devMode === 'preview'
-                      ? 'bg-sky-600 text-white'
+                      ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
                       : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
                   }`}
                 >
@@ -154,7 +154,7 @@ export function DevServerCard({
                 )
               }
               disabled={isActionPending}
-              className="flex-1 py-1.5 px-3 rounded-lg text-xs font-medium bg-emerald-600 hover:bg-emerald-500 text-white transition-colors whitespace-nowrap text-center"
+              className="flex-1 btn-primary text-xs justify-center"
             >
               Start
             </button>
@@ -169,7 +169,7 @@ export function DevServerCard({
                   )
                 }
                 disabled={isActionPending}
-                className="flex-1 py-1.5 px-2.5 rounded-lg text-xs font-medium bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-colors whitespace-nowrap text-center"
+                className="flex-1 btn-secondary text-xs justify-center"
               >
                 Start Auth + App
               </button>
@@ -189,14 +189,14 @@ export function DevServerCard({
                 )
               }
               disabled={isActionPending}
-              className="flex-1 py-1.5 px-3 rounded-lg text-xs font-medium bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-colors whitespace-nowrap"
+              className="flex-1 btn-secondary text-xs justify-center"
             >
               Restart
             </button>
             <button
               onClick={() => onStop(app.manifest.appId, app.manifest.port)}
               disabled={isActionPending}
-              className="py-1.5 px-3 rounded-lg text-xs font-medium bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/30 transition-colors whitespace-nowrap"
+              className="btn-danger text-xs justify-center"
             >
               Stop
             </button>
@@ -205,7 +205,7 @@ export function DevServerCard({
 
         {isExternal && (
           <div className="flex items-center gap-2 w-full">
-            <span className="flex-1 text-xs text-amber-600 dark:text-amber-400 italic truncate" title="Running via external shell or prior session">
+            <span className="flex-1 text-xs text-amber-700 dark:text-amber-400 italic truncate" title="Running via external shell or prior session">
               External / Prior Run
             </span>
             <button
@@ -218,14 +218,14 @@ export function DevServerCard({
                 )
               }
               disabled={isActionPending}
-              className="py-1.5 px-2.5 rounded-lg text-xs font-medium bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 transition-colors whitespace-nowrap"
+              className="btn-secondary text-xs justify-center"
             >
               Restart
             </button>
             <button
               onClick={() => onStop(app.manifest.appId, app.manifest.port)}
               disabled={isActionPending}
-              className="py-1.5 px-2.5 rounded-lg text-xs font-medium bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/30 transition-colors whitespace-nowrap"
+              className="btn-danger text-xs justify-center"
             >
               Stop
             </button>

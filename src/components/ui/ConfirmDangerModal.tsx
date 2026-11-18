@@ -1,5 +1,6 @@
-import React from 'react';
-import { AlertTriangle, X } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { AlertTriangle } from 'lucide-react';
+import { BottomSheetModal, ConfirmModal } from '@lagosr/panorama-ui-kit';
 
 interface ConfirmDangerModalProps {
   isOpen: boolean;
@@ -22,54 +23,46 @@ export const ConfirmDangerModal: React.FC<ConfirmDangerModalProps> = ({
   onCancel,
   isProcessing = false,
 }) => {
-  const [inputWord, setInputWord] = React.useState('');
+  const [inputWord, setInputWord] = useState('');
 
-  if (!isOpen) return null;
+  useEffect(() => {
+    if (!isOpen) {
+      setInputWord('');
+    }
+  }, [isOpen]);
 
-  const isConfirmed = confirmWord ? inputWord.trim().toUpperCase() === confirmWord.toUpperCase() : true;
+  if (!confirmWord) {
+    return (
+      <ConfirmModal
+        isOpen={isOpen}
+        title={title}
+        message={description}
+        confirmText={isProcessing ? 'Processing...' : confirmLabel}
+        variant="danger"
+        isLoading={isProcessing}
+        onConfirm={onConfirm}
+        onCancel={onCancel}
+      />
+    );
+  }
+
+  const isConfirmed = inputWord.trim().toUpperCase() === confirmWord.toUpperCase();
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm">
-      <div className="w-full max-w-md bg-white dark:bg-slate-900 border border-red-500/30 rounded-xl shadow-2xl p-6 relative">
-        <button
-          onClick={onCancel}
-          disabled={isProcessing}
-          className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors"
-        >
-          <X className="w-5 h-5" />
-        </button>
-
-        <div className="flex items-center space-x-3 text-red-500 dark:text-red-400 mb-4">
-          <div className="p-2 bg-red-500/10 rounded-lg">
-            <AlertTriangle className="w-6 h-6" />
-          </div>
-          <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">{title}</h3>
-        </div>
-
-        <p className="text-sm text-slate-600 dark:text-slate-300 mb-4">{description}</p>
-
-        {confirmWord && (
-          <div className="mb-4">
-            <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
-              Type <span className="text-red-500 dark:text-red-400 font-bold">{confirmWord}</span> to confirm:
-            </label>
-            <input
-              type="text"
-              value={inputWord}
-              onChange={(e) => setInputWord(e.target.value)}
-              disabled={isProcessing}
-              placeholder={confirmWord}
-              className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-slate-100 font-mono focus:border-red-500 focus:outline-none"
-            />
-          </div>
-        )}
-
-        <div className="flex justify-end space-x-3 mt-6">
+    <BottomSheetModal
+      isOpen={isOpen}
+      onClose={onCancel}
+      closeDisabled={isProcessing}
+      title={title}
+      icon={<AlertTriangle className="w-5 h-5 text-rose-600 dark:text-rose-400" />}
+      maxWidthClass="max-w-md"
+      footer={
+        <div className="flex items-center justify-end gap-3 w-full">
           <button
             type="button"
             onClick={onCancel}
             disabled={isProcessing}
-            className="px-4 py-2 text-sm bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors"
+            className="btn-secondary text-xs sm:text-sm"
           >
             Cancel
           </button>
@@ -77,12 +70,33 @@ export const ConfirmDangerModal: React.FC<ConfirmDangerModalProps> = ({
             type="button"
             onClick={onConfirm}
             disabled={!isConfirmed || isProcessing}
-            className="px-4 py-2 text-sm bg-red-600 hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
+            className="btn-danger text-xs sm:text-sm"
           >
             {isProcessing ? 'Processing...' : confirmLabel}
           </button>
         </div>
+      }
+    >
+      <div className="space-y-4">
+        <p className="text-sm text-slate-700 dark:text-slate-300 leading-relaxed">{description}</p>
+        <div>
+          <label
+            htmlFor="confirm-danger-word-input"
+            className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1.5"
+          >
+            Type <span className="text-rose-700 dark:text-rose-400 font-bold">{confirmWord}</span> to confirm:
+          </label>
+          <input
+            id="confirm-danger-word-input"
+            type="text"
+            value={inputWord}
+            onChange={(e) => setInputWord(e.target.value)}
+            disabled={isProcessing}
+            placeholder={confirmWord}
+            className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-sm text-slate-900 dark:text-slate-100 font-mono focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-danger,#be123c)] transition-colors"
+          />
+        </div>
       </div>
-    </div>
+    </BottomSheetModal>
   );
 };

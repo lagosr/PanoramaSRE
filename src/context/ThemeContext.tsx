@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import { ThemeProvider as UiKitThemeProvider } from '@lagosr/panorama-ui-kit';
 
 export type Theme = 'dark' | 'light' | 'system';
 export type ResolvedTheme = 'dark' | 'light';
@@ -43,6 +44,7 @@ export function applyThemeToDom(theme: Theme): ResolvedTheme {
   if (typeof document === 'undefined') return 'dark';
   const root = document.documentElement;
   const resolved: ResolvedTheme = theme === 'system' ? getSystemTheme() : theme;
+  root.setAttribute?.('data-brand', 'sre');
 
   if (resolved === 'dark') {
     root.classList.remove('light');
@@ -134,9 +136,11 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode; initialTheme?:
   }, [theme]);
 
   return (
-    <ThemeContext.Provider value={{ theme, resolvedTheme, setTheme, toggleTheme }}>
-      {children}
-    </ThemeContext.Provider>
+    <UiKitThemeProvider initialTheme={resolvedTheme} brand="sre">
+      <ThemeContext.Provider value={{ theme, resolvedTheme, setTheme, toggleTheme }}>
+        {children}
+      </ThemeContext.Provider>
+    </UiKitThemeProvider>
   );
 };
 

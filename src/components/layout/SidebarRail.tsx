@@ -90,10 +90,10 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
   ];
 
   return (
-    <aside className="w-16 md:w-64 bg-white dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 flex flex-col justify-between select-none shrink-0">
-      <div>
+    <aside className="w-16 md:w-64 bg-white dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 flex flex-col min-h-0 overflow-hidden select-none shrink-0">
+      <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
         {/* App Title / Header */}
-        <div className="h-16 flex items-center px-2.5 md:px-4 border-b border-slate-200 dark:border-slate-800 space-x-3">
+        <div className="h-16 flex items-center px-2.5 md:px-4 border-b border-slate-200 dark:border-slate-800 space-x-3 shrink-0">
           <div className="relative shrink-0">
             <div className="w-11 h-11 rounded-xl bg-white dark:bg-slate-900 border border-amber-500/40 dark:border-amber-400/40 flex items-center justify-center shadow-md shadow-amber-500/10 overflow-hidden">
               <img
@@ -120,14 +120,14 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
             <h1 className="text-sm font-bold tracking-tight bg-gradient-to-r from-orange-500 to-amber-500 dark:from-amber-300 dark:to-orange-400 bg-clip-text text-transparent">
               PanoramaSRE
             </h1>
-            <p className="text-[10px] text-slate-500 dark:text-slate-400 font-mono">
+            <p className="text-[10px] text-slate-600 dark:text-slate-400 font-mono tabular-nums">
               Control Plane v{APP_VERSION_INFO.version} {APP_VERSION_INFO.buildDate ? `(${APP_VERSION_INFO.buildDate})` : ''}
             </p>
           </div>
         </div>
 
         {/* Navigation links */}
-        <nav className="p-2 space-y-1">
+        <nav className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
@@ -137,11 +137,11 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
               <button
                 key={item.id}
                 onClick={() => onSelectTab(item.id)}
-                className={`w-full flex items-center px-3 py-2.5 rounded-lg text-sm font-medium transition-colors group relative ${
+                className={`w-full flex items-center px-3 py-2.5 min-h-[44px] rounded-xl text-sm font-medium transition-colors group relative cursor-pointer ${
                   isActive
                     ? isAlertTab
                       ? 'bg-rose-500/20 text-rose-800 dark:text-rose-300 border border-rose-500/40 ring-1 ring-rose-500/40 font-semibold'
-                      : 'bg-orange-500/15 text-orange-800 dark:text-orange-400 border border-orange-500/30 dark:border-orange-500/20 font-semibold shadow-sm'
+                      : 'bg-[var(--color-brand-subtle)] text-[var(--color-brand-text)] border border-[var(--color-brand-ring)] font-semibold shadow-sm'
                     : isAlertTab
                     ? 'text-rose-700 dark:text-rose-400 hover:text-rose-800 dark:hover:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/30 border border-rose-500/30'
                     : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-900 border border-transparent'
@@ -149,7 +149,7 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
                 title={item.label}
               >
                 <Icon className={`w-5 h-5 shrink-0 transition-colors ${
-                  isAlertTab ? 'text-rose-600 dark:text-rose-400 animate-pulse' : isActive ? 'text-orange-600 dark:text-orange-400' : 'text-slate-400 group-hover:text-slate-600 dark:group-hover:text-slate-200'
+                  isAlertTab ? 'text-rose-600 dark:text-rose-400 animate-pulse' : isActive ? 'text-[var(--color-brand-text)]' : 'text-slate-500 dark:text-slate-400 group-hover:text-slate-700 dark:group-hover:text-slate-200'
                 }`} />
                 <span className="ml-3 hidden md:inline whitespace-nowrap">{item.label}</span>
 
@@ -163,10 +163,10 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
                       }`}
                     />
                     <span
-                      className={`hidden md:inline-flex items-center justify-center ml-auto px-2 py-0.5 rounded-full text-[11px] font-mono font-bold shrink-0 ${
+                      className={`hidden md:inline-flex items-center justify-center ml-auto px-2 py-0.5 rounded-full text-[11px] font-mono font-bold tabular-nums shrink-0 ${
                         item.severity === 'error'
-                          ? 'bg-rose-500 text-white shadow-[0_0_8px_rgba(244,63,94,0.6)] animate-pulse'
-                          : 'bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/40 shadow-[0_0_6px_rgba(245,158,11,0.25)] font-bold'
+                          ? 'bg-rose-700 dark:bg-rose-600 text-white shadow-[0_0_8px_rgba(244,63,94,0.45)] animate-pulse'
+                          : 'bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-500/40 shadow-[0_0_6px_rgba(245,158,11,0.25)] font-bold'
                       }`}
                     >
                       {item.badge}

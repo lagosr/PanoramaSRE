@@ -336,15 +336,15 @@ export const SslDualProbeTable: React.FC<SslDualProbeTableProps> = ({
                           In Progress...
                         </span>
                       ) : (
-                        <div className="relative inline-flex items-stretch h-7">
+                        <div className="relative inline-flex items-stretch">
                           {/* Split Button: Primary Action (Renew Cert) */}
                           {onRenewCert && (
                             <button
                               onClick={() => onRenewCert(item.device_key, true)}
-                              className="h-7 px-2.5 rounded-l text-xs font-sans font-medium text-emerald-700 dark:text-emerald-300 hover:text-emerald-800 dark:hover:text-emerald-200 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 transition-colors whitespace-nowrap flex-shrink-0 cursor-pointer flex items-center gap-1.5"
+                              className="min-h-[36px] px-2.5 rounded-l-lg text-xs font-sans font-medium text-[var(--color-accent-text)] bg-[var(--color-accent-subtle)] hover:brightness-95 dark:hover:brightness-110 border border-[var(--color-accent-ring)] transition-colors whitespace-nowrap flex-shrink-0 cursor-pointer flex items-center gap-1.5"
                               title={`Request fresh Let's Encrypt certificate for ${item.display_name} (local disk only)`}
                             >
-                              <RotateCw className="w-3 h-3 text-emerald-500" />
+                              <RotateCw className="w-3 h-3" />
                               <span>Renew</span>
                             </button>
                           )}
@@ -356,7 +356,8 @@ export const SslDualProbeTable: React.FC<SslDualProbeTableProps> = ({
                               e.stopPropagation();
                               setOpenDropdownKey(openDropdownKey === item.device_key ? null : item.device_key);
                             }}
-                            className="h-7 w-6 rounded-r text-xs font-sans font-medium text-emerald-700 dark:text-emerald-300 hover:text-emerald-800 dark:hover:text-emerald-200 bg-emerald-500/10 hover:bg-emerald-500/25 border-y border-r border-emerald-500/30 transition-colors cursor-pointer flex items-center justify-center shrink-0"
+                            aria-label={`More actions for ${item.display_name}`}
+                            className="min-h-[36px] min-w-[36px] rounded-r-lg text-xs font-sans font-medium text-[var(--color-accent-text)] bg-[var(--color-accent-subtle)] hover:brightness-95 dark:hover:brightness-110 border-y border-r border-[var(--color-accent-ring)] transition-colors cursor-pointer flex items-center justify-center shrink-0"
                             title="More Certificate Actions (Deploy, Renew & Deploy)"
                           >
                             <ChevronDown className="w-3.5 h-3.5" />
@@ -372,7 +373,7 @@ export const SslDualProbeTable: React.FC<SslDualProbeTableProps> = ({
                               <div className={`absolute right-0 z-40 w-52 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl py-1 text-left animate-in fade-in zoom-in-95 duration-150 ${
                                 isNearBottom ? 'bottom-full mb-1.5' : 'top-full mt-1.5'
                               }`}>
-                                <div className="px-3 py-1.5 border-b border-slate-100 dark:border-slate-800 text-[10px] font-mono text-slate-400 uppercase tracking-wider">
+                                <div className="px-3 py-1.5 border-b border-slate-100 dark:border-slate-800 text-[10px] font-mono text-slate-500 dark:text-slate-400 uppercase tracking-wider">
                                   {item.display_name} Actions
                                 </div>
 
@@ -383,12 +384,12 @@ export const SslDualProbeTable: React.FC<SslDualProbeTableProps> = ({
                                     setOpenDropdownKey(null);
                                     if (onRenewCert) onRenewCert(item.device_key, true);
                                   }}
-                                  className="w-full px-3 py-2 text-xs flex items-center gap-2 hover:bg-slate-50 dark:hover:bg-slate-800/80 text-slate-700 dark:text-slate-200 transition-colors"
+                                  className="w-full px-3 py-2 text-xs flex items-center gap-2 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 transition-colors cursor-pointer"
                                 >
-                                  <RotateCw className="w-3.5 h-3.5 text-emerald-500" />
+                                  <RotateCw className="w-3.5 h-3.5 text-[var(--color-accent-text)]" />
                                   <div className="text-left">
                                     <div className="font-semibold">Renew Only</div>
-                                    <div className="text-[10px] text-slate-400">Request ACME & save locally</div>
+                                    <div className="text-[10px] text-slate-500 dark:text-slate-400">Request ACME & save locally</div>
                                   </div>
                                 </button>
 
@@ -401,12 +402,12 @@ export const SslDualProbeTable: React.FC<SslDualProbeTableProps> = ({
                                       setOpenDropdownKey(null);
                                       if (onDeployTarget) onDeployTarget(item.device_key);
                                     }}
-                                    className="w-full px-3 py-2 text-xs flex items-center gap-2 hover:bg-slate-50 dark:hover:bg-slate-800/80 text-slate-700 dark:text-slate-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                    className="w-full px-3 py-2 text-xs flex items-center gap-2 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                                   >
-                                    <Send className="w-3.5 h-3.5 text-sky-500" />
+                                    <Send className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400" />
                                     <div className="text-left">
                                       <div className="font-semibold">Deploy Only</div>
-                                      <div className="text-[10px] text-slate-400">Push staged cert to appliance</div>
+                                      <div className="text-[10px] text-slate-500 dark:text-slate-400">Push staged cert to appliance</div>
                                     </div>
                                   </button>
                                 )}
@@ -419,12 +420,12 @@ export const SslDualProbeTable: React.FC<SslDualProbeTableProps> = ({
                                       setOpenDropdownKey(null);
                                       onRenewAndDeploy(item.device_key, true);
                                     }}
-                                    className="w-full px-3 py-2 text-xs flex items-center gap-2 hover:bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 transition-colors border-t border-slate-100 dark:border-slate-800"
+                                    className="w-full px-3 py-2 text-xs flex items-center gap-2 hover:bg-[var(--color-brand-subtle)] text-[var(--color-brand-text)] transition-colors border-t border-slate-100 dark:border-slate-800 cursor-pointer"
                                   >
-                                    <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                                    <Sparkles className="w-3.5 h-3.5 text-[var(--color-brand-text)]" />
                                     <div className="text-left">
                                       <div className="font-semibold">Renew & Deploy</div>
-                                      <div className="text-[10px] text-emerald-600/80 dark:text-emerald-400/80">Full automated end-to-end</div>
+                                      <div className="text-[10px] opacity-80">Full automated end-to-end</div>
                                     </div>
                                   </button>
                                 )}

@@ -116,81 +116,81 @@ export function TopologyStacksView({
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
-            <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+            <div className="p-2 rounded-xl bg-[var(--color-brand-subtle)] text-[var(--color-brand-text)] border border-[var(--color-brand-ring)]">
               <Network className="w-5 h-5" />
             </div>
             <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
               Network Topology, Lighttpd Proxy & Container Stacks
             </h2>
           </div>
-          <p className="text-xs text-slate-500 mt-1 font-mono">
+          <p className="text-xs text-slate-600 dark:text-slate-400 mt-1 font-mono">
             Interactive multi-zone ingress mapping, DietPi hardware networking, and Docker boundary rules
           </p>
         </div>
 
         {/* View Switcher Tabs */}
-        <div className="flex flex-wrap items-center gap-1.5 p-1 rounded-xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/60 text-xs font-mono">
+        <div className="flex flex-wrap items-center gap-1.5 p-1 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-mono">
           <button
             onClick={() => setActiveTab('visual')}
-            className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
+            className={`px-3 py-1.5 min-h-[36px] rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 cursor-pointer ${
               activeTab === 'visual'
                 ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm font-semibold'
-                : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
             }`}
           >
-            <Zap className="w-3.5 h-3.5 text-emerald-500" />
+            <Zap className="w-3.5 h-3.5 text-[var(--color-brand-text)]" />
             Visual Boundary Map
             {renderTabBadge(badgeSummary.tabs.visual)}
           </button>
 
           <button
             onClick={() => setActiveTab('matrix')}
-            className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
+            className={`px-3 py-1.5 min-h-[36px] rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 cursor-pointer ${
               activeTab === 'matrix'
                 ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm font-semibold'
-                : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
             }`}
           >
-            <Server className="w-3.5 h-3.5 text-sky-500" />
+            <Server className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400" />
             Proxy Routing Table
             {renderTabBadge(badgeSummary.tabs.matrix)}
           </button>
 
           <button
             onClick={() => setActiveTab('hardware')}
-            className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
+            className={`px-3 py-1.5 min-h-[36px] rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 cursor-pointer ${
               activeTab === 'hardware'
                 ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm font-semibold'
-                : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
             }`}
           >
-            <Layers className="w-3.5 h-3.5 text-purple-500" />
+            <Layers className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
             DietPi Hardware
             {renderTabBadge(badgeSummary.tabs.hardware)}
           </button>
 
           <button
             onClick={() => setActiveTab('tunnel')}
-            className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
+            className={`px-3 py-1.5 min-h-[36px] rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 cursor-pointer ${
               activeTab === 'tunnel'
                 ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm font-semibold'
-                : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
             }`}
           >
-            <Cloud className="w-3.5 h-3.5 text-indigo-500" />
+            <Cloud className="w-3.5 h-3.5 text-[var(--color-accent-text)]" />
             Cloudflare Tunnel
             {renderTabBadge(badgeSummary.tabs.tunnel)}
           </button>
 
           <button
             onClick={() => setActiveTab('rules')}
-            className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
+            className={`px-3 py-1.5 min-h-[36px] rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 cursor-pointer ${
               activeTab === 'rules'
                 ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm font-semibold'
-                : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
             }`}
           >
-            <Sliders className="w-3.5 h-3.5 text-amber-500" />
+            <Sliders className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
             Security & Rules Advisor
             {renderTabBadge(badgeSummary.tabs.rules)}
           </button>

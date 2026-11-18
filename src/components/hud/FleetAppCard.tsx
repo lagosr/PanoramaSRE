@@ -32,22 +32,22 @@ export function FleetAppCard({
 
   return (
     <article
-      className={`flex flex-col justify-between rounded-xl border p-5 transition-all w-full min-w-0 overflow-hidden relative ${
+      className={`flex flex-col justify-between rounded-2xl border p-5 transition-all w-full min-w-0 overflow-hidden relative ${
         isCritical
-          ? 'bg-rose-950/20 border-rose-500/80 shadow-[0_0_24px_rgba(244,63,94,0.25)] ring-1 ring-rose-500/50'
+          ? 'bg-rose-50 dark:bg-rose-950/30 border-rose-500/80 shadow-[0_0_24px_rgba(244,63,94,0.2)] ring-1 ring-rose-500/50'
           : isBackupFailed
-          ? 'bg-rose-950/10 border-rose-500/60 shadow-sm'
+          ? 'bg-rose-50 dark:bg-rose-950/20 border-rose-500/60 shadow-sm'
           : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm hover:border-slate-300 dark:hover:border-slate-700'
       }`}
     >
       {/* Critical Unhealthy Banner if down */}
       {isCritical && (
-        <div className="mb-3 px-3 py-1.5 rounded-lg bg-rose-500/20 border border-rose-500/40 flex items-center justify-between text-rose-300 text-xs font-semibold animate-pulse">
+        <div className="mb-3 px-3 py-1.5 rounded-lg bg-rose-500/15 border border-rose-500/40 flex items-center justify-between text-rose-800 dark:text-rose-200 text-xs font-semibold animate-pulse">
           <div className="flex items-center gap-1.5">
-            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+            <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
             <span>CRITICAL ALERT: APPLICATION UNHEALTHY</span>
           </div>
-          <span className="font-mono text-[10px] uppercase tracking-wider bg-rose-500/30 px-1.5 py-0.5 rounded text-rose-200">
+          <span className="font-mono text-[10px] uppercase tracking-wider bg-rose-700 dark:bg-rose-600 px-1.5 py-0.5 rounded text-white">
             {app.health?.status || 'DOWN'}
           </span>
         </div>
@@ -55,12 +55,12 @@ export function FleetAppCard({
 
       {/* Backup Failure Warning Banner if DB snapshot failed */}
       {!isCritical && isBackupFailed && (
-        <div className="mb-3 px-3 py-1.5 rounded-lg bg-rose-500/15 border border-rose-500/40 flex items-center justify-between text-rose-300 text-xs font-semibold">
+        <div className="mb-3 px-3 py-1.5 rounded-lg bg-rose-500/15 border border-rose-500/40 flex items-center justify-between text-rose-800 dark:text-rose-200 text-xs font-semibold">
           <div className="flex items-center gap-1.5">
-            <HardDriveDownload className="w-4 h-4 text-rose-400 shrink-0" />
+            <HardDriveDownload className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
             <span>DR ALERT: LATEST BACKUP FAILED</span>
           </div>
-          <span className="font-mono text-[10px] uppercase tracking-wider bg-rose-500/20 text-rose-200 px-1.5 py-0.5 rounded border border-rose-500/30">
+          <span className="font-mono text-[10px] uppercase tracking-wider bg-rose-700 dark:bg-rose-600 text-white px-1.5 py-0.5 rounded">
             FAILED
           </span>
         </div>
@@ -71,12 +71,12 @@ export function FleetAppCard({
         <div className="flex items-start justify-between gap-3 mb-3">
           <div className="flex items-center gap-3 min-w-0">
             <div
-              className={`w-10 h-10 rounded-lg flex items-center justify-center font-bold text-base shrink-0 border ${
+              className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-base shrink-0 border ${
                 isCritical
                   ? 'bg-rose-500/20 border-rose-500/40 text-rose-700 dark:text-rose-400'
                   : isBackupFailed
                   ? 'bg-amber-500/20 border-amber-500/40 text-amber-800 dark:text-amber-300'
-                  : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-700 dark:text-emerald-400'
+                  : 'bg-[var(--color-brand-subtle)] border-[var(--color-brand-ring)] text-[var(--color-brand-text)]'
               }`}
             >
               {app.manifest.displayName.substring(0, 2).toUpperCase()}
@@ -94,10 +94,10 @@ export function FleetAppCard({
                   <span className="inline-block w-2 h-2 rounded-full bg-rose-500 animate-ping shrink-0" title="Unhealthy" />
                 )}
                 {isBackupFailed && !isCritical && (
-                  <span className="inline-block w-2 h-2 rounded-full bg-rose-400 shrink-0" title="Backup Failed" />
+                  <span className="inline-block w-2 h-2 rounded-full bg-rose-500 shrink-0" title="Backup Failed" />
                 )}
               </h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400 font-mono truncate">
+              <p className="text-xs text-slate-600 dark:text-slate-400 font-mono tabular-nums truncate">
                 {isEdgePages
                   ? `Port ${app.manifest.port} (dev) • ${app.manifest.cloudflare?.domains?.[0] || 'Cloudflare Pages'}`
                   : `Port ${app.manifest.port} • ${app.manifest.basePath}`}
@@ -113,7 +113,7 @@ export function FleetAppCard({
             />
             {app.health ? (
               <span
-                className={`text-[10px] font-mono px-1.5 py-0.5 rounded font-semibold ${
+                className={`text-[10px] font-mono tabular-nums px-1.5 py-0.5 rounded font-semibold ${
                   isHealthy
                     ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
                     : 'bg-rose-500/20 text-rose-800 dark:text-rose-300 border border-rose-500/40 animate-pulse'
@@ -136,17 +136,17 @@ export function FleetAppCard({
 
         {/* Release & Live Deployment Telemetry */}
         <div
-          className={`rounded-lg border p-3 mb-4 space-y-1.5 text-xs min-w-0 overflow-hidden ${
+          className={`rounded-xl border p-3 mb-4 space-y-1.5 text-xs min-w-0 overflow-hidden ${
             isCritical
-              ? 'bg-rose-950/40 border-rose-800/60'
-              : 'bg-slate-50 dark:bg-slate-950/60 border border-slate-100 dark:border-slate-800/80'
+              ? 'bg-rose-100/70 dark:bg-rose-950/40 border-rose-300 dark:border-rose-800/60'
+              : 'bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800'
           }`}
         >
           <div className="flex items-center justify-between gap-2">
-            <span className="text-slate-500 shrink-0">Live Release:</span>
+            <span className="text-slate-600 dark:text-slate-400 shrink-0">Live Release:</span>
             <span
               className={`font-mono truncate text-right font-medium ${
-                isCritical ? 'text-rose-300' : 'text-slate-800 dark:text-slate-200'
+                isCritical ? 'text-rose-800 dark:text-rose-300' : 'text-slate-900 dark:text-slate-200'
               }`}
             >
               {release ? release.release_id : app.health?.version ? `v${app.health.version} (Legacy)` : 'Unreachable'}
@@ -154,15 +154,15 @@ export function FleetAppCard({
           </div>
 
           <div className="flex items-center justify-between gap-2">
-            <span className="text-slate-500 shrink-0">Local HEAD:</span>
-            <span className="font-mono text-slate-800 dark:text-slate-200 truncate text-right">
+            <span className="text-slate-600 dark:text-slate-400 shrink-0">Local HEAD:</span>
+            <span className="font-mono text-slate-900 dark:text-slate-200 truncate text-right">
               {app.composition ? `${app.composition.local_branch} @ ${app.composition.local_head_short}` : 'Scanning...'}
             </span>
           </div>
 
           {!isEdgePages && backupStatus && (
             <div className="flex items-center justify-between gap-2">
-              <span className="text-slate-500 shrink-0">DB Backup:</span>
+              <span className="text-slate-600 dark:text-slate-400 shrink-0">DB Backup:</span>
               <span
                 className={`font-mono truncate text-right text-[11px] font-semibold flex items-center gap-1 ${
                   isBackupFailed ? 'text-rose-700 dark:text-rose-400' : 'text-emerald-700 dark:text-emerald-400'
@@ -182,12 +182,12 @@ export function FleetAppCard({
 
           {isEdgePages && optInSnapshot && (
             <div className="flex items-center justify-between gap-2">
-              <span className="text-slate-500 shrink-0">SMS Opt-Ins (D1):</span>
+              <span className="text-slate-600 dark:text-slate-400 shrink-0">SMS Opt-Ins (D1):</span>
               {onNavigateToOptIns ? (
                 <button
                   type="button"
                   onClick={onNavigateToOptIns}
-                  className="font-mono text-right text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 hover:underline flex items-center gap-1 truncate cursor-pointer"
+                  className="font-mono tabular-nums text-right text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 hover:underline flex items-center gap-1 truncate cursor-pointer"
                 >
                   <MessageSquare className="w-3 h-3 shrink-0" />
                   <span>
@@ -195,7 +195,7 @@ export function FleetAppCard({
                   </span>
                 </button>
               ) : (
-                <span className="font-mono text-right text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 truncate">
+                <span className="font-mono tabular-nums text-right text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 truncate">
                   {optInSnapshot.totalCount} total ({optInSnapshot.consentedCount} yes)
                 </span>
               )}
@@ -203,7 +203,7 @@ export function FleetAppCard({
           )}
 
           {app.composition && app.composition.blast_radius_badges.length > 0 && (
-            <div className="pt-1.5 flex flex-wrap gap-1 border-t border-slate-200/50 dark:border-slate-800/50">
+            <div className="pt-1.5 flex flex-wrap gap-1 border-t border-slate-200 dark:border-slate-800">
               {app.composition.blast_radius_badges.map((badge) => (
                 <BlastRadiusBadge key={badge} badge={badge} />
               ))}
@@ -216,17 +216,13 @@ export function FleetAppCard({
       <div className="flex items-center gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
         <button
           onClick={() => onInspectComposition(app)}
-          className="flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700/60 transition-colors whitespace-nowrap"
+          className="btn-secondary flex-1 py-1.5 px-3 text-xs"
         >
           Inspect Drift
         </button>
         <button
           onClick={() => onOpenApp(appPublicUrl)}
-          className={`py-1.5 px-3 rounded-lg text-xs font-medium text-white transition-colors whitespace-nowrap flex items-center gap-1 ${
-            isCritical
-              ? 'bg-rose-600 hover:bg-rose-500'
-              : 'bg-emerald-600 hover:bg-emerald-500'
-          }`}
+          className={`${isCritical ? 'btn-danger' : 'btn-primary'} py-1.5 px-3 text-xs`}
         >
           <span>Open</span>
           <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
