@@ -18,7 +18,7 @@ PanoramaSRE bridges local workstation engineering with remote production operati
 | :--- | :--- | :--- |
 | **Desktop Core** | **Tauri v2** (`rustc` 2021, Tokio async) | Native Windows 11 OS integration, System Tray lifecycle, child process management, native notifications, and SQLite event persistence. |
 | **Frontend Framework** | **React 19** & **TypeScript** (Strict) | Modern component architecture, React Server/Client compatibility, zero `any` types. |
-| **Styling & Theme** | **Tailwind CSS v4** (`@theme`, CSS-first) | Canonical slate/emerald design tokens, native dark/light theme engine (`@custom-variant dark`), Google Material contrast compliance. |
+| **Styling & Theme** | **Tailwind CSS v4** (`@theme`, CSS-first) & `@lagosr/panorama-ui-kit@^0.11.0` | Material 3 Solar Orange-Amber + Radar Cyan (`[data-brand="sre"]`), solid M3 `.btn-*` CTAs, solid opaque card/modal surfaces, `:focus-visible` rings, `tabular-nums`, and adaptive dark/light theme engine. |
 | **Tooling & Build** | **Vite 6** & **Vitest 2.1** | Sub-second HMR, fast compilation, isolated Vitest runner pool. |
 | **Local Database** | **rusqlite** (`data/sre.sqlite`) | Local persistent audit logs, console session storage, and SRE state ledger. |
 
@@ -181,10 +181,10 @@ PanoramaSRE/
 │   └── wsh_snapshot.sh                      # Stateless read-only DietPi host & docker probe
 ├── src/                                     # React 19 Frontend
 │   ├── App.tsx                              # Main application container & view router
-│   ├── globals.css                          # Tailwind CSS v4 CSS-first design tokens & dark variant
+│   ├── globals.css                          # Imports @lagosr/panorama-ui-kit/styles.css & @source ([data-brand="sre"])
 │   ├── main.tsx                             # React entrypoint
 │   ├── context/                             # Global application contexts
-│   │   └── ThemeContext.tsx                 # Dark/Light theme provider with Material contrast
+│   │   └── ThemeContext.tsx                 # Bridges dark/light/system preference with @lagosr/panorama-ui-kit ThemeProvider (brand="sre")
 │   ├── components/                          # UI views and modular controls
 │   │   ├── hud/                             # Command HUD & Fleet App Cards
 │   │   ├── releases/                        # Release Pipeline, Composition Drawer & Batch Modal
@@ -193,9 +193,9 @@ PanoramaSRE/
 │   │   ├── edge/                            # Cloudflare Tunnel & SSL Dual Probe Table
 │   │   ├── backups/                         # GFS Backup Ledger & Disaster Recovery View
 │   │   ├── topology/                        # Ecosystem Topology Stacks View
-│   │   ├── settings/                        # 4-Tab Settings View
-│   │   ├── layout/                          # Sidebar, Status Bars & Emerald Terminal Drawer
-│   │   └── ui/                              # ConfirmDangerModal, CustomSelect, ProvenanceBadge
+│   │   ├── settings/                        # 4-Tab Settings View (uses ui-kit ToggleSwitch, SegmentedControl, ThemeToggleCard)
+│   │   ├── layout/                          # Sidebar, Status Bars & Terminal Drawer
+│   │   └── ui/                              # ui-kit wrappers (ConfirmDangerModal, CustomSelect) + BlastRadiusBadge, ProvenanceBadge, WorkStreamContainer
 │   └── lib/                                 # Core client utilities and adapters
 │       ├── formatters.ts                    # parseUtcDate, bytes, and duration formatters
 │       ├── portal-generator.ts              # Deterministic WSH portal generator
@@ -203,7 +203,7 @@ PanoramaSRE/
 │       ├── script-adapters.ts               # CLI binders for PowerShell automation tools
 │       ├── types.ts                         # Strict TypeScript type definitions
 │       ├── version.ts                       # SemVer & Git SHA provenance comparators
-│       └── __tests__/                       # Comprehensive Vitest test suites (28 tests)
+│       └── __tests__/                       # Automated Vitest unit & integration suites (86 unit + 7 MCP server tests)
 ├── mcp-server/                              # Zero-Trust Agent MCP Server & PreToolUse Guard (TypeScript)
 │   ├── package.json                         # MCP server scripts & metadata
 │   ├── tsconfig.json                        # Strict TypeScript NodeNext configuration
