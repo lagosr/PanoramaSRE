@@ -112,4 +112,36 @@ describe('portal-generator', () => {
     expect(result).not.toContain('Parakith LLC');
     expect(result).not.toContain("id: 'parakith-site'");
   });
+
+  it('renders Zap icon SVG and green-theme class for EnergyAnalyzer', () => {
+    const energyApp: AppManifest = {
+      ...dummyApps[0],
+      appId: 'energy',
+      slug: 'energy',
+      displayName: 'EnergyAnalyzer',
+      portalTitle: 'Energy Analyzer',
+      basePath: '/energy',
+      port: 3005,
+      containerName: 'energy-analyzer',
+      themeColor: 'green',
+      icon: 'Zap',
+      portalOrder: 6,
+      sre: {
+        ...dummyApps[0].sre,
+        healthEndpoint: '/energy/api/health',
+      },
+    };
+    const inputHtml = `
+      <!-- PANORAMA_APP_CARDS_START -->
+      <!-- PANORAMA_APP_CARDS_END -->
+      <script>
+      /* PANORAMA_APP_PROBES_START */
+      /* PANORAMA_APP_PROBES_END */
+      </script>
+    `;
+    const result = renderPortalHtml(inputHtml, [energyApp], 'local');
+    expect(result).toContain('green-theme');
+    expect(result).toContain('<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>');
+    expect(result).toContain('/energy/api/health');
+  });
 });

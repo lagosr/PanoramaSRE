@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   discoverLiveInstances,
   electInstance,
@@ -16,37 +18,103 @@ export interface CommandInterceptionAnalysis {
   reason?: string;
 }
 
-const SUITE_PATH_TO_SLUG: Array<{ pattern: RegExp; slug: string }> = [
-  { pattern: /PanoramaAuth/i, slug: 'auth' },
-  { pattern: /SpendyLedger/i, slug: 'spendy' },
-  { pattern: /BiomedMaven/i, slug: 'biomed' },
-  { pattern: /WaterAnalyzer/i, slug: 'water' },
-  { pattern: /TastyBasket/i, slug: 'basket' },
-  { pattern: /PanoramaResources/i, slug: 'res' },
-  { pattern: /ParakithSite/i, slug: 'parakith' },
+interface DiscoveredManifestEntry {
+  dirPattern: RegExp;
+  slug: string;
+  port: number;
+}
+
+const BASELINE_ENTRIES: DiscoveredManifestEntry[] = [
+  { dirPattern: /PanoramaAuth/i, slug: 'auth', port: 3000 },
+  { dirPattern: /SpendyLedger/i, slug: 'spendy', port: 3001 },
+  { dirPattern: /BiomedMaven/i, slug: 'biomed', port: 3002 },
+  { dirPattern: /WaterAnalyzer/i, slug: 'water', port: 3003 },
+  { dirPattern: /TastyBasket/i, slug: 'basket', port: 3004 },
+  { dirPattern: /EnergyAnalyzer/i, slug: 'energy', port: 3005 },
+  { dirPattern: /ParakithSite/i, slug: 'parakith', port: 3500 },
+  { dirPattern: /PanoramaResources/i, slug: 'res', port: 4000 },
 ];
 
-const PORT_TO_SLUG: Record<string, string> = {
-  '3000': 'auth',
-  '3001': 'spendy',
-  '3002': 'biomed',
-  '3003': 'water',
-  '3004': 'basket',
-  '3005': 'res',
-  '3500': 'parakith',
-  '4000': 'res',
-};
+const MANIFEST_CACHE_TTL_MS = 60_000;
+let cachedManifestEntries: DiscoveredManifestEntry[] | null = null;
+let cachedManifestTimestamp = 0;
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function getWorkspaceRootCandidate(): string {
+  if (process.env.PANORAMA_WORKSPACE_ROOT) {
+    return process.env.PANORAMA_WORKSPACE_ROOT;
+  }
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  return path.resolve(__dirname, '../../../..');
+}
+
+/**
+ * Dynamically scans sibling `<app>/panorama.app.json` manifests (with a 60s TTL cache)
+ * so new suite apps like EnergyAnalyzer (:3005) are auto-discovered without code edits.
+ */
+export function getDiscoveredAppMappings(forceRefresh = false): DiscoveredManifestEntry[] {
+  const now = Date.now();
+  if (!forceRefresh && cachedManifestEntries && now - cachedManifestTimestamp < MANIFEST_CACHE_TTL_MS) {
+    return cachedManifestEntries;
+  }
+
+  const bySlug = new Map<string, DiscoveredManifestEntry>();
+  for (const base of BASELINE_ENTRIES) {
+    bySlug.set(base.slug, base);
+  }
+
+  try {
+    const workspaceRoot = getWorkspaceRootCandidate();
+    if (fs.existsSync(workspaceRoot)) {
+      const dirs = fs.readdirSync(workspaceRoot, { withFileTypes: true });
+      for (const dir of dirs) {
+        if (!dir.isDirectory()) continue;
+        const manifestPath = path.join(workspaceRoot, dir.name, 'panorama.app.json');
+        if (!fs.existsSync(manifestPath)) continue;
+        try {
+          const parsed = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as {
+            slug?: string;
+            port?: number;
+          };
+          if (typeof parsed?.slug === 'string' && typeof parsed?.port === 'number') {
+            const slug = parsed.slug.trim().toLowerCase();
+            bySlug.set(slug, {
+              dirPattern: new RegExp(escapeRegex(dir.name), 'i'),
+              slug,
+              port: parsed.port,
+            });
+          }
+        } catch {
+          // Ignore malformed manifest JSON
+        }
+      }
+    }
+  } catch {
+    // Non-fatal fallback to baseline mappings
+  }
+
+  cachedManifestEntries = Array.from(bySlug.values());
+  cachedManifestTimestamp = now;
+  return cachedManifestEntries;
+}
 
 function inferTargetSlug(cmd: string, cwd?: string): string | undefined {
+  const mappings = getDiscoveredAppMappings();
   const combined = `${cmd} ${cwd || ''}`;
-  for (const { pattern, slug } of SUITE_PATH_TO_SLUG) {
-    if (pattern.test(combined)) {
-      return slug;
+  for (const entry of mappings) {
+    if (entry.dirPattern.test(combined)) {
+      return entry.slug;
     }
   }
-  const portMatch = cmd.match(/\b(300[0-5]|3500|4000)\b/);
-  if (portMatch && PORT_TO_SLUG[portMatch[1]]) {
-    return PORT_TO_SLUG[portMatch[1]];
+  const portsPattern = Array.from(new Set(mappings.map((m) => String(m.port)))).join('|');
+  const portMatch = cmd.match(new RegExp(`\\b(${portsPattern})\\b`));
+  if (portMatch) {
+    const portNum = Number(portMatch[1]);
+    const hit = mappings.find((m) => m.port === portNum);
+    if (hit) return hit.slug;
   }
   return undefined;
 }
@@ -93,8 +161,13 @@ export function classifyShellCommand(
   }
 
   // 3. Intercept manual port-killing or blanket node process termination targeting suite dev servers
-  const portKillRegex =
-    /\b(?:Get-NetTCPConnection[^\r\n]*(?:300[0-9]|3500|4000)[^\r\n]*Stop-Process|Stop-Process[^\r\n]*(?:-Name\s+['"]?node|300[0-9]|3500|4000)|taskkill(?:\.exe)?[^\r\n]*(?:\/IM\s+node(?:\.exe)?|300[0-9]|3500|4000)|npx(?:\.cmd)?\s+kill-port\s+(?:300[0-9]|3500|4000))\b/i;
+  const portUnion = Array.from(
+    new Set(['300[0-9]', '3500', '4000', ...getDiscoveredAppMappings().map((m) => String(m.port))])
+  ).join('|');
+  const portKillRegex = new RegExp(
+    `\\b(?:Get-NetTCPConnection[^\\r\\n]*(?:${portUnion})[^\\r\\n]*Stop-Process|Stop-Process[^\\r\\n]*(?:-Name\\s+['"]?node|${portUnion})|taskkill(?:\\.exe)?[^\\r\\n]*(?:\\/IM\\s+node(?:\\.exe)?|${portUnion})|npx(?:\\.cmd)?\\s+kill-port\\s+(?:${portUnion}))\\b`,
+    'i'
+  );
 
   if (portKillRegex.test(trimmed)) {
     const slug = inferTargetSlug(trimmed, cwd);

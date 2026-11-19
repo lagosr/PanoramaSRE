@@ -153,4 +153,23 @@ describe('buildTelemetry utilities', () => {
     expect(badge.targetSec).toBe(45);
     expect(badge.shortLabel).toBe('Target ≤45s');
   });
+
+  it('supports declarative deployBudgets overrides for any new application without hardcoding', () => {
+    const customTargets = getAppTelemetryTargets('energy-analyzer', 'warm', {
+      targetWarmSec: 50,
+      targetColdSec: 110,
+      maxCeilingSec: 160,
+      maxContextKB: 4096,
+    });
+    expect(customTargets.targetWarmSec).toBe(50);
+    expect(customTargets.targetColdSec).toBe(110);
+    expect(customTargets.maxCeilingSec).toBe(160);
+    expect(customTargets.maxContextKB).toBe(4096);
+    expect(customTargets.activeTargetSec).toBe(50);
+
+    const badge = evaluateBuildHealthBadge(makeTelemetry({ total_duration_sec: 48 }), 'energy', {
+      targetWarmSec: 50,
+    });
+    expect(badge.status).toBe('OPTIMAL');
+  });
 });

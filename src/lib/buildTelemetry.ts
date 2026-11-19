@@ -28,59 +28,58 @@ export interface ResolvedBuildTelemetry {
 
 export function getAppTelemetryTargets(
   appIdOrSlug: string,
-  posture: 'warm' | 'cold' = 'warm'
+  posture: 'warm' | 'cold' = 'warm',
+  deployBudgets?: Partial<Omit<AppTelemetryTargets, 'activeTargetSec'>>
 ): AppTelemetryTargets {
   const key = (appIdOrSlug || '').toLowerCase().trim();
 
+  let base: Omit<AppTelemetryTargets, 'activeTargetSec'>;
   if (key === 'res' || key === 'panorama-resources') {
-    const targetWarmSec = 15;
-    const targetColdSec = 30;
-    return {
-      targetWarmSec,
-      targetColdSec,
+    base = {
+      targetWarmSec: 15,
+      targetColdSec: 30,
       maxCeilingSec: 60,
       regressionThresholdPct: 10,
       maxContextKB: 1024,
-      activeTargetSec: posture === 'cold' ? targetColdSec : targetWarmSec,
     };
-  }
-
-  if (key === 'spendy' || key === 'spendyledger' || key === 'spendy-ledger') {
-    const targetWarmSec = 45;
-    const targetColdSec = 90;
-    return {
-      targetWarmSec,
-      targetColdSec,
+  } else if (key === 'spendy' || key === 'spendyledger' || key === 'spendy-ledger') {
+    base = {
+      targetWarmSec: 45,
+      targetColdSec: 90,
       maxCeilingSec: 120,
       regressionThresholdPct: 10,
       maxContextKB: 6500,
-      activeTargetSec: posture === 'cold' ? targetColdSec : targetWarmSec,
     };
-  }
-
-  if (key === 'auth' || key === 'panorama-auth' || key === 'panoramaauth') {
-    const targetWarmSec = 45;
-    const targetColdSec = 90;
-    return {
-      targetWarmSec,
-      targetColdSec,
+  } else if (key === 'auth' || key === 'panorama-auth' || key === 'panoramaauth') {
+    base = {
+      targetWarmSec: 45,
+      targetColdSec: 90,
       maxCeilingSec: 120,
       regressionThresholdPct: 10,
       maxContextKB: 2048,
-      activeTargetSec: posture === 'cold' ? targetColdSec : targetWarmSec,
+    };
+  } else {
+    // Default Next.js applications (biomed-maven, tasty-basket, water-analyzer, energy-analyzer, future apps)
+    base = {
+      targetWarmSec: 35,
+      targetColdSec: 75,
+      maxCeilingSec: 120,
+      regressionThresholdPct: 10,
+      maxContextKB: 2048,
     };
   }
 
-  // Default Next.js applications: biomed-maven, tasty-basket, water-analyzer
-  const targetWarmSec = 35;
-  const targetColdSec = 75;
+  const merged = {
+    targetWarmSec: deployBudgets?.targetWarmSec ?? base.targetWarmSec,
+    targetColdSec: deployBudgets?.targetColdSec ?? base.targetColdSec,
+    maxCeilingSec: deployBudgets?.maxCeilingSec ?? base.maxCeilingSec,
+    regressionThresholdPct: deployBudgets?.regressionThresholdPct ?? base.regressionThresholdPct,
+    maxContextKB: deployBudgets?.maxContextKB ?? base.maxContextKB,
+  };
+
   return {
-    targetWarmSec,
-    targetColdSec,
-    maxCeilingSec: 120,
-    regressionThresholdPct: 10,
-    maxContextKB: 2048,
-    activeTargetSec: posture === 'cold' ? targetColdSec : targetWarmSec,
+    ...merged,
+    activeTargetSec: posture === 'cold' ? merged.targetColdSec : merged.targetWarmSec,
   };
 }
 
@@ -113,10 +112,11 @@ export function resolveActiveBuildTelemetry(
 
 export function evaluateBuildHealthBadge(
   telemetry: BuildTelemetry | null | undefined,
-  appIdOrSlug: string
+  appIdOrSlug: string,
+  deployBudgets?: Partial<Omit<AppTelemetryTargets, 'activeTargetSec'>>
 ): BuildHealthBadgeInfo {
   const posture = telemetry?.cache_posture === 'cold' ? 'cold' : 'warm';
-  const targets = getAppTelemetryTargets(appIdOrSlug, posture);
+  const targets = getAppTelemetryTargets(appIdOrSlug, posture, deployBudgets);
 
   if (!telemetry || typeof telemetry.total_duration_sec !== 'number') {
     return {

@@ -75,7 +75,7 @@ export const devServersDomain: SreToolDomain = {
           slug: {
             type: 'string',
             description:
-              'Application slug to start ("auth", "spendy", "biomed", "water", "basket", "res", "parakith", or "all"). Note: Cloudflare Pages sites like "parakith" are only started when explicitly targeted, not on "all".',
+              'Application slug discovered from panorama.app.json (e.g. "auth", "spendy", "biomed", "water", "basket", "energy", "res", "parakith", or "all"). Note: Cloudflare Pages sites like "parakith" are only started when explicitly targeted, not on "all".',
           },
           mode: {
             type: 'string',
@@ -171,7 +171,7 @@ export const devServersDomain: SreToolDomain = {
           slug: {
             type: 'string',
             description:
-              'Application slug to stop ("auth", "spendy", "biomed", "water", "basket", "res", or "all").',
+              'Application slug discovered from panorama.app.json (e.g. "auth", "spendy", "biomed", "water", "basket", "energy", "res", or "all").',
           },
           instance: {
             type: 'string',
@@ -219,7 +219,7 @@ export const devServersDomain: SreToolDomain = {
           slug: {
             type: 'string',
             description:
-              'Application slug to restart ("auth", "spendy", "biomed", "water", "basket", "res", "parakith").',
+              'Application slug discovered from panorama.app.json (e.g. "auth", "spendy", "biomed", "water", "basket", "energy", "res", "parakith").',
           },
           mode: {
             type: 'string',

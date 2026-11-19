@@ -120,6 +120,7 @@ const KNOWN_SUBNET_MAP: Record<string, { subnet: string; containerIp: string; br
   biomed: { subnet: '100.64.3.0/24', containerIp: '100.64.3.2', bridgeName: 'br-biomed-maven' },
   water: { subnet: '100.64.4.0/24', containerIp: '100.64.4.2', bridgeName: 'br-water-analyzer' },
   basket: { subnet: '100.64.5.0/24', containerIp: '100.64.5.2', bridgeName: 'br-tasty-basket' },
+  energy: { subnet: '100.64.6.0/24', containerIp: '100.64.6.2', bridgeName: 'br-energy-analyzer' },
 };
 
 /**
@@ -166,8 +167,8 @@ export function synthesizeTopology(
       matchedApp?.health?.status === 'healthy';
 
     const fallbackNet = KNOWN_SUBNET_MAP[rt.slug] || {
-      subnet: `172.24.${idx}.0/16`,
-      containerIp: `172.24.${idx}.2`,
+      subnet: `100.64.${10 + idx}.0/24`,
+      containerIp: `100.64.${10 + idx}.2`,
       bridgeName: `br-${rt.slug}`,
     };
 
@@ -231,7 +232,7 @@ export function synthesizeTopology(
     .split('\n')
     .map((l) => l.trim())
     .filter(Boolean);
-  const isCfHealthy = !cfLogs.some((l) => l.includes('ERR') || l.includes('failed to connect'));
+  const isCfHealthy = !cfLogs.some((l) => isFatalCloudflaredLogLine(l));
 
   // 4. Parse Interfaces
   const interfaces = snapshot?.network_interfaces || [];
@@ -248,11 +249,24 @@ export function synthesizeTopology(
   const appContainerNames = new Set(
     wshApps.map((a) => (a.manifest.containerName || `panorama-${a.manifest.slug}`).toLowerCase())
   );
+  const discoveredPorts = Array.from(
+    new Set(
+      wshApps
+        .map((a) => a.manifest.port)
+        .filter((p) => Number.isInteger(p) && p > 0)
+    )
+  ).sort((a, b) => a - b);
+  const portAlternation = (
+    discoveredPorts.length > 0 ? discoveredPorts : [3000, 3001, 3002, 3003, 3004, 3005, 4000]
+  ).join('|');
+  const containerPortPattern = new RegExp(`(:\\b(?:${portAlternation})\\b->)`);
+  const socketPortPattern = new RegExp(`(:(?:${portAlternation})\\b)`);
+
   const appContainers = containers.filter((c) => {
     const name = (c.Names || c.ID || '').replace(/^\//, '').toLowerCase();
     if (appContainerNames.has(name)) return true;
     const ports = c.Ports || '';
-    return /(:\b(300[0-4]|4000)\b->)/.test(ports);
+    return containerPortPattern.test(ports);
   });
 
   const zeroBindViolations: string[] = [];
@@ -327,7 +341,7 @@ export function synthesizeTopology(
     `Verified Listening Sockets:`,
     ...((snapshot?.listening_sockets_raw || '')
       .split('\n')
-      .filter((l) => /(:(300[0-4]|4000)\b)/.test(l))
+      .filter((l) => socketPortPattern.test(l))
       .map((l) => `  ${l.trim()}`) || ['None']),
     `Verdict: 100% of application host ports strictly confined to 127.0.0.1.`,
   ].join('\n');
@@ -342,7 +356,7 @@ export function synthesizeTopology(
       ? 'All published container ports are strictly bound to 127.0.0.1 loopback, eliminating direct LAN perimeter exposure.'
       : `CRITICAL: ${zeroBindViolations.length} container port(s) bound to 0.0.0.0 (${zeroBindViolations.join('; ')}).`,
     remediation: 'Prefix all port bindings in docker-compose.yml with 127.0.0.1: and restart containers.',
-    commandSnippet: "ss -tulpnH | grep -E ':(3000|3001|3002|3003|3004|4000)'",
+    commandSnippet: `ss -tulpnH | grep -E ':(${portAlternation})'`,
     evidence: sec02EvidenceLines,
     evaluatedAt: nowTimestamp,
   };
@@ -503,11 +517,13 @@ export function synthesizeTopology(
 
   // SEC-08: Container Capability Drops & Non-Root Privileges
   const sec08Pass = true;
+  const sec08TargetApps =
+    wshApps.map((a) => a.manifest.displayName || a.manifest.slug).join(', ') || 'Discovered WSH apps';
   const sec08EvidenceLines = [
     `[CONTAINER CAPABILITY DROPS & UNPRIVILEGED EXECUTION AUDIT]`,
     `• Enforcing Engine: @panorama/deploy-engine v0.3.0`,
     `• Required Opts:    cap_drop: ["ALL"], security_opt: ["no-new-privileges:true"]`,
-    `• Target Apps:      PanoramaAuth, SpendyLedger, BiomedMaven, WaterAnalyzer, TastyBasket, PanoramaResources`,
+    `• Target Apps:      ${sec08TargetApps}`,
     `----------------------------------------------------------------------`,
     `Verdict: Zero application containers run with root capabilities or permit privilege escalation.`,
   ].join('\n');
@@ -701,6 +717,23 @@ export interface TopologyBadgeSummary {
     tunnel: TopologyTabBadge;
     rules: TopologyTabBadge;
   };
+}
+
+/**
+ * Determines whether a cloudflared log line represents a fatal/actionable tunnel
+ * error rather than a transient client/origin connection-ended-early warning.
+ */
+export function isFatalCloudflaredLogLine(line: string): boolean {
+  const lower = line.toLowerCase();
+  return (
+    line.includes('FTL') ||
+    lower.includes('failed to connect') ||
+    lower.includes('unable to establish connection') ||
+    lower.includes('register tunnel error') ||
+    lower.includes('cannot determine default origin certificate') ||
+    lower.includes('fatal') ||
+    lower.includes('panic')
+  );
 }
 
 /**

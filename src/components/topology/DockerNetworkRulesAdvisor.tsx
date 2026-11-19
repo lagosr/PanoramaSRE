@@ -447,8 +447,13 @@ networks:
               {onRunAuditCommand && (
                 <button
                   onClick={() => {
+                    const portList = Array.from(
+                      new Set(topology.routes.map((r) => r.port).filter((p) => Number.isInteger(p) && p > 0))
+                    ).sort((a, b) => a - b);
+                    const portAlternation =
+                      portList.length > 0 ? portList.join('|') : '3000|3001|3002|3003|3004|3005|4000';
                     const spec = buildRemoteSshCommand(
-                      'PORTS=$(ss -tulpnH | grep -E ":(3000|3001|3002|3003|3004|4000)" || true); if [ -n "$PORTS" ]; then echo "$PORTS"; echo "[PASS] Verified all application ports bound exclusively to loopback (127.0.0.1)."; else echo "[STATUS] No active application ports detected."; fi'
+                      `PORTS=$(ss -tulpnH | grep -E ":(${portAlternation})" || true); if [ -n "$PORTS" ]; then echo "$PORTS"; echo "[PASS] Verified all application ports bound exclusively to loopback (127.0.0.1)."; else echo "[STATUS] No active application ports detected."; fi`
                     );
                     onRunAuditCommand(
                       'Audit Host Listening Ports',

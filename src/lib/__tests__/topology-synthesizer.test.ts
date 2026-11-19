@@ -493,4 +493,36 @@ describe('synthesizeTopology', () => {
     expect(badges.tabs.matrix.count).toBe(0);
     expect(badges.errorCount).toBe(0);
   });
+
+  it('synthesizes CGNAT 100.64.x.0/24 fallback subnets and dynamic SEC-02/SEC-08 audit targets for new apps', () => {
+    const futureApps: DiscoveredApp[] = [
+      ...mockApps,
+      {
+        ...mockApps[1],
+        manifest: {
+          ...mockApps[1].manifest,
+          appId: 'future',
+          slug: 'future',
+          displayName: 'FutureSolar',
+          portalTitle: 'Future Solar',
+          basePath: '/future',
+          port: 3012,
+          containerName: 'future-solar',
+        },
+        workspacePath: 'c:\\test\\future',
+      },
+    ];
+
+    const topo = synthesizeTopology(futureApps, null);
+    const futureRoute = topo.routes.find((r) => r.slug === 'future');
+    expect(futureRoute).toBeDefined();
+    expect(futureRoute?.bridgeSubnet).toMatch(/^100\.64\./);
+    expect(futureRoute?.bridgeSubnet).not.toMatch(/^172\.24\./);
+
+    const sec02 = topo.securityAudit.invariants.find((i) => i.id === 'SEC-02');
+    expect(sec02?.commandSnippet).toContain('3012');
+
+    const sec08 = topo.securityAudit.invariants.find((i) => i.id === 'SEC-08');
+    expect(sec08?.evidence).toContain('FutureSolar');
+  });
 });

@@ -14,7 +14,7 @@ import {
   discoverLiveInstances,
   electInstance,
 } from '../src/client/discovery.ts';
-import { classifyShellCommand, evaluatePreToolUse } from '../src/guard/preToolHook.ts';
+import { classifyShellCommand, evaluatePreToolUse, getDiscoveredAppMappings } from '../src/guard/preToolHook.ts';
 import { handleJsonRpcMessage, getAllRegisteredTools } from '../src/index.ts';
 import {
   FALLBACK_HEADLESS_EXIT_CODE,
@@ -495,5 +495,46 @@ describe('PanoramaSRE MCP Server & Zero-Trust Named Pipe Client', () => {
       targetUrl: 'https://wsh.panoramadr.com',
       triggeredBy: 'scheduled',
     });
+  });
+
+  it('discovers manifest slugs and maps port 3005 to energy and 4000 to res dynamically', () => {
+    const tmpWs = fs.mkdtempSync(path.join(os.tmpdir(), 'sre-manifest-scan-'));
+    tempDirs.push(tmpWs);
+    fs.mkdirSync(path.join(tmpWs, 'FutureGridApp'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpWs, 'FutureGridApp', 'panorama.app.json'),
+      JSON.stringify({ slug: 'futuregrid', port: 3012 }),
+      'utf8'
+    );
+
+    const prevRoot = process.env.PANORAMA_WORKSPACE_ROOT;
+    process.env.PANORAMA_WORKSPACE_ROOT = tmpWs;
+    try {
+      const discovered = getDiscoveredAppMappings(true);
+      expect(discovered.some((m) => m.slug === 'futuregrid' && m.port === 3012)).toBe(true);
+
+      const energyCmd = classifyShellCommand('npx next dev -p 3005');
+      expect(energyCmd.intercepted).toBe(true);
+      expect(energyCmd.detectedSlug).toBe('energy');
+
+      const resCmd = classifyShellCommand('npx next dev -p 4000');
+      expect(resCmd.intercepted).toBe(true);
+      expect(resCmd.detectedSlug).toBe('res');
+
+      const futureCmd = classifyShellCommand('npm run dev', path.join(tmpWs, 'FutureGridApp'));
+      expect(futureCmd.intercepted).toBe(true);
+      expect(futureCmd.detectedSlug).toBe('futuregrid');
+
+      const futureKill = classifyShellCommand('npx kill-port 3012');
+      expect(futureKill.intercepted).toBe(true);
+      expect(futureKill.detectedSlug).toBe('futuregrid');
+    } finally {
+      if (prevRoot === undefined) {
+        delete process.env.PANORAMA_WORKSPACE_ROOT;
+      } else {
+        process.env.PANORAMA_WORKSPACE_ROOT = prevRoot;
+      }
+      getDiscoveredAppMappings(true);
+    }
   });
 });
