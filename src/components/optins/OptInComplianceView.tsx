@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { formatPhone } from '@lagosr/panorama-ui-kit';
 import { OptInComplianceSnapshot, ParakithOptInRecord } from '../../lib/types';
 import { CustomSelect } from '../ui/CustomSelect';
 import { ConfirmDangerModal } from '../ui/ConfirmDangerModal';
@@ -73,9 +74,11 @@ export const OptInComplianceView: React.FC<OptInComplianceViewProps> = ({
       if (q) {
         const fullName = `${rec.firstName} ${rec.lastName}`.toLowerCase();
         const phoneDigits = rec.phone.replace(/\D/g, '');
+        const formattedPhone = formatPhone(rec.phone).toLowerCase();
         const matchesNameOrIp =
           fullName.includes(q) ||
           rec.phone.toLowerCase().includes(q) ||
+          formattedPhone.includes(q) ||
           rec.ipAddress.toLowerCase().includes(q);
         const matchesDigits = digitsQuery.length > 0 && phoneDigits.includes(digitsQuery);
         if (!matchesNameOrIp && !matchesDigits) return false;
@@ -315,8 +318,8 @@ export const OptInComplianceView: React.FC<OptInComplianceViewProps> = ({
                     <td className="py-3 px-4 font-medium text-slate-900 dark:text-slate-100 whitespace-nowrap">
                       {rec.firstName} {rec.lastName}
                     </td>
-                    <td className="py-3 px-4 font-mono text-slate-700 dark:text-slate-300 whitespace-nowrap">
-                      {rec.phone}
+                    <td className="py-3 px-4 font-mono tabular-nums text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                      {formatPhone(rec.phone) || rec.phone}
                     </td>
                     <td className="py-3 px-4 whitespace-nowrap">
                       {rec.consent === 'yes' ? (
@@ -420,8 +423,8 @@ export const OptInComplianceView: React.FC<OptInComplianceViewProps> = ({
                   <span className="text-[10px] uppercase tracking-wider text-slate-500 block">
                     Phone Number
                   </span>
-                  <span className="font-mono font-semibold text-slate-900 dark:text-slate-100 mt-0.5 block">
-                    {inspectedRecord.phone}
+                  <span className="font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 mt-0.5 block">
+                    {formatPhone(inspectedRecord.phone) || inspectedRecord.phone}
                   </span>
                 </div>
 
@@ -500,7 +503,7 @@ export const OptInComplianceView: React.FC<OptInComplianceViewProps> = ({
       <ConfirmDangerModal
         isOpen={!!pendingDeleteRecord}
         title={`Delete Opt-In Record #${pendingDeleteRecord?.id ?? ''}`}
-        description={`This permanently deletes D1 row #${pendingDeleteRecord?.id ?? ''} (${pendingDeleteRecord?.firstName ?? ''} ${pendingDeleteRecord?.lastName ?? ''}, ${pendingDeleteRecord?.phone ?? ''}) from remote Cloudflare D1 (${snapshot?.databaseName || 'parakith-opt-ins'}) and writes an audit event. Only remove synthetic test rows, never genuine customer consent records.`}
+        description={`This permanently deletes D1 row #${pendingDeleteRecord?.id ?? ''} (${pendingDeleteRecord?.firstName ?? ''} ${pendingDeleteRecord?.lastName ?? ''}, ${pendingDeleteRecord?.phone ? formatPhone(pendingDeleteRecord.phone) || pendingDeleteRecord.phone : ''}) from remote Cloudflare D1 (${snapshot?.databaseName || 'parakith-opt-ins'}) and writes an audit event. Only remove synthetic test rows, never genuine customer consent records.`}
         confirmWord="DELETE"
         confirmLabel="Delete From D1"
         onConfirm={handleConfirmDelete}
