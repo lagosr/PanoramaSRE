@@ -409,4 +409,191 @@ mod tests {
         assert_eq!(snap.services["cron"], "active");
         assert_eq!(snap.cron_telemetry["cron_d_files"][0]["name"], "panorama-energy");
     }
+
+    #[test]
+    fn test_backup_ledger_reconciles_manual_snapshots_and_same_day_recovery() {
+        use panorama_sre_lib::commands::ledger::read_backup_ledger_from_paths;
+        use std::fs;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = std::env::temp_dir().join(format!("panorama_sre_ledger_test_{}", unique));
+        let ws_root = temp_root.join("workspaces");
+        let backups_root = temp_root.join("backups");
+        let energy_backup_dir = backups_root.join("EnergyAnalyzer");
+        let spendy_backup_dir = backups_root.join("SpendyLedger");
+        let energy_ws = ws_root.join("EnergyAnalyzer");
+
+        fs::create_dir_all(&energy_backup_dir).unwrap();
+        fs::create_dir_all(&spendy_backup_dir).unwrap();
+        fs::create_dir_all(&energy_ws).unwrap();
+        fs::write(
+            energy_ws.join(".env.deploy"),
+            format!("LOCAL_BACKUP_DIR={}\n", energy_backup_dir.display()),
+        )
+        .unwrap();
+
+        let history_path = temp_root.join("backup_history.json");
+
+        // Build 6 prior healthy days + today failed EnergyAnalyzer run at 09:00Z
+        let now_local = chrono::Local::now();
+        let today = now_local.date_naive();
+        let mut history_entries: Vec<serde_json::Value> = Vec::new();
+        for offset in (1..=6).rev() {
+            let day = today - chrono::Duration::days(offset);
+            let ts = format!("{}T15:00:00Z", day.format("%Y-%m-%d"));
+            history_entries.push(serde_json::json!({
+                "timestamp": ts,
+                "status": "Success",
+                "run_type": "Automated",
+                "apps": {
+                    "EnergyAnalyzer": { "status": "Success", "file": "db-backup_v4_old.tar.gz", "size_bytes": 1000 }
+                }
+            }));
+        }
+
+        let today_str = today.format("%Y-%m-%d").to_string();
+        let failed_run_ts = format!("{}T09:00:02Z", today_str);
+        history_entries.push(serde_json::json!({
+            "timestamp": failed_run_ts,
+            "status": "Failed",
+            "run_type": "Automated",
+            "apps": {
+                "EnergyAnalyzer": { "status": "Failed", "error": "No such container: energy-analyzer" },
+                "BiomedMaven": { "status": "Success", "file": "db-backup_v6_ok.tar.gz", "size_bytes": 701450 }
+            }
+        }));
+        fs::write(
+            &history_path,
+            serde_json::to_string_pretty(&history_entries).unwrap(),
+        )
+        .unwrap();
+
+        // 1. Before manual snapshot: EnergyAnalyzer remains Failed and 7d window has 1 failure
+        let initial =
+            read_backup_ledger_from_paths(&history_path, &ws_root, &backups_root, now_local)
+                .unwrap();
+        assert_eq!(initial.last_run_status.as_deref(), Some("Failed"));
+        assert_eq!(initial.failed_runs_7d, 1);
+        let ea_initial = initial
+            .latest_app_details
+            .iter()
+            .find(|d| d.app_name == "EnergyAnalyzer")
+            .unwrap();
+        assert_eq!(ea_initial.status, "Failed");
+
+        // 2. Drop an older snapshot (before 09:00Z / 02:00 AM local) AND a corrupt non-gzip file — both must be ignored
+        let older_file = energy_backup_dir.join(format!("db-backup_v4_{}_01-00-00.tar.gz", today_str));
+        fs::write(&older_file, b"\x1f\x8b\x08\x00older").unwrap();
+        let corrupt_file = energy_backup_dir.join(format!("db-backup_v4_{}_23-59-00.tar.gz", today_str));
+        fs::write(&corrupt_file, b"NOT_A_GZIP_ARCHIVE").unwrap();
+
+        let still_failed =
+            read_backup_ledger_from_paths(&history_path, &ws_root, &backups_root, now_local)
+                .unwrap();
+        assert_eq!(still_failed.last_run_status.as_deref(), Some("Failed"));
+        assert_eq!(still_failed.failed_runs_7d, 1);
+
+        // 3. Create valid newer gzip manual snapshot for EnergyAnalyzer
+        let recovery_utc = chrono::DateTime::parse_from_rfc3339(&failed_run_ts)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+            + chrono::Duration::hours(3);
+        let recovery_local = recovery_utc.with_timezone(&chrono::Local);
+        let recovery_name = format!(
+            "db-backup_v4_{}.tar.gz",
+            recovery_local.format("%Y-%m-%d_%H-%M-%S")
+        );
+        let recovery_path = energy_backup_dir.join(&recovery_name);
+        let payload = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\x03valid-sqlite-backup-payload";
+        fs::write(&recovery_path, payload).unwrap();
+
+        let recovered =
+            read_backup_ledger_from_paths(&history_path, &ws_root, &backups_root, now_local)
+                .unwrap();
+        assert_eq!(recovered.last_run_status.as_deref(), Some("Success"));
+        assert_eq!(recovered.failed_runs_7d, 0);
+        let ea_recovered = recovered
+            .latest_app_details
+            .iter()
+            .find(|d| d.app_name == "EnergyAnalyzer")
+            .unwrap();
+        assert_eq!(ea_recovered.status, "Success");
+        assert_eq!(ea_recovered.file.as_deref(), Some(recovery_name.as_str()));
+        assert_eq!(ea_recovered.size_bytes, Some(payload.len() as u64));
+        assert_eq!(ea_recovered.error, None);
+        assert_eq!(
+            recovered.recent_records[0].run_type.as_deref(),
+            Some("Manual Snapshot")
+        );
+        assert_eq!(
+            recovered.daily_pips_7d.last().unwrap().status,
+            "Success"
+        );
+
+        // 4. Partial recovery: add SpendyLedger as Failed in latest entry -> only EnergyAnalyzer recovered -> overall stays Failed
+        if let Some(last) = history_entries.last_mut() {
+            last["apps"]["SpendyLedger"] =
+                serde_json::json!({ "status": "Failed", "error": "SSH timeout" });
+        }
+        fs::write(
+            &history_path,
+            serde_json::to_string_pretty(&history_entries).unwrap(),
+        )
+        .unwrap();
+        let partial =
+            read_backup_ledger_from_paths(&history_path, &ws_root, &backups_root, now_local)
+                .unwrap();
+        assert_eq!(partial.last_run_status.as_deref(), Some("Failed"));
+        assert_eq!(partial.failed_runs_7d, 1);
+        assert_eq!(
+            partial
+                .latest_app_details
+                .iter()
+                .find(|d| d.app_name == "EnergyAnalyzer")
+                .unwrap()
+                .status,
+            "Success"
+        );
+        assert_eq!(
+            partial
+                .latest_app_details
+                .iter()
+                .find(|d| d.app_name == "SpendyLedger")
+                .unwrap()
+                .status,
+            "Failed"
+        );
+
+        // 5. Same-day automated retry (Failed at 09:00Z, Success at 14:00Z) clears failure in 7d window
+        let retry_utc = chrono::DateTime::parse_from_rfc3339(&failed_run_ts)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+            + chrono::Duration::hours(5);
+        history_entries.push(serde_json::json!({
+            "timestamp": retry_utc.to_rfc3339(),
+            "status": "Success",
+            "run_type": "Automated",
+            "apps": {
+                "EnergyAnalyzer": { "status": "Success", "file": "db-backup_v4_retry.tar.gz", "size_bytes": 52509196 },
+                "SpendyLedger": { "status": "Success", "file": "db-backup_v10_retry.tar.gz", "size_bytes": 9373924 }
+            }
+        }));
+        fs::write(
+            &history_path,
+            serde_json::to_string_pretty(&history_entries).unwrap(),
+        )
+        .unwrap();
+        let retried =
+            read_backup_ledger_from_paths(&history_path, &ws_root, &backups_root, now_local)
+                .unwrap();
+        assert_eq!(retried.last_run_status.as_deref(), Some("Success"));
+        assert_eq!(retried.failed_runs_7d, 0);
+        assert_eq!(retried.daily_pips_7d.last().unwrap().status, "Success");
+
+        let _ = fs::remove_dir_all(&temp_root);
+    }
 }

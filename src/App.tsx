@@ -1232,9 +1232,22 @@ export const App: React.FC = () => {
       onLine: (line) => {
         appendTerminalLine(jobId, line);
       },
-      onComplete: (exitCode) => {
+      onComplete: async (exitCode) => {
         finalizeTerminalJob(jobId, exitCode);
-        refreshBackupLedger();
+        await refreshBackupLedger();
+        if (exitCode === 0) {
+          showActionFeedback(
+            `Snapshot for ${app.manifest.displayName} completed cleanly.`,
+            'success',
+            5000
+          );
+        } else {
+          showActionFeedback(
+            `Snapshot for ${app.manifest.displayName} exited with code ${exitCode}.`,
+            'error',
+            7000
+          );
+        }
       },
       onError: (err) => {
         failTerminalJob(jobId, `Backup failed: ${err}`);
@@ -1962,9 +1975,14 @@ export const App: React.FC = () => {
       onLine: (line) => {
         appendTerminalLine(jobId, line);
       },
-      onComplete: (exitCode) => {
+      onComplete: async (exitCode) => {
         finalizeTerminalJob(jobId, exitCode);
-        refreshBackupLedger();
+        await refreshBackupLedger();
+        if (exitCode === 0) {
+          showActionFeedback('Full GFS database backup completed cleanly.', 'success', 5000);
+        } else {
+          showActionFeedback(`Full GFS database backup exited with code ${exitCode}.`, 'error', 7000);
+        }
       },
       onError: (err) => {
         failTerminalJob(jobId, `GFS backup failed: ${err}`);
