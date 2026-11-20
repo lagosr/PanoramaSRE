@@ -17,7 +17,7 @@ export const compositionDomain: SreToolDomain = {
           slug: {
             type: 'string',
             description:
-              'Optional application slug ("auth", "spendy", "biomed", "water", "basket", or "all"). Omit for all apps.',
+              'Optional application slug ("auth", "spendy", "biomed", "water", "basket", "energy", "res", "parakith", or "all"). Omit for all apps.',
             default: 'all',
           },
           instance: {

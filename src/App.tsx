@@ -915,7 +915,7 @@ export const App: React.FC = () => {
         refreshAppliances();
       }
 
-      // Tier 3 (300s default / configurable): posture + 6x health + 6x git composition + WSH --fast SSH snapshot
+      // Tier 3 (300s default / configurable): posture + fleet health + fleet git composition + WSH --fast SSH snapshot
       if (dueTiers.includes(3)) {
         syncFullTelemetry(false, true, 'hud', false);
       }

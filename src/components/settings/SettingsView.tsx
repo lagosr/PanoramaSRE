@@ -659,7 +659,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   ]}
                 />
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 font-mono">
-                  Probes network posture, 6 suite health endpoints, local Git composition, and WSH --fast SSH snapshot.
+                  Probes network posture, all suite health endpoints, local Git composition, and WSH --fast SSH snapshot.
                 </p>
               </div>
 
@@ -681,7 +681,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </div>
                   <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
                     <div className="font-semibold text-slate-800 dark:text-slate-200">Tier 3 · {securityAuditInterval}m (Fleet + SSH)</div>
-                    <div className="text-slate-500">Posture, 6x Health, 6x Git, WSH --fast SSH Snapshot</div>
+                    <div className="text-slate-500">Posture, Fleet Health & Git, WSH --fast SSH Snapshot</div>
                   </div>
                   <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
                     <div className="font-semibold text-slate-800 dark:text-slate-200">Tier 4 · 1h + Startup (Slow/Upstream)</div>

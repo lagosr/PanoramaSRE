@@ -6,6 +6,7 @@
 *   🧬 **BiomedMaven** (`/biomed`, Port 3002)
 *   💧 **WaterAnalyzer** (`/water`, Port 3003)
 *   🧺 **TastyBasket** (`/basket`, Port 3004)
+*   ⚡ **EnergyAnalyzer** (`/energy`, Port 3005)
 *   📦 **PanoramaResources** (`/res`, Port 4000)
 
 PanoramaSRE bridges local workstation engineering with remote production operations on the Raspberry Pi 5 Web Services Host (`wsh.panoramadr.com`), providing continuous background observability, cryptographic Git provenance diffing, automated batch deployments with circuit breakers, and 1-click SQLite database hydration.
