@@ -37,6 +37,8 @@ pub struct WshSnapshot {
     pub firewall_rules_raw: String,
     #[serde(default)]
     pub docker_daemon_raw: String,
+    #[serde(default)]
+    pub cron_telemetry: serde_json::Value,
 }
 
 pub fn default_ssh_key_path() -> String {
@@ -178,8 +180,33 @@ pub async fn fetch_wsh_snapshot(
         let end = trimmed.rfind('}').ok_or("Malformed JSON output from snapshot")?;
         let json_str = &trimmed[start..=end];
 
-        let parsed = serde_json::from_str::<WshSnapshot>(json_str)
+        let mut parsed = serde_json::from_str::<WshSnapshot>(json_str)
             .map_err(|e| format!("Failed to parse snapshot JSON: {}. Raw snippet: {}", e, &json_str[..json_str.len().min(200)]))?;
+
+        if let Some(obj) = parsed.cron_telemetry.as_object_mut() {
+            if let Some(raw_logs) = obj.get("recent_runs_raw").and_then(|v| v.as_str()).map(|s| s.to_string()) {
+                obj.insert(
+                    "recent_runs_raw".to_string(),
+                    serde_json::Value::String(crate::scrubber::scrub_secrets(&raw_logs)),
+                );
+            }
+            if let Some(cron_files) = obj.get_mut("cron_d_files").and_then(|v| v.as_array_mut()) {
+                for entry in cron_files {
+                    if let Some(entry_obj) = entry.as_object_mut() {
+                        if let Some(raw_content) = entry_obj
+                            .get("content_raw")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                        {
+                            entry_obj.insert(
+                                "content_raw".to_string(),
+                                serde_json::Value::String(crate::scrubber::scrub_secrets(&raw_content)),
+                            );
+                        }
+                    }
+                }
+            }
+        }
 
         guard.last_snapshot = Some((Instant::now(), parsed.clone()));
         Ok(parsed)

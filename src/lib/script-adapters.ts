@@ -185,3 +185,52 @@ export function buildRemoteSshCommand(remoteBashCommand: string): {
     ],
   };
 }
+
+export function resolveSuiteRootFromAppPath(appPath: string): string {
+  const normalized = appPath.replace(/[\\/]+$/, '');
+  const lastSep = Math.max(normalized.lastIndexOf('\\'), normalized.lastIndexOf('/'));
+  return lastSep > 0 ? normalized.slice(0, lastSep) : 'C:\\Users\\rodrigo\\Documents\\AG Projects';
+}
+
+const VALID_CRON_JOB_ID_REGEX = /^[a-z0-9][a-z0-9-]{1,31}$/;
+
+export function buildCronSyncCommand(
+  suiteRoot: string,
+  options: {
+    appPath?: string;
+    allApps?: boolean;
+    testMode?: boolean;
+    testRunJobId?: string;
+  }
+): ScriptActionExecution {
+  const engineRoot = `${suiteRoot.replace(/[\\/]+$/, '')}\\PanoramaDeployEngine\\engine`;
+  const scriptPath = `${engineRoot}\\Invoke-CronSync.ps1`;
+  const args: string[] = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath];
+
+  if (options.allApps) {
+    args.push('-AllApps');
+  } else if (options.appPath) {
+    args.push('-AppPath', options.appPath);
+  }
+
+  if (options.testMode) {
+    args.push('-Test');
+  }
+  if (options.testRunJobId !== undefined) {
+    if (!VALID_CRON_JOB_ID_REGEX.test(options.testRunJobId)) {
+      throw new Error(
+        `Invalid cron job ID '${options.testRunJobId}': must match ${VALID_CRON_JOB_ID_REGEX.source}.`
+      );
+    }
+    args.push('-TestRunJobId', options.testRunJobId);
+  }
+
+  return {
+    scriptPath,
+    command: 'pwsh.exe',
+    args,
+    lockType: options.testMode ? 'None' : 'WshRemoteMutation',
+    elevated: false,
+    workingDir: options.appPath || engineRoot,
+  };
+}

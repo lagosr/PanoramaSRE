@@ -1,9 +1,10 @@
+use crate::db::SreDatabase;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tauri::State;
-use crate::db::SreDatabase;
 
 #[tauri::command]
 pub async fn exit_app_completely(
@@ -65,6 +66,47 @@ pub struct CloudflareConfigDto {
     pub deploy_mode: Option<String>,
 }
 
+fn default_cron_shell() -> String {
+    "/bin/sh".to_string()
+}
+
+fn default_cron_user() -> String {
+    "root".to_string()
+}
+
+fn default_cron_log_redirect() -> String {
+    "> /dev/null 2>&1".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CronJobDto {
+    pub id: String,
+    pub description: String,
+    pub schedule: String,
+    pub script: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default = "default_cron_shell")]
+    pub shell: String,
+    #[serde(default = "default_cron_user")]
+    pub user: String,
+    #[serde(default = "default_cron_log_redirect")]
+    pub log_redirect: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub local_script_exists: bool,
+    #[serde(default)]
+    pub local_script_sha256: Option<String>,
+}
+
+pub fn compute_normalized_lf_sha256(content: &str) -> String {
+    let normalized = content.replace("\r\n", "\n").replace('\r', "\n");
+    let digest = Sha256::digest(normalized.as_bytes());
+    digest.iter().map(|b| format!("{:02x}", b)).collect::<String>()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SreConfigDto {
@@ -92,6 +134,10 @@ pub struct SreConfigDto {
     pub automated_backup_default: bool,
     #[serde(default = "default_true")]
     pub expose_in_remote_portal: bool,
+    #[serde(default)]
+    pub cron_jobs: Vec<CronJobDto>,
+    #[serde(default)]
+    pub cron_legacy_files: Vec<String>,
 }
 
 fn default_true() -> bool {
@@ -319,8 +365,26 @@ pub fn discover_suite_apps_internal(
                                 .unwrap_or("wsh-docker")
                                 .to_string();
                             let sre_block = manifest_val.get("sre");
-                            let sre_dto = sre_block
+                            let mut sre_dto = sre_block
                                 .and_then(|v| serde_json::from_value::<SreConfigDto>(v.clone()).ok());
+                            if let Some(ref mut sre) = sre_dto {
+                                for job in sre.cron_jobs.iter_mut() {
+                                    let rel_clean = job.script.trim().replace('\\', "/");
+                                    if rel_clean.starts_with("scripts/") && !rel_clean.contains("..") {
+                                        let script_path = path.join(rel_clean.replace('/', std::path::MAIN_SEPARATOR_STR));
+                                        if let Ok(raw) = fs::read_to_string(&script_path) {
+                                            job.local_script_exists = true;
+                                            job.local_script_sha256 = Some(compute_normalized_lf_sha256(&raw));
+                                        } else {
+                                            job.local_script_exists = false;
+                                            job.local_script_sha256 = None;
+                                        }
+                                    } else {
+                                        job.local_script_exists = false;
+                                        job.local_script_sha256 = None;
+                                    }
+                                }
+                            }
                             let cloudflare_dto = manifest_val
                                 .get("cloudflare")
                                 .and_then(|v| serde_json::from_value::<CloudflareConfigDto>(v.clone()).ok());

@@ -38,6 +38,95 @@ export interface TerminalTab {
   abortable?: boolean;
 }
 
+export interface CronJobDeclaration {
+  id: string;
+  description: string;
+  schedule: string;
+  script: string;
+  args?: string[];
+  shell?: '/bin/sh' | '/bin/bash' | string;
+  user?: string;
+  logRedirect?: string;
+  enabled?: boolean;
+  localScriptExists?: boolean;
+  localScriptSha256?: string | null;
+}
+
+export interface WshCronFileTelemetry {
+  name: string;
+  mode: string;
+  owner: string;
+  has_crlf: boolean;
+  ends_with_newline: boolean;
+  content_sha256: string;
+  content_raw: string;
+}
+
+export interface WshAppScriptTelemetry {
+  app_dir: string;
+  script_name: string;
+  path: string;
+  mode: string;
+  owner: string;
+  has_crlf: boolean;
+  sha256: string;
+  syntax_ok: boolean;
+}
+
+export interface WshCronTelemetry {
+  cron_d_files: WshCronFileTelemetry[];
+  app_scripts: WshAppScriptTelemetry[];
+  recent_runs_raw: string;
+}
+
+export type CronAuditStatus =
+  | 'IN_SYNC'
+  | 'MISSING'
+  | 'DRIFTED'
+  | 'LEGACY_UNMIGRATED'
+  | 'INVALID_FORMAT'
+  | 'DAEMON_DOWN'
+  | 'UNKNOWN';
+
+export interface CronJobAuditResult {
+  job: CronJobDeclaration;
+  scriptName: string;
+  remoteScriptPath: string;
+  liveScript: WshAppScriptTelemetry | null;
+  scriptExistsOnWsh: boolean;
+  permissionsOk: boolean;
+  crlfClean: boolean;
+  syntaxOk: boolean;
+  shaMatch: boolean;
+  lastRunLine: string | null;
+  issues: string[];
+}
+
+export interface AppCronAuditReport {
+  app: DiscoveredApp;
+  slug: string;
+  displayName: string;
+  remoteAppRoot: string;
+  expectedCronFileName: string;
+  expectedCronContent: string;
+  expectedCronSha256: string;
+  liveCronFile: WshCronFileTelemetry | null;
+  liveLegacyFiles: WshCronFileTelemetry[];
+  status: CronAuditStatus;
+  jobs: CronJobAuditResult[];
+  issues: string[];
+  recentLogLines: string[];
+}
+
+export interface FleetCronAuditSummary {
+  cronServiceStatus: string;
+  cronServiceActive: boolean;
+  apps: AppCronAuditReport[];
+  inSyncCount: number;
+  attentionCount: number;
+  unmanagedCronFiles: WshCronFileTelemetry[];
+}
+
 export interface AppManifest {
   schemaVersion: number;
   appId: string;
@@ -78,6 +167,8 @@ export interface AppManifest {
     automatedBackupDefault: boolean;
     exposeInRemotePortal: boolean;
     syncManifestOnDeploy?: boolean;
+    cronJobs?: CronJobDeclaration[];
+    cronLegacyFiles?: string[];
   };
 }
 
@@ -373,6 +464,7 @@ export interface WshSnapshot {
     lighttpd?: string;
     docker?: string;
     ssh?: string;
+    cron?: string;
   };
   listening_ports: number[];
   lighttpd_routes_raw: string;
@@ -413,6 +505,7 @@ export interface WshSnapshot {
   security_invariants?: SecurityPostureInvariant[];
   firewall_rules_raw?: string;
   docker_daemon_raw?: string;
+  cron_telemetry?: WshCronTelemetry;
 }
 
 export type SslHealthStatus = 'HEALTHY' | 'EXPIRING_SOON' | 'CRITICAL' | 'EXPIRED' | 'MISSING' | 'SELF_SIGNED' | 'ERROR';

@@ -8,12 +8,13 @@ import {
   SecurityPostureInvariant,
   TerminalTab,
   OptInComplianceSnapshot,
+  FleetCronAuditSummary,
 } from '../../lib/types';
 import { FleetAppCard } from './FleetAppCard';
 import { ApplianceStatusStrip } from './ApplianceStatusStrip';
 import { ReleaseCompositionDrawer } from './ReleaseCompositionDrawer';
 import { WorkStreamContainer } from '../ui/WorkStreamContainer';
-import { ShieldAlert, HardDriveDownload, RefreshCw, AlertTriangle, ShieldCheck, Network } from 'lucide-react';
+import { ShieldAlert, HardDriveDownload, RefreshCw, AlertTriangle, ShieldCheck, Network, Clock } from 'lucide-react';
 
 interface CommandCenterViewProps {
   apps: DiscoveredApp[];
@@ -22,10 +23,12 @@ interface CommandCenterViewProps {
   backupLedger?: BackupLedgerSummary | null;
   isBackupIncidentDismissed?: boolean;
   optInSnapshot?: OptInComplianceSnapshot | null;
+  cronSummary?: FleetCronAuditSummary | null;
   terminalTabs?: TerminalTab[];
   isLoading: boolean;
   onNavigateToBackups?: () => void;
   onNavigateToOptIns?: () => void;
+  onNavigateToCrons?: () => void;
   onTriggerFullGfsBackup?: () => void;
   securityViolationCount?: number;
   failingInvariants?: SecurityPostureInvariant[];
@@ -44,10 +47,12 @@ export function CommandCenterView({
   backupLedger,
   isBackupIncidentDismissed = false,
   optInSnapshot,
+  cronSummary,
   terminalTabs = [],
   isLoading,
   onNavigateToBackups,
   onNavigateToOptIns,
+  onNavigateToCrons,
   onTriggerFullGfsBackup,
   securityViolationCount = 0,
   failingInvariants = [],
@@ -274,6 +279,41 @@ export function CommandCenterView({
               </button>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Host Scheduled Cron & Heartbeat Drift Alert */}
+      {cronSummary && cronSummary.attentionCount > 0 && (
+        <div className="rounded-xl border border-amber-400/70 dark:border-amber-500/40 bg-amber-50 dark:bg-amber-950/30 p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex items-start sm:items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-amber-500/20 border border-amber-500/40 flex items-center justify-center shrink-0">
+              <Clock className="w-5 h-5 text-amber-700 dark:text-amber-400" />
+            </div>
+            <div>
+              <h3 className="text-xs sm:text-sm font-bold text-amber-950 dark:text-amber-200 tracking-wide">
+                HOST CRON ATTENTION REQUIRED ({cronSummary.attentionCount}{' '}
+                {cronSummary.attentionCount === 1 ? 'TARGET' : 'TARGETS'})
+              </h3>
+              <p className="text-xs text-amber-900 dark:text-amber-300/90 mt-0.5">
+                {!cronSummary.cronServiceActive
+                  ? `DietPi host cron daemon is '${cronSummary.cronServiceStatus}'.`
+                  : `Pending sync/migration: ${cronSummary.apps
+                      .filter((a) => a.status !== 'IN_SYNC')
+                      .map((a) => `${a.displayName} (${a.status})`)
+                      .join(', ')}.`}
+              </p>
+            </div>
+          </div>
+          {onNavigateToCrons && (
+            <button
+              type="button"
+              onClick={onNavigateToCrons}
+              className="btn-primary text-xs py-1.5 px-3.5"
+            >
+              <Clock className="w-3.5 h-3.5" />
+              <span>Inspect & Sync Crons</span>
+            </button>
+          )}
         </div>
       )}
 

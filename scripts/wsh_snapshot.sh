@@ -6,6 +6,10 @@ json_escape() {
   awk 'BEGIN {RS=""; ORS=""} {gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); gsub(/\r/, ""); gsub(/\t/, "\\t"); gsub(/\n/, "\\n"); print}'
 }
 
+json_clean_escape() {
+  tr -d '\000-\010\013\014\016-\037' | json_escape
+}
+
 HOSTNAME_VAL=$(hostname 2>/dev/null || echo "wsh")
 KERNEL_VAL=$(uname -r 2>/dev/null || echo "unknown")
 UPTIME_SECS=$(awk '{print $1}' /proc/uptime 2>/dev/null || echo "0")
@@ -27,6 +31,7 @@ THROTTLED=$( command -v vcgencmd >/dev/null 2>&1 && vcgencmd get_throttled 2>/de
 SVC_LIGHTTPD=$(systemctl is-active lighttpd 2>/dev/null || echo "unknown")
 SVC_DOCKER=$(systemctl is-active docker 2>/dev/null || echo "unknown")
 SVC_SSH=$(systemctl is-active ssh 2>/dev/null || echo "unknown")
+SVC_CRON=$(systemctl is-active cron 2>/dev/null || echo "unknown")
 
 # Listening local ports (comma-separated integers)
 LISTEN_PORTS=$(ss -tlnH 2>/dev/null | awk '{print $4}' | awk -F: '{print $NF}' | grep -E '^[0-9]+$' | sort -nu | paste -sd "," - || echo "")
@@ -99,6 +104,63 @@ for f in /var/data/*/releases.json; do
 done
 RELEASE_LEDGERS="${RELEASE_LEDGERS}}"
 
+# Host /etc/cron.d/* inventory (excluding system .placeholder and directories)
+CRON_D_JSON="["
+FIRST_CRON_F=1
+for f in /etc/cron.d/*; do
+  [ -f "$f" ] || continue
+  BASE_NAME=$(basename "$f")
+  [ "$BASE_NAME" = ".placeholder" ] && continue
+  C_MODE=$(stat -c '%a' "$f" 2>/dev/null || echo "")
+  C_OWNER=$(stat -c '%U:%G' "$f" 2>/dev/null || echo "")
+  C_CRLF="false"
+  grep -q $'\r' "$f" 2>/dev/null && C_CRLF="true"
+  C_NL="false"
+  if [ ! -s "$f" ] || [ "$(tail -c 1 "$f" 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "0a" ]; then
+    C_NL="true"
+  fi
+  C_SHA=$(sha256sum "$f" 2>/dev/null | awk '{print $1}' || echo "")
+  C_RAW=$(cat "$f" 2>/dev/null | json_clean_escape)
+  NAME_ESC=$(printf '%s' "$BASE_NAME" | json_clean_escape)
+  [ "$FIRST_CRON_F" -eq 0 ] && CRON_D_JSON="${CRON_D_JSON},"
+  CRON_D_JSON="${CRON_D_JSON}{\"name\":\"${NAME_ESC}\",\"mode\":\"${C_MODE}\",\"owner\":\"${C_OWNER}\",\"has_crlf\":${C_CRLF},\"ends_with_newline\":${C_NL},\"content_sha256\":\"${C_SHA}\",\"content_raw\":\"${C_RAW}\"}"
+  FIRST_CRON_F=0
+done
+CRON_D_JSON="${CRON_D_JSON}]"
+
+# App cron scripts inventory (/opt/*/scripts/*.sh)
+APP_SCRIPTS_JSON="["
+FIRST_CRON_S=1
+for s in /opt/*/scripts/*.sh; do
+  [ -f "$s" ] || continue
+  S_DIR=$(basename "$(dirname "$(dirname "$s")")")
+  S_NAME=$(basename "$s")
+  S_MODE=$(stat -c '%a' "$s" 2>/dev/null || echo "")
+  S_OWNER=$(stat -c '%U:%G' "$s" 2>/dev/null || echo "")
+  S_CRLF="false"
+  grep -q $'\r' "$s" 2>/dev/null && S_CRLF="true"
+  S_SHA=$(sha256sum "$s" 2>/dev/null | awk '{print $1}' || echo "")
+  S_SYNTAX="false"
+  if head -n 1 "$s" 2>/dev/null | grep -qi 'bash'; then
+    bash -n "$s" >/dev/null 2>&1 && S_SYNTAX="true"
+  else
+    sh -n "$s" >/dev/null 2>&1 && S_SYNTAX="true"
+  fi
+  DIR_ESC=$(printf '%s' "$S_DIR" | json_clean_escape)
+  SNAME_ESC=$(printf '%s' "$S_NAME" | json_clean_escape)
+  SPATH_ESC=$(printf '%s' "$s" | json_clean_escape)
+  [ "$FIRST_CRON_S" -eq 0 ] && APP_SCRIPTS_JSON="${APP_SCRIPTS_JSON},"
+  APP_SCRIPTS_JSON="${APP_SCRIPTS_JSON}{\"app_dir\":\"${DIR_ESC}\",\"script_name\":\"${SNAME_ESC}\",\"path\":\"${SPATH_ESC}\",\"mode\":\"${S_MODE}\",\"owner\":\"${S_OWNER}\",\"has_crlf\":${S_CRLF},\"sha256\":\"${S_SHA}\",\"syntax_ok\":${S_SYNTAX}}"
+  FIRST_CRON_S=0
+done
+APP_SCRIPTS_JSON="${APP_SCRIPTS_JSON}]"
+
+# Recent host cron execution telemetry (scrubbed again in Rust via scrubber::scrub_secrets)
+CRON_RECENT_RUNS=$(journalctl -u cron --no-pager -n 30 --output=short-iso 2>/dev/null | json_clean_escape)
+if [ -z "$CRON_RECENT_RUNS" ] && [ -f /var/log/syslog ]; then
+  CRON_RECENT_RUNS=$(grep -i cron /var/log/syslog 2>/dev/null | tail -n 30 | json_clean_escape)
+fi
+
 cat <<EOF
 {
   "mode": "${MODE}",
@@ -112,7 +174,8 @@ cat <<EOF
   "services": {
     "lighttpd": "${SVC_LIGHTTPD}",
     "docker": "${SVC_DOCKER}",
-    "ssh": "${SVC_SSH}"
+    "ssh": "${SVC_SSH}",
+    "cron": "${SVC_CRON}"
   },
   "listening_ports": [${LISTEN_PORTS}],
   "lighttpd_routes_raw": "${PROXY_ROUTES}",
@@ -128,6 +191,11 @@ cat <<EOF
   "cloudflared": {
     "version_raw": "${CF_VERSION}",
     "recent_logs": "${CF_LOGS}"
+  },
+  "cron_telemetry": {
+    "cron_d_files": ${CRON_D_JSON},
+    "app_scripts": ${APP_SCRIPTS_JSON},
+    "recent_runs_raw": "${CRON_RECENT_RUNS}"
   },
   "apt_upgradable_raw": "${APT_LINES}",
   "data_volumes_raw": "${VOLUMES_LINES}",

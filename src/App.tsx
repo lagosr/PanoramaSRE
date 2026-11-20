@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -12,12 +12,14 @@ import { LocalDevView } from './components/local-dev/LocalDevView';
 import { SettingsView } from './components/settings/SettingsView';
 import { TopologyStacksView } from './components/topology/TopologyStacksView';
 import { DietPiHostView } from './components/dietpi/DietPiHostView';
+import type { CronActionRequest } from './components/dietpi/CronManagerPanel';
 import { EdgePkiView } from './components/edge/EdgePkiView';
 import { ReleasePipelineView } from './components/releases/ReleasePipelineView';
 import { BackupsRecoveryView } from './components/backups/BackupsRecoveryView';
 import { SmokeTestsView } from './components/smoke/SmokeTestsView';
 import { OptInComplianceView } from './components/optins/OptInComplianceView';
 import { synthesizeTopology, computeTopologyBadges } from './lib/topology-synthesizer';
+import { auditFleetCrons } from './lib/cron-auditor';
 import {
   DiscoveredApp,
   AppManifest,
@@ -46,6 +48,8 @@ import {
   buildCloudflareTunnelCommand,
   buildRemoteSshCommand,
   buildCloudflarePagesDeployCommand,
+  buildCronSyncCommand,
+  resolveSuiteRootFromAppPath,
   ScriptActionExecution,
 } from './lib/script-adapters';
 
@@ -93,6 +97,8 @@ export const App: React.FC = () => {
   const [smokeError, setSmokeError] = useState<string | null>(null);
   const [isLoadingSsl, setIsLoadingSsl] = useState<boolean>(false);
   const [isLoadingWsh, setIsLoadingWsh] = useState<boolean>(false);
+  const [dietpiSubTab, setDietpiSubTab] = useState<'host' | 'crons'>('host');
+  const [isCronActionBusy, setIsCronActionBusy] = useState<boolean>(false);
   // Terminal Drawer State
   const [terminalTabs, setTerminalTabs] = useState<TerminalTab[]>([]);
   const [activeTerminalTabId, setActiveTerminalTabId] = useState<string>('');
@@ -642,6 +648,8 @@ export const App: React.FC = () => {
                 rawSre.automatedBackupDefault ?? hostingTarget !== 'cloudflare-pages',
               exposeInRemotePortal:
                 rawSre.exposeInRemotePortal ?? hostingTarget !== 'cloudflare-pages',
+              cronJobs: Array.isArray(rawSre.cronJobs) ? rawSre.cronJobs : [],
+              cronLegacyFiles: Array.isArray(rawSre.cronLegacyFiles) ? rawSre.cronLegacyFiles : [],
             },
           };
 
@@ -2175,6 +2183,7 @@ export const App: React.FC = () => {
   const securityViolationCount = wshSnapshot ? topology.securityAudit.securityViolationCount : 0;
   const failingInvariants = wshSnapshot ? topology.securityAudit.invariants.filter((i) => i.status === 'FAIL') : [];
   const smokeFailureCount = smokeRuns[0]?.failed || 0;
+  const fleetCronSummary = useMemo(() => auditFleetCrons(apps, wshSnapshot), [apps, wshSnapshot]);
 
   const getWorkspaceRoot = useCallback(() => {
     if (apps.length > 0 && apps[0].workspacePath) {
@@ -2457,6 +2466,93 @@ export const App: React.FC = () => {
     );
   }, [refreshWshTelemetry, runManualTraceStream]);
 
+  const handleTriggerCronAction = useCallback(
+    (req: CronActionRequest) => {
+      const suiteRoot = req.app?.workspacePath
+        ? resolveSuiteRootFromAppPath(req.app.workspacePath)
+        : getWorkspaceRoot();
+      let execSpec: ReturnType<typeof buildCronSyncCommand>;
+      try {
+        execSpec = buildCronSyncCommand(suiteRoot, {
+          appPath: req.type === 'sync-all' ? undefined : req.app?.workspacePath,
+          allApps: req.type === 'sync-all',
+          testMode: req.type === 'dry-run',
+          testRunJobId: req.type === 'test-run' ? req.jobId : undefined,
+        });
+      } catch (err) {
+        showActionFeedback(
+          `Cron command validation failed: ${err instanceof Error ? err.message : String(err)}`,
+          'error',
+          6000
+        );
+        return;
+      }
+
+      const actionLabel =
+        req.type === 'sync-all'
+          ? 'Sync All Suite Crons (/etc/cron.d/panorama-*)'
+          : req.type === 'dry-run'
+          ? `Dry-Run Crons (-Test): ${req.app?.manifest.displayName || 'App'}`
+          : req.type === 'test-run'
+          ? `Test Run Heartbeat (${req.jobId}): ${req.app?.manifest.displayName || 'App'}`
+          : `Sync Crons: ${req.app?.manifest.displayName || 'App'}`;
+
+      const jobId = `cron-${req.type}-${Date.now()}`;
+      const newTab: TerminalTab = {
+        id: jobId,
+        title: actionLabel,
+        lines: [`[PanoramaSRE] Executing ${actionLabel}...`],
+        isRunning: true,
+        createdAt: new Date().toISOString(),
+        pageScope: 'dietpi',
+        source: 'ui',
+        appSlug: req.app?.manifest.slug,
+        abortable: true,
+      };
+      setTerminalTabs((prev) => [...prev, newTab]);
+      setActiveTerminalTabId(jobId);
+      saveTabToDb(newTab);
+      setIsCronActionBusy(true);
+
+      runStreamJob({
+        jobId,
+        label: actionLabel,
+        command: execSpec.command,
+        args: execSpec.args,
+        workingDir: execSpec.workingDir,
+        lockType: execSpec.lockType,
+        onLine: (line) => {
+          appendTerminalLine(jobId, line);
+        },
+        onComplete: async (exitCode) => {
+          setIsCronActionBusy(false);
+          finalizeTerminalJob(jobId, exitCode);
+          if (req.type !== 'dry-run') {
+            await refreshWshTelemetry(true);
+          }
+          if (exitCode === 0) {
+            showActionFeedback(`${actionLabel} completed cleanly.`, 'success', 5000);
+          } else {
+            showActionFeedback(`${actionLabel} exited with code ${exitCode}.`, 'error', 7000);
+          }
+        },
+        onError: (err) => {
+          setIsCronActionBusy(false);
+          failTerminalJob(jobId, `Cron action failed: ${err}`);
+        },
+      });
+    },
+    [
+      appendTerminalLine,
+      failTerminalJob,
+      finalizeTerminalJob,
+      getWorkspaceRoot,
+      refreshWshTelemetry,
+      saveTabToDb,
+      showActionFeedback,
+    ]
+  );
+
   const handleManualSslRefresh = useCallback(() => {
     void runManualTraceStream(
       'edge',
@@ -2563,10 +2659,15 @@ export const App: React.FC = () => {
               backupLedger={backupLedger}
               isBackupIncidentDismissed={isBackupIncidentDismissed}
               optInSnapshot={optInSnapshot}
+              cronSummary={fleetCronSummary}
               terminalTabs={terminalTabs}
               isLoading={apps.length === 0}
               onNavigateToBackups={() => setActiveTab('backups')}
               onNavigateToOptIns={() => setActiveTab('opt-ins')}
+              onNavigateToCrons={() => {
+                setDietpiSubTab('crons');
+                setActiveTab('dietpi');
+              }}
               onTriggerFullGfsBackup={() => handleTriggerFullGfsBackup('hud')}
               securityViolationCount={securityViolationCount}
               failingInvariants={failingInvariants}
@@ -2653,9 +2754,15 @@ export const App: React.FC = () => {
           {activeTab === 'dietpi' && (
             <DietPiHostView
               snapshot={wshSnapshot}
+              apps={apps}
+              cronSummary={fleetCronSummary}
+              subTab={dietpiSubTab}
+              onSelectSubTab={setDietpiSubTab}
+              isCronActionBusy={isCronActionBusy}
               terminalTabs={terminalTabs}
               isLoading={isLoadingWsh}
               onRefresh={handleManualDietPiRefresh}
+              onTriggerCronAction={handleTriggerCronAction}
               onTriggerReboot={handleRebootWshWithVerification}
               isRebooting={isHostRebooting}
               onOpenInBottomConsole={handleOpenInBottomConsole}

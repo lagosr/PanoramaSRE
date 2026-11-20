@@ -1,14 +1,23 @@
-import { WshSnapshot, TerminalTab } from '../../lib/types';
-import { RefreshCw, Server, Terminal, ShieldAlert, Cpu } from 'lucide-react';
+import { WshSnapshot, TerminalTab, DiscoveredApp, FleetCronAuditSummary } from '../../lib/types';
+import { RefreshCw, Server, Terminal, ShieldAlert, Cpu, Clock } from 'lucide-react';
+import { SegmentedControl } from '@lagosr/panorama-ui-kit';
 import { buildRemoteSshCommand } from '../../lib/script-adapters';
+import { auditFleetCrons } from '../../lib/cron-auditor';
 import { WorkStreamContainer } from '../ui/WorkStreamContainer';
+import { CronManagerPanel, type CronActionRequest } from './CronManagerPanel';
 
 interface DietPiHostViewProps {
   snapshot: WshSnapshot | null;
+  apps?: DiscoveredApp[];
+  cronSummary?: FleetCronAuditSummary;
+  subTab?: 'host' | 'crons';
+  onSelectSubTab?: (tab: 'host' | 'crons') => void;
   isLoading: boolean;
+  isCronActionBusy?: boolean;
   terminalTabs?: TerminalTab[];
   onRefresh: () => void;
   onTriggerAction: (actionLabel: string, cmd: string, args: string[]) => void;
+  onTriggerCronAction?: (req: CronActionRequest) => void;
   onTriggerReboot: () => void;
   onOpenInBottomConsole?: (tabId?: string) => void;
   onAbortJob?: (id: string) => void;
@@ -18,16 +27,23 @@ interface DietPiHostViewProps {
 
 export function DietPiHostView({
   snapshot,
+  apps = [],
+  cronSummary,
+  subTab = 'host',
+  onSelectSubTab,
   isLoading,
+  isCronActionBusy = false,
   terminalTabs = [],
   onRefresh,
   onTriggerAction,
+  onTriggerCronAction,
   onTriggerReboot,
   onOpenInBottomConsole,
   onAbortJob,
   onClearTab,
   isRebooting = false,
 }: DietPiHostViewProps) {
+  const effectiveCronSummary = cronSummary ?? auditFleetCrons(apps, snapshot);
   const formatUptime = (totalSeconds: number) => {
     const days = Math.floor(totalSeconds / 86400);
     const hours = Math.floor((totalSeconds % 86400) / 3600);
@@ -166,12 +182,52 @@ export function DietPiHostView({
                 {snapshot?.services.docker || 'Checking'}
               </span>
             </div>
+            <div className="flex justify-between">
+              <span className="text-slate-600 dark:text-slate-400">Cron:</span>
+              <span className={snapshot?.services.cron === 'active' ? 'text-emerald-700 dark:text-emerald-400 font-semibold' : 'text-rose-700 dark:text-rose-400 font-semibold'}>
+                {snapshot?.services.cron || 'Checking'}
+              </span>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Upgradable APT Packages */}
-      <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4">
+      {/* Sub-view Switcher: Host & APT vs Scheduled Crons & Heartbeats */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <SegmentedControl<'host' | 'crons'>
+          value={subTab}
+          onChange={(val) => onSelectSubTab?.(val)}
+          size="md"
+          options={[
+            {
+              value: 'host',
+              label: 'Host & APT Packages',
+              icon: <Server className="w-3.5 h-3.5" />,
+              badge: upgradablePkgs.length > 0 ? upgradablePkgs.length : undefined,
+            },
+            {
+              value: 'crons',
+              label: 'Scheduled Crons & Heartbeats',
+              icon: <Clock className="w-3.5 h-3.5" />,
+              badge:
+                effectiveCronSummary.attentionCount > 0
+                  ? effectiveCronSummary.attentionCount
+                  : undefined,
+            },
+          ]}
+        />
+      </div>
+
+      {subTab === 'crons' ? (
+        <CronManagerPanel
+          summary={effectiveCronSummary}
+          hasSnapshot={snapshot !== null}
+          isBusy={isCronActionBusy}
+          onTriggerCronAction={(req) => onTriggerCronAction?.(req)}
+        />
+      ) : (
+        /* Upgradable APT Packages */
+        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4">
         <div className="flex items-center justify-between gap-4">
           <div>
             <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm flex items-center gap-2 tabular-nums">
@@ -223,6 +279,7 @@ export function DietPiHostView({
           </div>
         )}
       </div>
+      )}
 
       {/* Position 4: DietPi Host Maintenance & Reboot Recovery Stream */}
       <WorkStreamContainer

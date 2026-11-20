@@ -7,7 +7,9 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use panorama_sre_lib::commands::cloudflare_ops::parse_wrangler_deployments_json;
+    use panorama_sre_lib::commands::dietpi_ops::WshSnapshot;
     use panorama_sre_lib::commands::git_ops::classify_blast_radius;
+    use panorama_sre_lib::commands::workspace::{compute_normalized_lf_sha256, SreConfigDto};
     use panorama_sre_lib::commands::monitor::{
         build_parakith_stealth_headers, extract_cloudflared_version, extract_url_pathname,
         is_latest_version_newer,
@@ -344,5 +346,67 @@ mod tests {
         );
         assert_eq!(sanitize_smoke_target_url(Some("file:///etc/passwd")), None);
         assert_eq!(sanitize_smoke_target_url(None), None);
+    }
+
+    #[test]
+    fn test_cron_manifest_dto_sha256_and_wsh_snapshot_cron_telemetry() {
+        assert_eq!(
+            compute_normalized_lf_sha256("#!/bin/sh\r\necho hi\r\n"),
+            compute_normalized_lf_sha256("#!/bin/sh\necho hi\n")
+        );
+
+        let sre: SreConfigDto = serde_json::from_str(
+            r#"{
+                "deployScript": "deploy-docker.ps1",
+                "cronJobs": [
+                    {
+                        "id": "heartbeat",
+                        "description": "15-minute heartbeat",
+                        "schedule": "*/15 * * * *",
+                        "script": "scripts/cron-heartbeat.sh"
+                    }
+                ],
+                "cronLegacyFiles": ["legacy-job"]
+            }"#,
+        )
+        .expect("deserialize SreConfigDto with cronJobs");
+        assert_eq!(sre.cron_jobs.len(), 1);
+        assert_eq!(sre.cron_jobs[0].shell, "/bin/sh");
+        assert_eq!(sre.cron_jobs[0].user, "root");
+        assert_eq!(sre.cron_jobs[0].log_redirect, "> /dev/null 2>&1");
+        assert!(sre.cron_jobs[0].enabled);
+        assert_eq!(sre.cron_legacy_files, vec!["legacy-job"]);
+
+        let snap: WshSnapshot = serde_json::from_str(
+            r#"{
+                "mode": "--fast",
+                "hostname": "wsh",
+                "kernel": "6.12",
+                "uptime_secs": 120.0,
+                "dietpi_version": "9.11.0",
+                "dietpi_update_available": "",
+                "reboot_required": false,
+                "rpi_throttled": "0x0",
+                "services": { "lighttpd": "active", "docker": "active", "ssh": "active", "cron": "active" },
+                "listening_ports": [443],
+                "lighttpd_routes_raw": "",
+                "containers": [],
+                "container_stats": [],
+                "images": [],
+                "cloudflared": {},
+                "apt_upgradable_raw": "",
+                "data_volumes_raw": "",
+                "docker_df": [],
+                "release_ledgers": {},
+                "cron_telemetry": {
+                    "cron_d_files": [{ "name": "panorama-energy", "mode": "644" }],
+                    "app_scripts": [],
+                    "recent_runs_raw": "cron[1]: CMD (/opt/energy-analyzer/scripts/cron-heartbeat.sh)"
+                }
+            }"#,
+        )
+        .expect("deserialize WshSnapshot with cron_telemetry");
+        assert_eq!(snap.services["cron"], "active");
+        assert_eq!(snap.cron_telemetry["cron_d_files"][0]["name"], "panorama-energy");
     }
 }
