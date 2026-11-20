@@ -2,8 +2,11 @@ import { describe, it, expect } from 'vitest';
 import {
   auditFleetCrons,
   computeDietPiBadges,
+  mergeLocalManifestRefresh,
+  normalizeDiscoveredManifest,
   renderExpectedCronFile,
   sha256Utf8,
+  type RawDiscoveredSuiteApp,
 } from '../cron-auditor';
 import { buildCronSyncCommand } from '../script-adapters';
 import type { DiscoveredApp, WshSnapshot } from '../types';
@@ -307,5 +310,129 @@ describe('computeDietPiBadges', () => {
     expect(badges.severity).toBeNull();
     expect(badges.tabs.host).toEqual({ count: 0, severity: null });
     expect(badges.tabs.crons).toEqual({ count: 0, severity: null });
+  });
+});
+
+function makeRawDiscovered(app: DiscoveredApp, shaOverride?: string, scheduleOverride?: string): RawDiscoveredSuiteApp {
+  return {
+    workspace_path: app.workspacePath,
+    manifest_path: `${app.workspacePath}\\panorama.app.json`,
+    manifest: {
+      schemaVersion: 1,
+      app_id: app.manifest.appId,
+      slug: app.manifest.slug,
+      hostingTarget: app.manifest.hostingTarget,
+      display_name: app.manifest.displayName,
+      portal_title: app.manifest.portalTitle,
+      description: app.manifest.description,
+      base_path: app.manifest.basePath,
+      port: app.manifest.port,
+      container_name: app.manifest.containerName,
+      remote_app_root: app.manifest.remoteAppRoot,
+      data_volume: app.manifest.dataVolume,
+      local_sqlite_path: app.manifest.localSqlitePath,
+      theme_color: app.manifest.themeColor,
+      icon: app.manifest.icon,
+      hasDatabase: true,
+      portalOrder: app.manifest.portalOrder,
+      sre: {
+        ...app.manifest.sre,
+        cronJobs: (app.manifest.sre.cronJobs || []).map((job, idx) =>
+          idx === 0
+            ? {
+                ...job,
+                schedule: scheduleOverride ?? job.schedule,
+                localScriptSha256: shaOverride ?? job.localScriptSha256,
+              }
+            : job
+        ),
+      },
+    },
+  };
+}
+
+describe('mergeLocalManifestRefresh & normalizeDiscoveredManifest', () => {
+  it('detects local script SHA-256 changes into DRIFTED + cron badges while preserving live telemetry', () => {
+    const initialApp = makeApp();
+    initialApp.health = { status: 'healthy', version: '0.1.1' };
+    initialApp.provenanceState = 'IN_SYNC';
+    initialApp.latencyMs = 42;
+    initialApp.devServer = {
+      app_id: 'energy',
+      port: 3005,
+      status: 'RUNNING_MANAGED',
+      pid: 1234,
+      base_path: '/energy',
+      local_url: 'http://127.0.0.1:3005/energy',
+      sqlite_path: 'data/energy.sqlite',
+      sqlite_size_bytes: 4096,
+      sqlite_user_version: 4,
+    };
+    const snap = makeSnapshot(initialApp);
+    expect(auditFleetCrons([initialApp], snap).apps[0].status).toBe('IN_SYNC');
+
+    const updatedSha = sha256Utf8('#!/bin/sh\necho updated\n');
+    const raw = makeRawDiscovered(initialApp, updatedSha);
+    const refreshedApps = mergeLocalManifestRefresh([initialApp], [raw]);
+
+    expect(refreshedApps).toHaveLength(1);
+    const refreshed = refreshedApps[0];
+    expect(refreshed.health).toEqual(initialApp.health);
+    expect(refreshed.provenanceState).toBe('IN_SYNC');
+    expect(refreshed.latencyMs).toBe(42);
+    expect(refreshed.devServer).toEqual(initialApp.devServer);
+    expect(refreshed.manifest.sre.cronJobs?.[0].localScriptSha256).toBe(updatedSha);
+
+    const summary = auditFleetCrons(refreshedApps, snap);
+    expect(summary.apps[0].status).toBe('DRIFTED');
+    expect(summary.apps[0].jobs[0].shaMatch).toBe(false);
+
+    const badges = computeDietPiBadges(snap, summary);
+    expect(badges.tabs.crons).toEqual({ count: 1, severity: 'warning' });
+    expect(badges.totalCount).toBe(1);
+  });
+
+  it('updates expectedCronContent and triggers DRIFTED when local cron schedule changes', () => {
+    const initialApp = makeApp();
+    const snap = makeSnapshot(initialApp);
+    const raw = makeRawDiscovered(initialApp, undefined, '*/5 * * * *');
+    const refreshedApps = mergeLocalManifestRefresh([initialApp], [raw]);
+
+    const summary = auditFleetCrons(refreshedApps, snap);
+    expect(summary.apps[0].expectedCronContent).toContain('*/5 * * * * root /opt/energy-analyzer/scripts/cron-heartbeat.sh');
+    expect(summary.apps[0].status).toBe('DRIFTED');
+  });
+
+  it('handles empty discovery payloads safely and initializes newly discovered apps cleanly', () => {
+    const existingApp = makeApp();
+    const existingList = [existingApp];
+    expect(mergeLocalManifestRefresh(existingList, [])).toBe(existingList);
+
+    const normalized = normalizeDiscoveredManifest({
+      slug: 'spendy',
+      display_name: 'SpendyLedger',
+      base_path: '/spendy',
+      port: 3001,
+    });
+    expect(normalized.appId).toBe('spendy');
+    expect(normalized.remoteAppRoot).toBe('/var/data/spendy');
+
+    const added = mergeLocalManifestRefresh(existingList, [
+      {
+        workspace_path: 'C:\\Users\\rodrigo\\Documents\\AG Projects\\SpendyLedger',
+        manifest_path: 'C:\\Users\\rodrigo\\Documents\\AG Projects\\SpendyLedger\\panorama.app.json',
+        manifest: {
+          app_id: 'spendy',
+          slug: 'spendy',
+          display_name: 'SpendyLedger',
+          base_path: '/spendy',
+          port: 3001,
+        },
+      },
+    ]);
+    expect(added).toHaveLength(1);
+    expect(added[0].provenanceState).toBe('UNKNOWN');
+    expect(added[0].latencyMs).toBe(0);
+    expect(added[0].manifest.appId).toBe('spendy');
   });
 });

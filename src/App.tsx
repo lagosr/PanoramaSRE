@@ -19,11 +19,15 @@ import { BackupsRecoveryView } from './components/backups/BackupsRecoveryView';
 import { SmokeTestsView } from './components/smoke/SmokeTestsView';
 import { OptInComplianceView } from './components/optins/OptInComplianceView';
 import { synthesizeTopology, computeTopologyBadges } from './lib/topology-synthesizer';
-import { auditFleetCrons, computeDietPiBadges } from './lib/cron-auditor';
+import {
+  auditFleetCrons,
+  computeDietPiBadges,
+  mergeLocalManifestRefresh,
+  normalizeDiscoveredManifest,
+  type RawDiscoveredSuiteApp,
+} from './lib/cron-auditor';
 import {
   DiscoveredApp,
-  AppManifest,
-  HostingTarget,
   NetworkPosture,
   ApplianceStatus,
   AppCompositionReport,
@@ -398,6 +402,20 @@ export const App: React.FC = () => {
     }
   }, []);
 
+  // Refresh local panorama.app.json manifests & LF-normalized cron script SHA-256 hashes (no SSH/HTTP)
+  const refreshLocalManifests = useCallback(async (): Promise<number> => {
+    try {
+      const rawDiscovered = await invoke<RawDiscoveredSuiteApp[]>('discover_suite_apps', {});
+      if (rawDiscovered.length > 0) {
+        setApps((prev) => mergeLocalManifestRefresh(prev, rawDiscovered));
+      }
+      return rawDiscovered.length;
+    } catch (err) {
+      console.warn('[PanoramaSRE] Local manifest refresh warning:', err);
+      return 0;
+    }
+  }, []);
+
   // Refresh Backup Ledger
   const refreshBackupLedger = useCallback(async (): Promise<BackupLedgerSummary | null> => {
     try {
@@ -576,82 +594,13 @@ export const App: React.FC = () => {
       pushSyncTrace(`[INFO] Network posture resolved: ${posture}`);
 
       // 2. Discover apps via panorama.app.json
-      const rawDiscovered = await invoke<Array<{
-        manifest: any;
-        workspace_path: string;
-        manifest_path: string;
-      }>>('discover_suite_apps', {});
+      const rawDiscovered = await invoke<RawDiscoveredSuiteApp[]>('discover_suite_apps', {});
 
       // 3. For each discovered app, probe /api/health and compute git provenance
       const enrichedApps: DiscoveredApp[] = await Promise.all(
         rawDiscovered.map(async (item) => {
-          const hostingTarget: HostingTarget =
-            item.manifest.hostingTarget === 'cloudflare-pages' ? 'cloudflare-pages' : 'wsh-docker';
-          const rawSre = item.manifest.sre || {};
-          const appManifest: AppManifest = {
-            ...item.manifest,
-            appId: item.manifest.app_id || item.manifest.slug,
-            slug: item.manifest.slug,
-            hostingTarget,
-            displayName: item.manifest.display_name,
-            portalTitle: item.manifest.portal_title || item.manifest.display_name,
-            description: item.manifest.description || '',
-            basePath: item.manifest.base_path,
-            port: item.manifest.port,
-            containerName:
-              item.manifest.container_name ||
-              (hostingTarget === 'cloudflare-pages' ? '' : item.manifest.slug),
-            composeProject: hostingTarget === 'cloudflare-pages' ? '' : item.manifest.slug,
-            remoteAppRoot:
-              item.manifest.remote_app_root ||
-              (hostingTarget === 'cloudflare-pages' ? '' : `/var/data/${item.manifest.slug}`),
-            dataVolume:
-              item.manifest.data_volume ||
-              (hostingTarget === 'cloudflare-pages' ? '' : `/var/data/${item.manifest.slug}/data`),
-            localSqlitePath: item.manifest.local_sqlite_path || '',
-            themeColor: item.manifest.theme_color || 'emerald',
-            icon: item.manifest.icon || 'Layers',
-            hasDatabase: item.manifest.hasDatabase ?? item.manifest.has_database ?? true,
-            portalOrder:
-              item.manifest.portalOrder ??
-              item.manifest.portal_order ??
-              (hostingTarget === 'cloudflare-pages' ? 99 : 1),
-            roles: item.manifest.roles || ['admin'],
-            cloudflare: item.manifest.cloudflare || undefined,
-            sre: {
-              deployScript:
-                rawSre.deployScript ||
-                (hostingTarget === 'cloudflare-pages'
-                  ? './deploy-cloudflare-pages.ps1'
-                  : './deploy-docker.ps1'),
-              dbScript:
-                rawSre.dbScript ||
-                (hostingTarget === 'cloudflare-pages' ? '' : './db-manager.ps1'),
-              devCommand: rawSre.devCommand || item.manifest.dev_command || 'npm run dev',
-              previewCommand: rawSre.previewCommand,
-              healthEndpoint:
-                rawSre.healthEndpoint ||
-                (hostingTarget === 'cloudflare-pages'
-                  ? '/api/health'
-                  : `${item.manifest.base_path}/api/health`),
-              healthAuthMode: rawSre.healthAuthMode,
-              manifestEndpoint:
-                rawSre.manifestEndpoint ??
-                (hostingTarget === 'cloudflare-pages'
-                  ? undefined
-                  : `${item.manifest.base_path}/api/auth/manifest`),
-              testCommand: rawSre.testCommand || 'npm test',
-              typecheckCommand: rawSre.typecheckCommand || 'npx tsc --noEmit',
-              requiresAuthInDev:
-                rawSre.requiresAuthInDev ?? item.manifest.requires_auth_in_dev ?? false,
-              automatedBackupDefault:
-                rawSre.automatedBackupDefault ?? hostingTarget !== 'cloudflare-pages',
-              exposeInRemotePortal:
-                rawSre.exposeInRemotePortal ?? hostingTarget !== 'cloudflare-pages',
-              cronJobs: Array.isArray(rawSre.cronJobs) ? rawSre.cronJobs : [],
-              cronLegacyFiles: Array.isArray(rawSre.cronLegacyFiles) ? rawSre.cronLegacyFiles : [],
-            },
-          };
+          const appManifest = normalizeDiscoveredManifest(item.manifest);
+          const hostingTarget = appManifest.hostingTarget || 'wsh-docker';
 
           // Probe /api/health (WSH or Cloudflare Pages stealth HMAC probe)
           let probedHealth: AppHealth | undefined;
@@ -660,7 +609,7 @@ export const App: React.FC = () => {
             const healthUrl =
               hostingTarget === 'cloudflare-pages'
                 ? `${(appManifest.cloudflare?.primaryUrl || 'https://www.parakith.com').replace(/\/+$/, '')}${appManifest.sre.healthEndpoint || '/api/health'}`
-                : `https://wsh.panoramadr.com${item.manifest.base_path}/api/health`;
+                : `https://wsh.panoramadr.com${appManifest.basePath}/api/health`;
             const res = await invoke<{
               status: string;
               latency_ms: number;
@@ -2461,13 +2410,13 @@ export const App: React.FC = () => {
       'dietpi',
       'dietpi-refresh',
       'Refresh DietPi Host & APT Snapshot',
-      ['[PanoramaSRE] Querying DietPi host telemetry, services, and upgradable APT packages...'],
+      ['[PanoramaSRE] Re-hashing local cron manifests/scripts and querying DietPi host telemetry...'],
       async (append) => {
-        await refreshWshTelemetry(true);
-        append('[PASS] DietPi host health, systemd units, and package list refreshed.');
+        await Promise.all([refreshLocalManifests(), refreshWshTelemetry(true)]);
+        append('[PASS] Local cron script hashes, DietPi host health, systemd units, and package list refreshed.');
       }
     );
-  }, [refreshWshTelemetry, runManualTraceStream]);
+  }, [refreshLocalManifests, refreshWshTelemetry, runManualTraceStream]);
 
   const handleTriggerCronAction = useCallback(
     (req: CronActionRequest) => {
@@ -2531,7 +2480,9 @@ export const App: React.FC = () => {
           setIsCronActionBusy(false);
           finalizeTerminalJob(jobId, exitCode);
           if (req.type !== 'dry-run') {
-            await refreshWshTelemetry(true);
+            await Promise.all([refreshLocalManifests(), refreshWshTelemetry(true)]);
+          } else {
+            await refreshLocalManifests();
           }
           if (exitCode === 0) {
             showActionFeedback(`${actionLabel} completed cleanly.`, 'success', 5000);
@@ -2550,6 +2501,7 @@ export const App: React.FC = () => {
       failTerminalJob,
       finalizeTerminalJob,
       getWorkspaceRoot,
+      refreshLocalManifests,
       refreshWshTelemetry,
       saveTabToDb,
       showActionFeedback,
