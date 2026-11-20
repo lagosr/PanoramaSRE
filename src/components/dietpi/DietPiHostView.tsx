@@ -2,7 +2,7 @@ import { WshSnapshot, TerminalTab, DiscoveredApp, FleetCronAuditSummary } from '
 import { RefreshCw, Server, Terminal, ShieldAlert, Cpu, Clock } from 'lucide-react';
 import { SegmentedControl } from '@lagosr/panorama-ui-kit';
 import { buildRemoteSshCommand } from '../../lib/script-adapters';
-import { auditFleetCrons } from '../../lib/cron-auditor';
+import { auditFleetCrons, computeDietPiBadges, type DietPiTabBadge } from '../../lib/cron-auditor';
 import { WorkStreamContainer } from '../ui/WorkStreamContainer';
 import { CronManagerPanel, type CronActionRequest } from './CronManagerPanel';
 
@@ -44,6 +44,22 @@ export function DietPiHostView({
   isRebooting = false,
 }: DietPiHostViewProps) {
   const effectiveCronSummary = cronSummary ?? auditFleetCrons(apps, snapshot);
+  const dietpiBadges = computeDietPiBadges(snapshot, effectiveCronSummary);
+
+  const renderTabBadge = (badge: DietPiTabBadge) => {
+    if (badge.count <= 0) return undefined;
+    return (
+      <span
+        className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold tabular-nums leading-none whitespace-nowrap flex-shrink-0 ${
+          badge.severity === 'error'
+            ? 'bg-rose-600 text-white shadow-[0_0_6px_rgba(244,63,94,0.45)] animate-pulse'
+            : 'bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-500/40'
+        }`}
+      >
+        {badge.count}
+      </span>
+    );
+  };
   const formatUptime = (totalSeconds: number) => {
     const days = Math.floor(totalSeconds / 86400);
     const hours = Math.floor((totalSeconds % 86400) / 3600);
@@ -203,16 +219,13 @@ export function DietPiHostView({
               value: 'host',
               label: 'Host & APT Packages',
               icon: <Server className="w-3.5 h-3.5" />,
-              badge: upgradablePkgs.length > 0 ? upgradablePkgs.length : undefined,
+              badge: renderTabBadge(dietpiBadges.tabs.host),
             },
             {
               value: 'crons',
               label: 'Scheduled Crons & Heartbeats',
               icon: <Clock className="w-3.5 h-3.5" />,
-              badge:
-                effectiveCronSummary.attentionCount > 0
-                  ? effectiveCronSummary.attentionCount
-                  : undefined,
+              badge: renderTabBadge(dietpiBadges.tabs.crons),
             },
           ]}
         />

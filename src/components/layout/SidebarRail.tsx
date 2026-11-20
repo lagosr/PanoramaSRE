@@ -23,6 +23,8 @@ interface SidebarRailProps {
   backupFailureCount?: number;
   behindReleasesCount?: number;
   dietpiPackagesCount?: number;
+  dietpiAlertCount?: number;
+  dietpiAlertSeverity?: 'error' | 'warning' | null;
   securityViolationCount?: number;
   topologyAlertCount?: number;
   topologyAlertSeverity?: 'error' | 'warning' | null;
@@ -37,6 +39,8 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
   backupFailureCount = 0,
   behindReleasesCount = 0,
   dietpiPackagesCount = 0,
+  dietpiAlertCount,
+  dietpiAlertSeverity,
   securityViolationCount = 0,
   topologyAlertCount,
   topologyAlertSeverity,
@@ -50,6 +54,15 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
       ? topologyAlertSeverity
       : securityViolationCount > 0
       ? 'error'
+      : null;
+
+  const effectiveDietPiBadge =
+    dietpiAlertCount !== undefined ? dietpiAlertCount : dietpiPackagesCount;
+  const effectiveDietPiSeverity =
+    dietpiAlertSeverity !== undefined
+      ? dietpiAlertSeverity
+      : dietpiPackagesCount > 0
+      ? 'warning'
       : null;
 
   const navItems: {
@@ -75,7 +88,13 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
       badge: effectiveTopologyBadge > 0 ? effectiveTopologyBadge : undefined,
       severity: effectiveTopologySeverity || 'warning',
     },
-    { id: 'dietpi', label: 'DietPi Host', icon: Server, badge: dietpiPackagesCount, severity: 'warning' },
+    {
+      id: 'dietpi',
+      label: 'DietPi Host',
+      icon: Server,
+      badge: effectiveDietPiBadge > 0 ? effectiveDietPiBadge : undefined,
+      severity: effectiveDietPiSeverity || 'warning',
+    },
     { id: 'edge', label: 'PKI & Certificates', icon: ShieldCheck },
     {
       id: 'opt-ins',

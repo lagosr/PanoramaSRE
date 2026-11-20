@@ -19,7 +19,7 @@ import { BackupsRecoveryView } from './components/backups/BackupsRecoveryView';
 import { SmokeTestsView } from './components/smoke/SmokeTestsView';
 import { OptInComplianceView } from './components/optins/OptInComplianceView';
 import { synthesizeTopology, computeTopologyBadges } from './lib/topology-synthesizer';
-import { auditFleetCrons } from './lib/cron-auditor';
+import { auditFleetCrons, computeDietPiBadges } from './lib/cron-auditor';
 import {
   DiscoveredApp,
   AppManifest,
@@ -2152,26 +2152,6 @@ export const App: React.FC = () => {
   // Count apps requiring release deployment (drifted, ahead, dirty, diverged, or unhealthy/unreachable)
   const behindReleasesCount = apps.filter(isAppDeployCandidate).length;
 
-  // Count packages to be installed on DietPi host (upgradable Debian packages + DietPi OS updates)
-  const dietpiPackagesCount = (() => {
-    let count = 0;
-    if (wshSnapshot?.apt_upgradable_raw) {
-      count += wshSnapshot.apt_upgradable_raw
-        .split('\n')
-        .map((l) => l.trim())
-        .filter((l) => l.length > 0 && !l.startsWith('Listing...')).length;
-    }
-    if (
-      wshSnapshot?.dietpi_update_available &&
-      wshSnapshot.dietpi_update_available.trim().length > 0 &&
-      wshSnapshot.dietpi_update_available.toLowerCase() !== 'false' &&
-      wshSnapshot.dietpi_update_available.toLowerCase() !== 'none'
-    ) {
-      count += 1;
-    }
-    return count;
-  })();
-
   const topology = React.useMemo(
     () => synthesizeTopology(apps, wshSnapshot, tunnelVersionStatus),
     [apps, wshSnapshot, tunnelVersionStatus]
@@ -2184,6 +2164,11 @@ export const App: React.FC = () => {
   const failingInvariants = wshSnapshot ? topology.securityAudit.invariants.filter((i) => i.status === 'FAIL') : [];
   const smokeFailureCount = smokeRuns[0]?.failed || 0;
   const fleetCronSummary = useMemo(() => auditFleetCrons(apps, wshSnapshot), [apps, wshSnapshot]);
+  const dietpiBadges = useMemo(
+    () => computeDietPiBadges(wshSnapshot, fleetCronSummary),
+    [wshSnapshot, fleetCronSummary]
+  );
+  const dietpiPackagesCount = dietpiBadges.tabs.host.count;
 
   const getWorkspaceRoot = useCallback(() => {
     if (apps.length > 0 && apps[0].workspacePath) {
@@ -2624,6 +2609,8 @@ export const App: React.FC = () => {
           backupFailureCount={backupFailureCount}
           behindReleasesCount={behindReleasesCount}
           dietpiPackagesCount={dietpiPackagesCount}
+          dietpiAlertCount={dietpiBadges.totalCount}
+          dietpiAlertSeverity={dietpiBadges.severity}
           securityViolationCount={securityViolationCount}
           topologyAlertCount={topologyBadges.totalCount}
           topologyAlertSeverity={topologyBadges.severity}

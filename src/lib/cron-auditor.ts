@@ -444,3 +444,86 @@ export function auditFleetCrons(
     unmanagedCronFiles,
   };
 }
+
+export type DietPiBadgeSeverity = 'error' | 'warning' | null;
+
+export interface DietPiTabBadge {
+  count: number;
+  severity: DietPiBadgeSeverity;
+}
+
+export interface DietPiBadgeSummary {
+  /** Combined count for the SidebarRail "DietPi Host" navigation item */
+  totalCount: number;
+  /** Highest severity across host packages/reboot and cron attention */
+  severity: DietPiBadgeSeverity;
+  /** Per-subtab badge counts and severities for DietPiHostView */
+  tabs: {
+    host: DietPiTabBadge;
+    crons: DietPiTabBadge;
+  };
+}
+
+/**
+ * Computes navigation and sub-tab alert/update badges for the DietPi Host view
+ * (upgradable APT packages, DietPi OS updates, reboot requirements, and host cron attention)
+ * without emitting false alerts before the initial WSH snapshot arrives.
+ */
+export function computeDietPiBadges(
+  snapshot: WshSnapshot | null,
+  cronSummary: FleetCronAuditSummary
+): DietPiBadgeSummary {
+  if (!snapshot) {
+    return {
+      totalCount: 0,
+      severity: null,
+      tabs: {
+        host: { count: 0, severity: null },
+        crons: { count: 0, severity: null },
+      },
+    };
+  }
+
+  const aptCount = snapshot.apt_upgradable_raw
+    ? snapshot.apt_upgradable_raw
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0 && !l.startsWith('Listing...')).length
+    : 0;
+
+  const dietpiUpdateRaw = (snapshot.dietpi_update_available || '').trim().toLowerCase();
+  const dietpiUpdateCount =
+    dietpiUpdateRaw.length > 0 && dietpiUpdateRaw !== 'false' && dietpiUpdateRaw !== 'none' ? 1 : 0;
+
+  const rebootRequired = Boolean(snapshot.reboot_required);
+  const hostCount = aptCount + dietpiUpdateCount + (rebootRequired ? 1 : 0);
+  const hostSeverity: DietPiBadgeSeverity = rebootRequired
+    ? 'error'
+    : hostCount > 0
+    ? 'warning'
+    : null;
+
+  const cronCount = cronSummary.attentionCount;
+  const hasCronError =
+    !cronSummary.cronServiceActive ||
+    cronSummary.apps.some((a) => a.status === 'DAEMON_DOWN' || a.status === 'INVALID_FORMAT');
+  const cronSeverity: DietPiBadgeSeverity =
+    cronCount === 0 ? null : hasCronError ? 'error' : 'warning';
+
+  const totalCount = hostCount + cronCount;
+  const severity: DietPiBadgeSeverity =
+    hostSeverity === 'error' || cronSeverity === 'error'
+      ? 'error'
+      : totalCount > 0
+      ? 'warning'
+      : null;
+
+  return {
+    totalCount,
+    severity,
+    tabs: {
+      host: { count: hostCount, severity: hostSeverity },
+      crons: { count: cronCount, severity: cronSeverity },
+    },
+  };
+}

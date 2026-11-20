@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { auditFleetCrons, renderExpectedCronFile, sha256Utf8 } from '../cron-auditor';
+import {
+  auditFleetCrons,
+  computeDietPiBadges,
+  renderExpectedCronFile,
+  sha256Utf8,
+} from '../cron-auditor';
 import { buildCronSyncCommand } from '../script-adapters';
 import type { DiscoveredApp, WshSnapshot } from '../types';
 
@@ -231,5 +236,76 @@ describe('cron-auditor', () => {
         testRunJobId: 'heartbeat; rm -rf /',
       })
     ).toThrow(/Invalid cron job ID/);
+  });
+});
+
+describe('computeDietPiBadges', () => {
+  it('returns zeroed neutral badges before the initial WSH snapshot loads', () => {
+    const app = makeApp();
+    const summary = auditFleetCrons([app], null);
+    const badges = computeDietPiBadges(null, summary);
+    expect(badges.totalCount).toBe(0);
+    expect(badges.severity).toBeNull();
+    expect(badges.tabs.host).toEqual({ count: 0, severity: null });
+    expect(badges.tabs.crons).toEqual({ count: 0, severity: null });
+  });
+
+  it('surfaces pending cron updates on both SidebarRail and Scheduled Crons tab even when APT is clean', () => {
+    const app = makeApp();
+    const snap = makeSnapshot(app);
+    snap.cron_telemetry!.cron_d_files = [];
+    const summary = auditFleetCrons([app], snap);
+    const badges = computeDietPiBadges(snap, summary);
+
+    expect(badges.tabs.host).toEqual({ count: 0, severity: null });
+    expect(badges.tabs.crons).toEqual({ count: 1, severity: 'warning' });
+    expect(badges.totalCount).toBe(1);
+    expect(badges.severity).toBe('warning');
+  });
+
+  it('combines APT/OS update counts with cron attention counts into DietPi sidebar totalCount', () => {
+    const app = makeApp();
+    const snap = makeSnapshot(app, {
+      apt_upgradable_raw: 'Listing...\ncurl/stable 8.0\ngit/stable 2.40\n',
+      dietpi_update_available: 'v9.10.0',
+    });
+    snap.cron_telemetry!.app_scripts[0].sha256 = 'deadbeef'.repeat(8);
+    const summary = auditFleetCrons([app], snap);
+    const badges = computeDietPiBadges(snap, summary);
+
+    expect(badges.tabs.host).toEqual({ count: 3, severity: 'warning' });
+    expect(badges.tabs.crons).toEqual({ count: 1, severity: 'warning' });
+    expect(badges.totalCount).toBe(4);
+    expect(badges.severity).toBe('warning');
+  });
+
+  it('escalates badge severity to error when cron daemon is down or reboot is required', () => {
+    const app = makeApp();
+    const snap = makeSnapshot(app, {
+      services: { lighttpd: 'active', docker: 'active', ssh: 'active', cron: 'inactive' },
+    });
+    const summary = auditFleetCrons([app], snap);
+    const cronErrorBadges = computeDietPiBadges(snap, summary);
+    expect(cronErrorBadges.tabs.crons.severity).toBe('error');
+    expect(cronErrorBadges.severity).toBe('error');
+
+    const okSnap = makeSnapshot(app, { reboot_required: true });
+    const okSummary = auditFleetCrons([app], okSnap);
+    const rebootBadges = computeDietPiBadges(okSnap, okSummary);
+    expect(rebootBadges.tabs.host).toEqual({ count: 1, severity: 'error' });
+    expect(rebootBadges.tabs.crons).toEqual({ count: 0, severity: null });
+    expect(rebootBadges.totalCount).toBe(1);
+    expect(rebootBadges.severity).toBe('error');
+  });
+
+  it('clears all badges once crons are IN_SYNC and host packages are current', () => {
+    const app = makeApp();
+    const snap = makeSnapshot(app);
+    const summary = auditFleetCrons([app], snap);
+    const badges = computeDietPiBadges(snap, summary);
+    expect(badges.totalCount).toBe(0);
+    expect(badges.severity).toBeNull();
+    expect(badges.tabs.host).toEqual({ count: 0, severity: null });
+    expect(badges.tabs.crons).toEqual({ count: 0, severity: null });
   });
 });
