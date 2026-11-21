@@ -16,7 +16,7 @@ export interface BuildHealthBadgeInfo {
   tone: 'emerald' | 'amber' | 'rose' | 'slate';
   durationSec: number | null;
   targetSec: number;
-  cachePosture: 'warm' | 'cold';
+  cachePosture: 'cached' | 'warm' | 'cold';
   regressionPct: number | null;
   warnings: string[];
 }
@@ -28,7 +28,7 @@ export interface ResolvedBuildTelemetry {
 
 export function getAppTelemetryTargets(
   appIdOrSlug: string,
-  posture: 'warm' | 'cold' = 'warm',
+  posture: 'cached' | 'warm' | 'cold' = 'warm',
   deployBudgets?: Partial<Omit<AppTelemetryTargets, 'activeTargetSec'>>
 ): AppTelemetryTargets {
   const key = (appIdOrSlug || '').toLowerCase().trim();
@@ -115,7 +115,12 @@ export function evaluateBuildHealthBadge(
   appIdOrSlug: string,
   deployBudgets?: Partial<Omit<AppTelemetryTargets, 'activeTargetSec'>>
 ): BuildHealthBadgeInfo {
-  const posture = telemetry?.cache_posture === 'cold' ? 'cold' : 'warm';
+  const posture: 'cached' | 'warm' | 'cold' =
+    telemetry?.cache_posture === 'cold'
+      ? 'cold'
+      : telemetry?.cache_posture === 'cached'
+      ? 'cached'
+      : 'warm';
   const targets = getAppTelemetryTargets(appIdOrSlug, posture, deployBudgets);
 
   if (!telemetry || typeof telemetry.total_duration_sec !== 'number') {

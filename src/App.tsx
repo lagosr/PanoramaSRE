@@ -15,10 +15,12 @@ import { DietPiHostView } from './components/dietpi/DietPiHostView';
 import type { CronActionRequest } from './components/dietpi/CronManagerPanel';
 import { EdgePkiView } from './components/edge/EdgePkiView';
 import { ReleasePipelineView } from './components/releases/ReleasePipelineView';
+import { BuildTelemetryView } from './components/telemetry/BuildTelemetryView';
 import { BackupsRecoveryView } from './components/backups/BackupsRecoveryView';
 import { SmokeTestsView } from './components/smoke/SmokeTestsView';
 import { OptInComplianceView } from './components/optins/OptInComplianceView';
 import { synthesizeTopology, computeTopologyBadges } from './lib/topology-synthesizer';
+import { attributeBatchSmokeFailures } from './lib/batchRollback';
 import {
   auditFleetCrons,
   computeDietPiBadges,
@@ -44,6 +46,10 @@ import {
   NavSectionId,
   WorkStreamSource,
   isAppDeployCandidate,
+  BatchPreDeploySnapshot,
+  BatchSmokeFailureReport,
+  DeployTelemetryRunRecord,
+  LocalDockerDiskUsage,
 } from './lib/types';
 import { inferPageScopeFromJob } from './lib/stream-utils';
 import { buildSyncAlertEvaluationInput } from './lib/pushover-payload';
@@ -111,6 +117,13 @@ export const App: React.FC = () => {
   const [isHostRebooting, setIsHostRebooting] = useState<boolean>(false);
   const [selectedReleaseAppSlug, setSelectedReleaseAppSlug] = useState<string>('');
   const [trackedDeployJobIds, setTrackedDeployJobIds] = useState<Record<string, string>>({});
+  const [deployTelemetryRuns, setDeployTelemetryRuns] = useState<DeployTelemetryRunRecord[]>([]);
+  const [dockerDiskUsage, setDockerDiskUsage] = useState<LocalDockerDiskUsage | null>(null);
+  const [selectedTelemetryAppSlug, setSelectedTelemetryAppSlug] = useState<string>('all');
+  const [isRefreshingTelemetry, setIsRefreshingTelemetry] = useState<boolean>(false);
+  const [isPruningBuildKitCache, setIsPruningBuildKitCache] = useState<boolean>(false);
+  const [batchSmokeFailureReport, setBatchSmokeFailureReport] =
+    useState<BatchSmokeFailureReport | null>(null);
   const haltDeploymentsRef = useRef<boolean>(false);
   const currentRunningDeployJobIdRef = useRef<string | null>(null);
   const lastOptInSyncMsRef = useRef<number>(0);
@@ -283,7 +296,8 @@ export const App: React.FC = () => {
     isHostRebooting || isDeployingAll || currentRunningDeployJobIdRef.current !== null;
   const dismissedBackupKeysRef = useRef<string[]>(dismissedBackupIncidentKeys);
   dismissedBackupKeysRef.current = dismissedBackupIncidentKeys;
-  const refreshSmokeHistoryRef = useRef<(() => Promise<void>) | null>(null);
+  const refreshSmokeHistoryRef = useRef<(() => Promise<SmokeTestRun[]>) | null>(null);
+  const refreshDeployTelemetryRef = useRef<(() => Promise<void>) | null>(null);
 
   // Hydrate global dismissed backup incident keys from sre.sqlite (and migrate any legacy localStorage key)
   useEffect(() => {
@@ -758,8 +772,9 @@ export const App: React.FC = () => {
       });
       void invoke('evaluate_and_notify_sync', { input: alertInput }).catch(() => {});
 
-      // Keep smoke test history synced with OS-scheduled headless runs
+      // Keep smoke test history & build telemetry synced with headless/CLI runs
       void refreshSmokeHistoryRef.current?.();
+      void refreshDeployTelemetryRef.current?.();
 
       if (syncJobId) {
         const finishedAt = new Date().toISOString();
@@ -835,6 +850,12 @@ export const App: React.FC = () => {
       .catch((err) => {
         console.warn('[PanoramaSRE] Failed marking opt-ins seen:', err);
       });
+  }, [activeTab]);
+
+  // Refresh build telemetry history & local Docker disk usage whenever opening the Telemetry tab
+  useEffect(() => {
+    if (activeTab !== 'telemetry') return;
+    void refreshDeployTelemetryRef.current?.();
   }, [activeTab]);
 
   // Synchronize configurable Tier 1 & Tier 3 intervals to Rust TelemetryScheduler
@@ -1575,11 +1596,13 @@ export const App: React.FC = () => {
         }
         finalizeTerminalJob(jobId, exitCode);
         syncFullTelemetry(false, false);
+        void refreshDeployTelemetryRef.current?.();
         setTimeout(() => {
           syncFullTelemetry(false, false);
+          void refreshDeployTelemetryRef.current?.();
         }, 1500);
         if (!skipSmoke) {
-          refreshSmokeHistory();
+          void refreshSmokeHistoryRef.current?.();
         }
       },
       onError: (err) => {
@@ -1591,15 +1614,155 @@ export const App: React.FC = () => {
     });
   };
 
-  const handleDeployAllApps = async (appsToDeploy: DiscoveredApp[], bump: string, allowDirty: boolean) => {
+  const executeAppRollback = (app: DiscoveredApp, tag: string): Promise<number> => {
+    const jobId = `rollback-${app.manifest.slug}-${Date.now()}`;
+    setSelectedReleaseAppSlug(app.manifest.slug);
+    setTrackedDeployJobIds((prev) => ({ ...prev, [app.manifest.slug]: jobId }));
+    const isEdgeApp = app.manifest.hostingTarget === 'cloudflare-pages';
+    const newTab: TerminalTab = {
+      id: jobId,
+      title: isEdgeApp
+        ? `Edge Rollback: ${app.manifest.displayName}`
+        : `Rollback: ${app.manifest.displayName}`,
+      lines: [
+        isEdgeApp
+          ? `[PanoramaSRE] Rolling back Cloudflare Pages deployment to ${tag}...`
+          : `[PanoramaSRE] Swapping container to image tag ${tag}...`,
+      ],
+      isRunning: true,
+      createdAt: new Date().toISOString(),
+      pageScope: 'releases',
+      source: 'ui',
+      appSlug: app.manifest.slug,
+      abortable: true,
+    };
+    setTerminalTabs((prev) => [...prev, newTab]);
+    setActiveTerminalTabId(jobId);
+    saveTabToDb(newTab);
+
+    const cfExec = isEdgeApp
+      ? buildCloudflarePagesDeployCommand(app.workspacePath, {
+          rollbackDeploymentId: tag,
+        })
+      : null;
+
+    return runStreamJob({
+      jobId,
+      label: isEdgeApp
+        ? `Edge Rollback: ${app.manifest.displayName}`
+        : `Rollback: ${app.manifest.displayName}`,
+      command: cfExec ? cfExec.command : 'pwsh.exe',
+      args: cfExec
+        ? cfExec.args
+        : ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', './deploy-docker.ps1', '-RollbackToTag', tag],
+      workingDir: cfExec?.workingDir || app.workspacePath,
+      lockType: cfExec ? cfExec.lockType : 'WshRemoteMutation',
+      onLine: (line) => {
+        appendTerminalLine(jobId, line);
+      },
+      onComplete: (exitCode) => {
+        finalizeTerminalJob(jobId, exitCode);
+        syncFullTelemetry(false);
+        void refreshDeployTelemetryRef.current?.();
+      },
+      onError: (err) => {
+        failTerminalJob(jobId, `Rollback failed: ${err}`);
+      },
+    }).catch(() => -1);
+  };
+
+  const handleRollbackBatchTargets = async (targets: BatchPreDeploySnapshot[]) => {
+    if (targets.length === 0) return;
+    const currentApps = appsRef.current.length > 0 ? appsRef.current : apps;
+    const rolledSlugs: string[] = [];
+    const failedSlugs: string[] = [];
+
+    showActionFeedback(
+      `Rolling back ${targets.map((t) => t.displayName).join(', ')}...`,
+      'pending'
+    );
+
+    for (const target of targets) {
+      if (!target.preBatchTag) {
+        failedSlugs.push(target.slug);
+        continue;
+      }
+      const targetApp = currentApps.find(
+        (a) => a.manifest.slug.toLowerCase() === target.slug.toLowerCase()
+      );
+      if (!targetApp) {
+        failedSlugs.push(target.slug);
+        continue;
+      }
+      const exitCode = await executeAppRollback(targetApp, target.preBatchTag);
+      if (exitCode === 0) {
+        rolledSlugs.push(target.slug);
+      } else {
+        failedSlugs.push(target.slug);
+      }
+    }
+
+    let summary = '';
+    if (rolledSlugs.length > 0) {
+      const recExit = await handleRunSmokeTests(
+        `deploy:batch-recovery:${rolledSlugs.join(',')}`,
+        false
+      );
+      summary =
+        recExit === 0
+          ? `Rolled back ${rolledSlugs.join(', ')}. Recovery smoke gate PASSED.`
+          : `Rolled back ${rolledSlugs.join(', ')}, but recovery smoke gate exited ${recExit}.`;
+    }
+    if (failedSlugs.length > 0) {
+      summary = `${summary ? `${summary} ` : ''}Rollback failed/skipped for: ${failedSlugs.join(', ')}.`;
+    }
+
+    setBatchSmokeFailureReport((prev) =>
+      prev
+        ? {
+            ...prev,
+            autoRollbackAttempted: true,
+            autoRollbackSummary: summary || prev.autoRollbackSummary,
+          }
+        : prev
+    );
+    setActionFeedback({
+      message: summary || 'Batch rollback completed.',
+      type: failedSlugs.length === 0 ? 'success' : 'error',
+    });
+  };
+
+  const handleDeployAllApps = async (
+    appsToDeploy: DiscoveredApp[],
+    bump: string,
+    allowDirty: boolean,
+    autoRollbackOnSmokeFailure = true
+  ) => {
     setIsDeployingAll(true);
     haltDeploymentsRef.current = false;
+    setBatchSmokeFailureReport(null);
 
     try {
       // Respect the user's explicit deployment order and isolate external Cloudflare Pages apps from WSH Docker batching
       const sortedApps = appsToDeploy.filter(
         (a) => a.manifest.hostingTarget !== 'cloudflare-pages'
       );
+
+      const preBatchSnapshots: Record<string, BatchPreDeploySnapshot> = {};
+      sortedApps.forEach((app, idx) => {
+        preBatchSnapshots[app.manifest.slug.toLowerCase()] = {
+          slug: app.manifest.slug,
+          displayName: app.manifest.displayName,
+          preBatchTag: app.health?.release?.image_tag || null,
+          hasDbMigration: Boolean(
+            app.composition?.blast_radius_badges?.includes('DB_MIGRATION')
+          ),
+          deployOrderIndex: idx,
+        };
+      });
+
+      const skipSmoke = sortedApps.length > 1;
+      const deployedApps: DiscoveredApp[] = [];
 
       for (let i = 0; i < sortedApps.length; i++) {
         // Check if user clicked Halt
@@ -1615,8 +1778,8 @@ export const App: React.FC = () => {
         const app = sortedApps[i];
         let exitCode: number = -1;
         try {
-          exitCode = await executeAppDeploy(app, bump, allowDirty, false);
-        } catch (err: any) {
+          exitCode = await executeAppDeploy(app, bump, allowDirty, skipSmoke);
+        } catch {
           exitCode = -1;
         }
 
@@ -1645,12 +1808,119 @@ export const App: React.FC = () => {
           }
           break; // Hard stop all further deployments
         }
+
+        deployedApps.push(app);
+      }
+
+      // Execute one consolidated suite smoke gate once every WSH batch app finishes cleanly
+      if (
+        skipSmoke &&
+        deployedApps.length === sortedApps.length &&
+        !haltDeploymentsRef.current
+      ) {
+        const batchTrigger = `deploy:batch:${deployedApps.map((a) => a.manifest.slug).join(',')}`;
+        const smokeExit = await handleRunSmokeTests(batchTrigger, false);
+
+        if (smokeExit === 0) {
+          setActionFeedback({
+            message: `Batch deploy (${deployedApps.length} apps) and consolidated 41-step smoke gate PASSED.`,
+            type: 'success',
+          });
+        } else {
+          const latestRuns = await refreshSmokeHistory();
+          const matchedRun =
+            latestRuns.find((r) => r.triggeredBy === batchTrigger) ??
+            latestRuns[0] ??
+            null;
+          const failedChecks = (matchedRun?.results ?? []).filter((r) => !r.passed);
+          const currentApps = appsRef.current.length > 0 ? appsRef.current : apps;
+          const attribution = attributeBatchSmokeFailures(
+            failedChecks,
+            currentApps,
+            deployedApps,
+            preBatchSnapshots,
+            autoRollbackOnSmokeFailure
+          );
+          const deployedSnapshots = deployedApps.map(
+            (a) => preBatchSnapshots[a.manifest.slug.toLowerCase()]
+          );
+
+          if (attribution.action === 'TARGETED_AUTO_ROLLBACK') {
+            const rolledSlugs: string[] = [];
+            const failedRollbacks: string[] = [];
+            for (const target of attribution.rollbackPlan) {
+              const targetApp =
+                deployedApps.find(
+                  (a) => a.manifest.slug.toLowerCase() === target.slug.toLowerCase()
+                ) ||
+                currentApps.find(
+                  (a) => a.manifest.slug.toLowerCase() === target.slug.toLowerCase()
+                );
+              if (!targetApp || !target.preBatchTag) {
+                failedRollbacks.push(target.slug);
+                continue;
+              }
+              const rbExit = await executeAppRollback(targetApp, target.preBatchTag);
+              if (rbExit === 0) {
+                rolledSlugs.push(target.slug);
+              } else {
+                failedRollbacks.push(target.slug);
+              }
+            }
+
+            let recoverySummary = attribution.summaryReason;
+            if (rolledSlugs.length > 0) {
+              const recExit = await handleRunSmokeTests(
+                `deploy:batch-recovery:${rolledSlugs.join(',')}`,
+                false
+              );
+              recoverySummary =
+                recExit === 0
+                  ? `Targeted rollback of ${rolledSlugs.join(', ')} succeeded and recovery smoke gate PASSED.`
+                  : `Targeted rollback of ${rolledSlugs.join(', ')} completed, but recovery smoke gate exited ${recExit}.`;
+            }
+            if (failedRollbacks.length > 0) {
+              recoverySummary += ` Failed rollbacks: ${failedRollbacks.join(', ')}.`;
+            }
+
+            setBatchSmokeFailureReport({
+              triggeredAt: new Date().toISOString(),
+              smokeRunId: matchedRun?.id ?? null,
+              triggeredBy: batchTrigger,
+              deployedApps: deployedSnapshots,
+              failedChecks,
+              attribution,
+              autoRollbackAttempted: true,
+              autoRollbackSummary: recoverySummary,
+            });
+            setActionFeedback({
+              message: recoverySummary,
+              type: failedRollbacks.length === 0 ? 'success' : 'error',
+            });
+          } else {
+            setBatchSmokeFailureReport({
+              triggeredAt: new Date().toISOString(),
+              smokeRunId: matchedRun?.id ?? null,
+              triggeredBy: batchTrigger,
+              deployedApps: deployedSnapshots,
+              failedChecks,
+              attribution,
+              autoRollbackAttempted: false,
+              autoRollbackSummary: null,
+            });
+            setActionFeedback({
+              message: attribution.summaryReason,
+              type: 'error',
+            });
+          }
+        }
       }
     } finally {
       setIsDeployingAll(false);
       haltDeploymentsRef.current = false;
       currentRunningDeployJobIdRef.current = null;
       syncFullTelemetry(false);
+      void refreshDeployTelemetryRef.current?.();
     }
   };
 
@@ -2144,7 +2414,7 @@ export const App: React.FC = () => {
     return 'c:\\Users\\rodrigo\\Documents\\AG Projects';
   }, [apps]);
 
-  const refreshSmokeHistory = useCallback(async () => {
+  const refreshSmokeHistory = useCallback(async (): Promise<SmokeTestRun[]> => {
     try {
       const history = await invoke<SmokeTestRun[]>('get_smoke_test_history', {
         workspaceRoot: getWorkspaceRoot(),
@@ -2159,15 +2429,66 @@ export const App: React.FC = () => {
         });
         void invoke('evaluate_and_notify_sync', { input }).catch(() => {});
       }
+      return history;
     } catch (err) {
       setSmokeError(String(err));
+      return [];
     }
   }, [getWorkspaceRoot]);
   refreshSmokeHistoryRef.current = refreshSmokeHistory;
 
+  const refreshDeployTelemetry = useCallback(async () => {
+    setIsRefreshingTelemetry(true);
+    try {
+      const [historyRes, diskRes] = await Promise.allSettled([
+        invoke<DeployTelemetryRunRecord[]>('get_deploy_telemetry_history', {
+          workspaceRoot: getWorkspaceRoot(),
+          limit: 1000,
+        }),
+        invoke<LocalDockerDiskUsage>('get_local_docker_disk_usage'),
+      ]);
+      if (historyRes.status === 'fulfilled') {
+        setDeployTelemetryRuns(historyRes.value);
+      }
+      if (diskRes.status === 'fulfilled') {
+        setDockerDiskUsage(diskRes.value);
+      }
+    } finally {
+      setIsRefreshingTelemetry(false);
+    }
+  }, [getWorkspaceRoot]);
+  refreshDeployTelemetryRef.current = refreshDeployTelemetry;
+
+  const telemetryWarningCount = useMemo(() => {
+    let warnCount = 0;
+    for (const app of apps) {
+      const slug = app.manifest.slug.toLowerCase();
+      const latestRun = deployTelemetryRuns.find(
+        (r) => r.app_slug.toLowerCase() === slug && r.cache_posture !== 'legacy'
+      );
+      if (latestRun) {
+        if (
+          latestRun.status !== 'OPTIMAL' ||
+          latestRun.warnings.length > 0 ||
+          (latestRun.exit_code !== null &&
+            latestRun.exit_code !== undefined &&
+            latestRun.exit_code !== 0)
+        ) {
+          warnCount += 1;
+        }
+        continue;
+      }
+      const bt = app.health?.release?.build_telemetry || app.composition?.local_build_telemetry;
+      if (bt && (bt.status !== 'OPTIMAL' || bt.warnings.length > 0)) {
+        warnCount += 1;
+      }
+    }
+    return warnCount;
+  }, [apps, deployTelemetryRuns]);
+
   const handleRunSmokeTests = useCallback(
-    (triggeredBy = 'sre-manual', forceSms = false) => {
-      if (isSmokeRunning) return;
+    (triggeredBy = 'sre-manual', forceSms = false): Promise<number> => {
+      if (isSmokeRunning) return Promise.resolve(-1);
       const jobId = `smoke-${Date.now()}`;
       const smokeDir = `${getWorkspaceRoot()}\\PanoramaDrSuite\\tools\\smoke-tester`;
       setIsSmokeRunning(true);
@@ -2203,7 +2524,7 @@ export const App: React.FC = () => {
         scriptArgs.push('-ForceSms');
       }
 
-      runStreamJob({
+      return runStreamJob({
         jobId,
         label: `Smoke Tests (${triggeredBy})`,
         command: 'pwsh.exe',
@@ -2216,15 +2537,15 @@ export const App: React.FC = () => {
         onComplete: (exitCode) => {
           finalizeTerminalJob(jobId, exitCode);
           setIsSmokeRunning(false);
-          refreshSmokeHistory();
+          void refreshSmokeHistory();
         },
         onError: (err) => {
           failTerminalJob(jobId, `Smoke tests failed: ${err}`);
           setSmokeError(String(err));
           setIsSmokeRunning(false);
-          refreshSmokeHistory();
+          void refreshSmokeHistory();
         },
-      });
+      }).catch(() => -1);
     },
     [
       appendTerminalLine,
@@ -2236,6 +2557,65 @@ export const App: React.FC = () => {
       saveTabToDb,
     ]
   );
+
+  const handlePruneBuildKitCache = useCallback(() => {
+    if (isPruningBuildKitCache) return;
+    const jobId = `prune-buildkit-${Date.now()}`;
+    setIsPruningBuildKitCache(true);
+    const newTab: TerminalTab = {
+      id: jobId,
+      title: 'Prune BuildKit Cache (>14d)',
+      lines: ['[PanoramaSRE] Pruning Docker BuildKit cache entries older than 14 days (336h)...'],
+      isRunning: true,
+      createdAt: new Date().toISOString(),
+      pageScope: 'telemetry',
+      source: 'ui',
+      abortable: true,
+    };
+    setTerminalTabs((prev) => [...prev, newTab]);
+    setActiveTerminalTabId(jobId);
+    setIsDrawerOpen(true);
+    saveTabToDb(newTab);
+
+    void runStreamJob({
+      jobId,
+      label: 'Prune BuildKit Cache (>14d)',
+      command: 'docker',
+      args: ['buildx', 'prune', '--filter', 'until=336h', '-f'],
+      workingDir: getWorkspaceRoot(),
+      lockType: 'None',
+      onLine: (line) => {
+        appendTerminalLine(jobId, line);
+      },
+      onComplete: (exitCode) => {
+        finalizeTerminalJob(jobId, exitCode);
+        setIsPruningBuildKitCache(false);
+        void refreshDeployTelemetry();
+        showActionFeedback(
+          exitCode === 0
+            ? 'Pruned BuildKit cache entries older than 14 days.'
+            : `BuildKit cache prune exited ${exitCode}.`,
+          exitCode === 0 ? 'success' : 'error',
+          5000
+        );
+      },
+      onError: (err) => {
+        failTerminalJob(jobId, `BuildKit cache prune failed: ${err}`);
+        setIsPruningBuildKitCache(false);
+        void refreshDeployTelemetry();
+        showActionFeedback(`BuildKit cache prune failed: ${err}`, 'error', 6000);
+      },
+    });
+  }, [
+    appendTerminalLine,
+    failTerminalJob,
+    finalizeTerminalJob,
+    getWorkspaceRoot,
+    isPruningBuildKitCache,
+    refreshDeployTelemetry,
+    saveTabToDb,
+    showActionFeedback,
+  ]);
 
   const handleRegisterSmokeSchedule = useCallback(() => {
     const jobId = `smoke-schedule-${Date.now()}`;
@@ -2578,6 +2958,7 @@ export const App: React.FC = () => {
           unhealthyCount={unhealthyCount}
           backupFailureCount={backupFailureCount}
           behindReleasesCount={behindReleasesCount}
+          telemetryWarningCount={telemetryWarningCount}
           dietpiPackagesCount={dietpiPackagesCount}
           dietpiAlertCount={dietpiBadges.totalCount}
           dietpiAlertSeverity={dietpiBadges.severity}
@@ -2816,60 +3197,36 @@ export const App: React.FC = () => {
               isDeployingAll={isDeployingAll}
               onHaltDeployments={handleHaltDeployments}
               onTriggerRollback={(app, tag) => {
-                const jobId = `rollback-${app.manifest.slug}-${Date.now()}`;
-                setSelectedReleaseAppSlug(app.manifest.slug);
-                setTrackedDeployJobIds((prev) => ({ ...prev, [app.manifest.slug]: jobId }));
-                const isEdgeApp = app.manifest.hostingTarget === 'cloudflare-pages';
-                const newTab: TerminalTab = {
-                  id: jobId,
-                  title: isEdgeApp
-                    ? `Edge Rollback: ${app.manifest.displayName}`
-                    : `Rollback: ${app.manifest.displayName}`,
-                  lines: [
-                    isEdgeApp
-                      ? `[PanoramaSRE] Rolling back Cloudflare Pages deployment to ${tag}...`
-                      : `[PanoramaSRE] Swapping container to image tag ${tag}...`,
-                  ],
-                  isRunning: true,
-                  createdAt: new Date().toISOString(),
-                  pageScope: 'releases',
-                  source: 'ui',
-                  appSlug: app.manifest.slug,
-                  abortable: true,
-                };
-                setTerminalTabs((prev) => [...prev, newTab]);
-                setActiveTerminalTabId(jobId);
-                saveTabToDb(newTab);
-
-                const cfExec = isEdgeApp
-                  ? buildCloudflarePagesDeployCommand(app.workspacePath, {
-                      rollbackDeploymentId: tag,
-                    })
-                  : null;
-
-                runStreamJob({
-                  jobId,
-                  label: isEdgeApp
-                    ? `Edge Rollback: ${app.manifest.displayName}`
-                    : `Rollback: ${app.manifest.displayName}`,
-                  command: cfExec ? cfExec.command : 'pwsh.exe',
-                  args: cfExec
-                    ? cfExec.args
-                    : ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', './deploy-docker.ps1', '-RollbackToTag', tag],
-                  workingDir: cfExec?.workingDir || app.workspacePath,
-                  lockType: cfExec ? cfExec.lockType : 'WshRemoteMutation',
-                  onLine: (line) => {
-                    appendTerminalLine(jobId, line);
-                  },
-                  onComplete: (exitCode) => {
-                    finalizeTerminalJob(jobId, exitCode);
-                    syncFullTelemetry(false);
-                  },
-                  onError: (err) => {
-                    failTerminalJob(jobId, `Rollback failed: ${err}`);
-                  },
-                });
+                void executeAppRollback(app, tag);
               }}
+              batchSmokeFailureReport={batchSmokeFailureReport}
+              onDismissBatchSmokeFailure={() => setBatchSmokeFailureReport(null)}
+              onRollbackBatchTargets={(targets) => {
+                void handleRollbackBatchTargets(targets);
+              }}
+              onOpenSmokeTests={() => setActiveTab('smoke')}
+              onOpenTelemetry={(slug) => {
+                setSelectedTelemetryAppSlug(slug || 'all');
+                setActiveTab('telemetry');
+              }}
+            />
+          )}
+
+          {activeTab === 'telemetry' && (
+            <BuildTelemetryView
+              apps={apps}
+              runs={deployTelemetryRuns}
+              dockerDiskUsage={dockerDiskUsage}
+              terminalTabs={terminalTabs}
+              selectedAppSlug={selectedTelemetryAppSlug}
+              onSelectAppSlug={setSelectedTelemetryAppSlug}
+              isRefreshing={isRefreshingTelemetry}
+              isPruningCache={isPruningBuildKitCache}
+              onRefresh={() => {
+                void refreshDeployTelemetry();
+              }}
+              onPruneBuildKitCache={handlePruneBuildKitCache}
+              onInspectConsoleSession={(sessionId) => handleOpenInBottomConsole(sessionId)}
             />
           )}
 
@@ -2974,6 +3331,7 @@ export const App: React.FC = () => {
           {activeTab !== 'hud' &&
             activeTab !== 'local-dev' &&
             activeTab !== 'releases' &&
+            activeTab !== 'telemetry' &&
             activeTab !== 'topology' &&
             activeTab !== 'dietpi' &&
             activeTab !== 'edge' &&

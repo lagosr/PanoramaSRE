@@ -18,7 +18,11 @@ mod tests {
         format_opt_ins_csv, mask_phone_number, parse_wrangler_d1_opt_ins_json,
     };
     use panorama_sre_lib::commands::smoke_ops::{sanitize_smoke_target_url, sanitize_smoke_trigger};
-    use panorama_sre_lib::db::{OptInCacheRow, SreDatabase};
+    use panorama_sre_lib::commands::telemetry_ops::{
+        ingest_deploy_history_jsonl, parse_console_session_to_telemetry, parse_docker_size_bytes,
+        parse_docker_system_df_json,
+    };
+    use panorama_sre_lib::db::{ConsoleSessionRecord, OptInCacheRow, SreDatabase};
     use panorama_sre_lib::dev_supervisor::{is_dev_server_ready_line, DevSupervisor};
     use panorama_sre_lib::ipc_security::validate_dev_command;
     use panorama_sre_lib::scheduler::{evaluate_due_tiers, TelemetryScheduler};
@@ -595,5 +599,141 @@ mod tests {
         assert_eq!(retried.daily_pips_7d.last().unwrap().status, "Success");
 
         let _ = fs::remove_dir_all(&temp_root);
+    }
+
+    #[test]
+    fn test_deploy_telemetry_persistence_backfill_jsonl_and_docker_df() {
+        use std::fs;
+
+        let db = SreDatabase::new(":memory:").expect("init memory db");
+
+        // 1. Parse modern v0.7.0 console session with [TELEMETRY], [DEPLOY-TIMING], and [TELEMETRY-WARN]
+        let modern_session = ConsoleSessionRecord {
+            id: "deploy-basket-1763599000".to_string(),
+            title: "Deploy: TastyBasket".to_string(),
+            lines: vec![
+                "  PanoramaDrSuite Unified Deployer (Transactional Engine v0.7.0)".to_string(),
+                "Release Identity: 1.0.10+abcdef1 | Image Tag: 1.0.10-abcdef1".to_string(),
+                "Pre-build validation passed cleanly (typecheck: 2.15s).".to_string(),
+                "Successfully bumped version to v1.0.10 with release commit & tag.".to_string(),
+                "  [TELEMETRY] Profile=nextjs-standalone | Posture=cached | Status=OPTIMAL | Total=4.6s (Deps=0s [cached=True], NextBuild=0s, ARM64Natives=0s [cached=True], Export=2.9s, Context=340.5KB, ELF=2 [cached=True])".to_string(),
+                "  [TELEMETRY-WARN] Sample non-fatal notice".to_string(),
+                "--- SUITE SMOKE TEST VERIFICATION GATE ---".to_string(),
+                "[DEPLOY-TIMING] Total=31.4s | S1=2.15s | Bump=1.4s | S2=4.6s | S3=0.9s | S4=3.2s | Snap=1.5s | Swap=5.8s | Verify=1.9s | Smoke=6.2s | Cron=0.8s | Finalize=2.1s".to_string(),
+            ],
+            is_running: false,
+            exit_code: Some(0),
+            created_at: Some("2026-11-21 15:00:00".to_string()),
+            updated_at: Some("2026-11-21 15:00:32".to_string()),
+            page_scope: Some("releases".to_string()),
+            source: Some("ui".to_string()),
+        };
+
+        let modern_row =
+            parse_console_session_to_telemetry(&modern_session).expect("parse modern session");
+        assert_eq!(modern_row.app_slug, "basket");
+        assert_eq!(modern_row.app_name, "TastyBasket");
+        assert_eq!(modern_row.engine_version.as_deref(), Some("0.7.0"));
+        assert_eq!(modern_row.cache_posture, "cached");
+        assert_eq!(modern_row.wall_duration_sec, Some(31.4));
+        assert_eq!(modern_row.host_typecheck_sec, Some(2.15));
+        assert_eq!(modern_row.deps_cache_hit, Some(true));
+        assert_eq!(modern_row.arm64_natives_cache_hit, Some(true));
+        assert_eq!(modern_row.stage5_swap_sec, Some(5.8));
+        assert!(modern_row.bumped);
+        assert!(modern_row.ran_smoke);
+        assert_eq!(modern_row.warnings, vec!["Sample non-fatal notice".to_string()]);
+
+        db.upsert_deploy_telemetry_run(&modern_row, false)
+            .expect("insert modern row");
+
+        // 2. Legacy pre-v0.4.0 session falls back to timestamps and legacy posture
+        let legacy_session = ConsoleSessionRecord {
+            id: "deploy-water-1762400000".to_string(),
+            title: "Deploy: WaterAnalyzer".to_string(),
+            lines: vec!["[Stage 2/5] docker buildx build".to_string()],
+            is_running: false,
+            exit_code: Some(0),
+            created_at: Some("2026-11-05 10:00:00".to_string()),
+            updated_at: Some("2026-11-05 10:03:05".to_string()),
+            page_scope: Some("releases".to_string()),
+            source: Some("ui".to_string()),
+        };
+        let legacy_row =
+            parse_console_session_to_telemetry(&legacy_session).expect("parse legacy session");
+        assert_eq!(legacy_row.cache_posture, "legacy");
+        assert_eq!(legacy_row.wall_duration_sec, Some(185.0));
+        db.upsert_deploy_telemetry_run(&legacy_row, false)
+            .expect("insert legacy row");
+
+        // Verify purge_old_entries(28) does NOT purge deploy_telemetry_runs
+        db.purge_old_entries(28).expect("purge console sessions");
+        let saved_rows = db.get_deploy_telemetry_runs(100).expect("load telemetry");
+        assert_eq!(saved_rows.len(), 2);
+
+        // 3. Verify CLI JSONL ingestion
+        let tmp_ws = std::env::temp_dir().join(format!(
+            "panorama_sre_jsonl_{}_{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let jsonl_dir = tmp_ws.join("PanoramaDrSuite").join("tools").join("deploy-telemetry");
+        fs::create_dir_all(&jsonl_dir).unwrap();
+        let jsonl_line = serde_json::json!({
+            "id": "cli-biomed-20261121T160000Z",
+            "app_slug": "biomed",
+            "app_name": "BiomedMaven",
+            "started_at": "2026-11-21T16:00:00Z",
+            "finished_at": "2026-11-21T16:00:25Z",
+            "wall_duration_sec": 25.0,
+            "exit_code": 0,
+            "engine_version": "0.7.0",
+            "release_id": "1.2.0+abc1234",
+            "cache_posture": "warm",
+            "status": "OPTIMAL",
+            "build_total_sec": 18.2,
+            "deps_cache_hit": true,
+            "arm64_natives_cache_hit": true,
+            "context_transfer_kb": 355.0,
+            "bumped": false,
+            "ran_smoke": true,
+            "warnings_json": "[]",
+            "source": "cli"
+        });
+        fs::write(
+            jsonl_dir.join("deploy-history.jsonl"),
+            format!("{}\n", jsonl_line),
+        )
+        .unwrap();
+
+        let ingested = ingest_deploy_history_jsonl(&tmp_ws.to_string_lossy(), &db);
+        assert_eq!(ingested, 1);
+        let after_ingest = db.get_deploy_telemetry_runs(100).expect("load after jsonl");
+        assert_eq!(after_ingest.len(), 3);
+        assert_eq!(after_ingest[0].id, "cli-biomed-20261121T160000Z");
+
+        let _ = fs::remove_dir_all(&tmp_ws);
+
+        // 4. Verify docker system df JSON + size unit parser
+        assert_eq!(parse_docker_size_bytes("107.1GB (100%)"), 107_100_000_000);
+        assert_eq!(parse_docker_size_bytes("651.8MB"), 651_800_000);
+        assert_eq!(parse_docker_size_bytes("0B"), 0);
+
+        let df_sample = r#"{"Active":"0","Reclaimable":"4.15GB (100%)","Size":"4.15GB","TotalCount":"2","Type":"Images"}
+{"Active":"0","Reclaimable":"0B","Size":"0B","TotalCount":"0","Type":"Containers"}
+{"Active":"0","Reclaimable":"0B (0%)","Size":"0B","TotalCount":"0","Type":"Local Volumes"}
+{"Active":"12","Reclaimable":"95.4GB (89%)","Size":"107.1GB","TotalCount":"973","Type":"Build Cache"}"#;
+        let parsed_df = parse_docker_system_df_json(df_sample).expect("parse df json");
+        assert_eq!(parsed_df.images.total_count, 2);
+        assert_eq!(parsed_df.images.size_bytes, 4_150_000_000);
+        assert_eq!(parsed_df.build_cache.total_count, 973);
+        assert_eq!(parsed_df.build_cache.size_bytes, 107_100_000_000);
+        assert_eq!(parsed_df.build_cache.reclaimable_bytes, 95_400_000_000);
+
+        // 5. Verify sanitize_smoke_trigger allows comma-separated batch slugs up to 96 chars
+        assert_eq!(
+            sanitize_smoke_trigger(Some("deploy:batch:auth,spendy,biomed,water,basket,energy")),
+            "deploy:batch:auth,spendy,biomed,water,basket,energy"
+        );
     }
 }

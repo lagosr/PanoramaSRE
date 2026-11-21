@@ -2,6 +2,7 @@ export type NavSectionId =
   | 'hud'
   | 'local-dev'
   | 'releases'
+  | 'telemetry'
   | 'topology'
   | 'dietpi'
   | 'edge'
@@ -174,9 +175,25 @@ export interface AppManifest {
 
 export type BuildTelemetryStatus = 'OPTIMAL' | 'WARN_REGRESSION' | 'WARN_BUDGET' | 'WARN_CEILING';
 
+export interface DeployStageTimings {
+  stage1_typecheck_sec: number;
+  semver_bump_sec: number;
+  stage2_build_sec: number;
+  stage3_preflight_sec: number;
+  stage4_upload_sec: number;
+  stage5_snapshot_sec: number;
+  stage5_swap_sec: number;
+  stage5_verify_sec: number;
+  stage5_smoke_sec: number;
+  stage5_finalize_sec: number;
+  stage5_cron_sec: number;
+  stage5_manifest_sync_sec: number;
+  total_deploy_sec: number;
+}
+
 export interface BuildTelemetry {
   profile: string;
-  cache_posture: 'warm' | 'cold';
+  cache_posture: 'cached' | 'warm' | 'cold';
   status: BuildTelemetryStatus;
   total_duration_sec: number;
   host_typecheck_sec: number;
@@ -191,11 +208,105 @@ export interface BuildTelemetry {
   arm64_natives_sec: number;
   arm64_natives_cache_hit: boolean;
   elf_verified_count: number;
+  elf_gate_cache_hit?: boolean;
   export_tar_sec: number;
   baseline_duration_sec?: number | null;
   delta_sec?: number | null;
   regression_pct?: number | null;
   warnings: string[];
+  deploy_stages?: DeployStageTimings | null;
+}
+
+export interface DeployTelemetryRunRecord {
+  id: string;
+  console_session_id?: string | null;
+  app_slug: string;
+  app_name: string;
+  started_at: string;
+  finished_at?: string | null;
+  wall_duration_sec?: number | null;
+  exit_code?: number | null;
+  engine_version?: string | null;
+  release_id?: string | null;
+  cache_posture: 'cached' | 'warm' | 'cold' | 'static' | 'legacy' | string;
+  status: string;
+  host_typecheck_sec?: number | null;
+  semver_bump_sec?: number | null;
+  build_total_sec?: number | null;
+  deps_stage_sec?: number | null;
+  deps_cache_hit?: boolean | null;
+  next_build_sec?: number | null;
+  arm64_natives_sec?: number | null;
+  arm64_natives_cache_hit?: boolean | null;
+  export_tar_sec?: number | null;
+  context_transfer_kb?: number | null;
+  elf_verified_count?: number | null;
+  stage3_preflight_sec?: number | null;
+  stage4_upload_sec?: number | null;
+  stage5_snapshot_sec?: number | null;
+  stage5_swap_sec?: number | null;
+  stage5_verify_sec?: number | null;
+  stage5_smoke_sec?: number | null;
+  stage5_finalize_sec?: number | null;
+  stage5_cron_sec?: number | null;
+  stage5_manifest_sync_sec?: number | null;
+  bumped: boolean;
+  ran_smoke: boolean;
+  warnings: string[];
+  source: 'sre-ui' | 'cli' | 'backfill' | string;
+}
+
+export interface DockerDiskCategoryUsage {
+  total_count: number;
+  active_count: number;
+  size_bytes: number;
+  reclaimable_bytes: number;
+}
+
+export interface LocalDockerDiskUsage {
+  images: DockerDiskCategoryUsage;
+  containers: DockerDiskCategoryUsage;
+  volumes: DockerDiskCategoryUsage;
+  build_cache: DockerDiskCategoryUsage;
+  captured_at: string;
+  error?: string | null;
+}
+
+export interface BatchPreDeploySnapshot {
+  slug: string;
+  displayName: string;
+  preBatchTag: string | null;
+  hasDbMigration: boolean;
+  deployOrderIndex: number;
+}
+
+export type BatchRollbackDecisionAction =
+  | 'TARGETED_AUTO_ROLLBACK'
+  | 'MANUAL_RECOVERY_REQUIRED'
+  | 'EXTERNAL_OR_NON_BATCH_FAILURE';
+
+export interface BatchSmokeAttributionResult {
+  action: BatchRollbackDecisionAction;
+  implicatedBatchSlugs: string[];
+  rollbackPlan: BatchPreDeploySnapshot[];
+  idpFirstRollbackNeeded: boolean;
+  blockedByDbMigrationSlugs: string[];
+  missingTagSlugs: string[];
+  nonBatchFailedChecks: SmokeCheckResult[];
+  externalFailedChecks: SmokeCheckResult[];
+  unattributableFailedChecks: SmokeCheckResult[];
+  summaryReason: string;
+}
+
+export interface BatchSmokeFailureReport {
+  triggeredAt: string;
+  smokeRunId?: string | null;
+  triggeredBy: string;
+  deployedApps: BatchPreDeploySnapshot[];
+  failedChecks: SmokeCheckResult[];
+  attribution: BatchSmokeAttributionResult;
+  autoRollbackAttempted: boolean;
+  autoRollbackSummary?: string | null;
 }
 
 export interface ReleaseInfo {

@@ -3,6 +3,7 @@ import {
   Activity, 
   Terminal, 
   GitBranch, 
+  BarChart3,
   Network, 
   Server, 
   ShieldCheck, 
@@ -22,6 +23,7 @@ interface SidebarRailProps {
   unhealthyCount: number;
   backupFailureCount?: number;
   behindReleasesCount?: number;
+  telemetryWarningCount?: number;
   dietpiPackagesCount?: number;
   dietpiAlertCount?: number;
   dietpiAlertSeverity?: 'error' | 'warning' | null;
@@ -38,6 +40,7 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
   unhealthyCount,
   backupFailureCount = 0,
   behindReleasesCount = 0,
+  telemetryWarningCount = 0,
   dietpiPackagesCount = 0,
   dietpiAlertCount,
   dietpiAlertSeverity,
@@ -81,6 +84,13 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
     },
     { id: 'local-dev', label: 'Local Dev Supervisor', icon: Terminal },
     { id: 'releases', label: 'Releases & Drift', icon: GitBranch, badge: behindReleasesCount, severity: 'warning' },
+    {
+      id: 'telemetry',
+      label: 'Build Telemetry',
+      icon: BarChart3,
+      badge: telemetryWarningCount > 0 ? telemetryWarningCount : undefined,
+      severity: 'warning',
+    },
     {
       id: 'topology',
       label: 'Topology & Stacks',

@@ -5,6 +5,7 @@ export const PAGE_SCOPE_BADGE_LABELS: Record<NavSectionId, string> = {
   hud: 'HUD',
   'local-dev': 'DEV',
   releases: 'REL',
+  telemetry: 'BUILD',
   topology: 'TOPO',
   dietpi: 'HOST',
   edge: 'SSL',
@@ -32,6 +33,7 @@ export function inferPageScopeFromJob(
   if (lowerId.startsWith('hud-')) return 'hud';
   if (lowerId.startsWith('dev-') || lowerId.startsWith('local-dev-')) return 'local-dev';
   if (lowerId.startsWith('deploy-') || lowerId.startsWith('rollback-')) return 'releases';
+  if (lowerId.startsWith('prune-buildkit') || lowerId.startsWith('telemetry-')) return 'telemetry';
   if (
     lowerId.startsWith('cf-tunnel-') ||
     lowerId.startsWith('audit-') ||

@@ -50,6 +50,46 @@ pub struct PushoverAlertStateRow {
     pub last_notified_at: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeployTelemetryRunRow {
+    pub id: String,
+    pub console_session_id: Option<String>,
+    pub app_slug: String,
+    pub app_name: String,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub wall_duration_sec: Option<f64>,
+    pub exit_code: Option<i32>,
+    pub engine_version: Option<String>,
+    pub release_id: Option<String>,
+    pub cache_posture: String,
+    pub status: String,
+    pub host_typecheck_sec: Option<f64>,
+    pub semver_bump_sec: Option<f64>,
+    pub build_total_sec: Option<f64>,
+    pub deps_stage_sec: Option<f64>,
+    pub deps_cache_hit: Option<bool>,
+    pub next_build_sec: Option<f64>,
+    pub arm64_natives_sec: Option<f64>,
+    pub arm64_natives_cache_hit: Option<bool>,
+    pub export_tar_sec: Option<f64>,
+    pub context_transfer_kb: Option<f64>,
+    pub elf_verified_count: Option<i64>,
+    pub stage3_preflight_sec: Option<f64>,
+    pub stage4_upload_sec: Option<f64>,
+    pub stage5_snapshot_sec: Option<f64>,
+    pub stage5_swap_sec: Option<f64>,
+    pub stage5_verify_sec: Option<f64>,
+    pub stage5_smoke_sec: Option<f64>,
+    pub stage5_finalize_sec: Option<f64>,
+    pub stage5_cron_sec: Option<f64>,
+    pub stage5_manifest_sync_sec: Option<f64>,
+    pub bumped: bool,
+    pub ran_smoke: bool,
+    pub warnings: Vec<String>,
+    pub source: String,
+}
+
 pub struct SreDatabase {
     conn: Connection,
     log_file_path: PathBuf,
@@ -148,7 +188,50 @@ impl SreDatabase {
                 consecutive_count INTEGER NOT NULL DEFAULT 1,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 last_notified_at TEXT
-            );"
+            );
+
+            CREATE TABLE IF NOT EXISTS deploy_telemetry_runs (
+                id TEXT PRIMARY KEY,
+                console_session_id TEXT,
+                app_slug TEXT NOT NULL,
+                app_name TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                wall_duration_sec REAL,
+                exit_code INTEGER,
+                engine_version TEXT,
+                release_id TEXT,
+                cache_posture TEXT NOT NULL,
+                status TEXT NOT NULL,
+                host_typecheck_sec REAL,
+                semver_bump_sec REAL,
+                build_total_sec REAL,
+                deps_stage_sec REAL,
+                deps_cache_hit INTEGER,
+                next_build_sec REAL,
+                arm64_natives_sec REAL,
+                arm64_natives_cache_hit INTEGER,
+                export_tar_sec REAL,
+                context_transfer_kb REAL,
+                elf_verified_count INTEGER,
+                stage3_preflight_sec REAL,
+                stage4_upload_sec REAL,
+                stage5_snapshot_sec REAL,
+                stage5_swap_sec REAL,
+                stage5_verify_sec REAL,
+                stage5_smoke_sec REAL,
+                stage5_finalize_sec REAL,
+                stage5_cron_sec REAL,
+                stage5_manifest_sync_sec REAL,
+                bumped INTEGER NOT NULL DEFAULT 0,
+                ran_smoke INTEGER NOT NULL DEFAULT 0,
+                warnings_json TEXT,
+                source TEXT NOT NULL DEFAULT 'backfill',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_deploy_telemetry_started_slug
+                ON deploy_telemetry_runs (started_at DESC, app_slug);"
         )?;
 
         // Idempotent column migration for existing console_sessions tables
@@ -494,6 +577,233 @@ impl SreDatabase {
     pub fn clear_all_pushover_alert_states(&self) -> Result<()> {
         self.conn.execute("DELETE FROM pushover_alert_state", [])?;
         Ok(())
+    }
+
+    pub fn upsert_deploy_telemetry_run(
+        &self,
+        row: &DeployTelemetryRunRow,
+        overwrite_existing: bool,
+    ) -> Result<()> {
+        let warnings_json = serde_json::to_string(&row.warnings).unwrap_or_else(|_| "[]".to_string());
+        let deps_hit_int: Option<i32> = row.deps_cache_hit.map(|b| if b { 1 } else { 0 });
+        let arm64_hit_int: Option<i32> = row.arm64_natives_cache_hit.map(|b| if b { 1 } else { 0 });
+        let sql = if overwrite_existing {
+            "INSERT INTO deploy_telemetry_runs (
+                id, console_session_id, app_slug, app_name, started_at, finished_at,
+                wall_duration_sec, exit_code, engine_version, release_id, cache_posture, status,
+                host_typecheck_sec, semver_bump_sec, build_total_sec, deps_stage_sec, deps_cache_hit,
+                next_build_sec, arm64_natives_sec, arm64_natives_cache_hit, export_tar_sec,
+                context_transfer_kb, elf_verified_count, stage3_preflight_sec, stage4_upload_sec,
+                stage5_snapshot_sec, stage5_swap_sec, stage5_verify_sec, stage5_smoke_sec,
+                stage5_finalize_sec, stage5_cron_sec, stage5_manifest_sync_sec,
+                bumped, ran_smoke, warnings_json, source
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6,
+                ?7, ?8, ?9, ?10, ?11, ?12,
+                ?13, ?14, ?15, ?16, ?17,
+                ?18, ?19, ?20, ?21,
+                ?22, ?23, ?24, ?25,
+                ?26, ?27, ?28, ?29,
+                ?30, ?31, ?32,
+                ?33, ?34, ?35, ?36
+            )
+            ON CONFLICT(id) DO UPDATE SET
+                console_session_id = COALESCE(excluded.console_session_id, deploy_telemetry_runs.console_session_id),
+                app_slug = excluded.app_slug,
+                app_name = excluded.app_name,
+                started_at = excluded.started_at,
+                finished_at = COALESCE(excluded.finished_at, deploy_telemetry_runs.finished_at),
+                wall_duration_sec = COALESCE(excluded.wall_duration_sec, deploy_telemetry_runs.wall_duration_sec),
+                exit_code = COALESCE(excluded.exit_code, deploy_telemetry_runs.exit_code),
+                engine_version = COALESCE(excluded.engine_version, deploy_telemetry_runs.engine_version),
+                release_id = COALESCE(excluded.release_id, deploy_telemetry_runs.release_id),
+                cache_posture = excluded.cache_posture,
+                status = excluded.status,
+                host_typecheck_sec = COALESCE(excluded.host_typecheck_sec, deploy_telemetry_runs.host_typecheck_sec),
+                semver_bump_sec = COALESCE(excluded.semver_bump_sec, deploy_telemetry_runs.semver_bump_sec),
+                build_total_sec = COALESCE(excluded.build_total_sec, deploy_telemetry_runs.build_total_sec),
+                deps_stage_sec = COALESCE(excluded.deps_stage_sec, deploy_telemetry_runs.deps_stage_sec),
+                deps_cache_hit = COALESCE(excluded.deps_cache_hit, deploy_telemetry_runs.deps_cache_hit),
+                next_build_sec = COALESCE(excluded.next_build_sec, deploy_telemetry_runs.next_build_sec),
+                arm64_natives_sec = COALESCE(excluded.arm64_natives_sec, deploy_telemetry_runs.arm64_natives_sec),
+                arm64_natives_cache_hit = COALESCE(excluded.arm64_natives_cache_hit, deploy_telemetry_runs.arm64_natives_cache_hit),
+                export_tar_sec = COALESCE(excluded.export_tar_sec, deploy_telemetry_runs.export_tar_sec),
+                context_transfer_kb = COALESCE(excluded.context_transfer_kb, deploy_telemetry_runs.context_transfer_kb),
+                elf_verified_count = COALESCE(excluded.elf_verified_count, deploy_telemetry_runs.elf_verified_count),
+                stage3_preflight_sec = COALESCE(excluded.stage3_preflight_sec, deploy_telemetry_runs.stage3_preflight_sec),
+                stage4_upload_sec = COALESCE(excluded.stage4_upload_sec, deploy_telemetry_runs.stage4_upload_sec),
+                stage5_snapshot_sec = COALESCE(excluded.stage5_snapshot_sec, deploy_telemetry_runs.stage5_snapshot_sec),
+                stage5_swap_sec = COALESCE(excluded.stage5_swap_sec, deploy_telemetry_runs.stage5_swap_sec),
+                stage5_verify_sec = COALESCE(excluded.stage5_verify_sec, deploy_telemetry_runs.stage5_verify_sec),
+                stage5_smoke_sec = COALESCE(excluded.stage5_smoke_sec, deploy_telemetry_runs.stage5_smoke_sec),
+                stage5_finalize_sec = COALESCE(excluded.stage5_finalize_sec, deploy_telemetry_runs.stage5_finalize_sec),
+                stage5_cron_sec = COALESCE(excluded.stage5_cron_sec, deploy_telemetry_runs.stage5_cron_sec),
+                stage5_manifest_sync_sec = COALESCE(excluded.stage5_manifest_sync_sec, deploy_telemetry_runs.stage5_manifest_sync_sec),
+                bumped = excluded.bumped,
+                ran_smoke = excluded.ran_smoke,
+                warnings_json = excluded.warnings_json,
+                source = excluded.source"
+        } else {
+            "INSERT OR IGNORE INTO deploy_telemetry_runs (
+                id, console_session_id, app_slug, app_name, started_at, finished_at,
+                wall_duration_sec, exit_code, engine_version, release_id, cache_posture, status,
+                host_typecheck_sec, semver_bump_sec, build_total_sec, deps_stage_sec, deps_cache_hit,
+                next_build_sec, arm64_natives_sec, arm64_natives_cache_hit, export_tar_sec,
+                context_transfer_kb, elf_verified_count, stage3_preflight_sec, stage4_upload_sec,
+                stage5_snapshot_sec, stage5_swap_sec, stage5_verify_sec, stage5_smoke_sec,
+                stage5_finalize_sec, stage5_cron_sec, stage5_manifest_sync_sec,
+                bumped, ran_smoke, warnings_json, source
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6,
+                ?7, ?8, ?9, ?10, ?11, ?12,
+                ?13, ?14, ?15, ?16, ?17,
+                ?18, ?19, ?20, ?21,
+                ?22, ?23, ?24, ?25,
+                ?26, ?27, ?28, ?29,
+                ?30, ?31, ?32,
+                ?33, ?34, ?35, ?36
+            )"
+        };
+
+        self.conn.execute(
+            sql,
+            params![
+                row.id,
+                row.console_session_id,
+                row.app_slug,
+                row.app_name,
+                row.started_at,
+                row.finished_at,
+                row.wall_duration_sec,
+                row.exit_code,
+                row.engine_version,
+                row.release_id,
+                row.cache_posture,
+                row.status,
+                row.host_typecheck_sec,
+                row.semver_bump_sec,
+                row.build_total_sec,
+                row.deps_stage_sec,
+                deps_hit_int,
+                row.next_build_sec,
+                row.arm64_natives_sec,
+                arm64_hit_int,
+                row.export_tar_sec,
+                row.context_transfer_kb,
+                row.elf_verified_count,
+                row.stage3_preflight_sec,
+                row.stage4_upload_sec,
+                row.stage5_snapshot_sec,
+                row.stage5_swap_sec,
+                row.stage5_verify_sec,
+                row.stage5_smoke_sec,
+                row.stage5_finalize_sec,
+                row.stage5_cron_sec,
+                row.stage5_manifest_sync_sec,
+                if row.bumped { 1 } else { 0 },
+                if row.ran_smoke { 1 } else { 0 },
+                warnings_json,
+                row.source,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_deploy_console_sessions(&self) -> Result<Vec<ConsoleSessionRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, lines_json, is_running, exit_code, created_at, updated_at, page_scope, source
+             FROM console_sessions
+             WHERE id LIKE 'deploy-%' AND is_running = 0
+             ORDER BY datetime(COALESCE(created_at, updated_at)) DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let lines_raw: String = row.get(2)?;
+            let lines: Vec<String> = serde_json::from_str(&lines_raw).unwrap_or_default();
+            Ok(ConsoleSessionRecord {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                lines,
+                is_running: row.get::<_, i32>(3)? == 1,
+                exit_code: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+                page_scope: row.get(7)?,
+                source: row.get(8)?,
+            })
+        })?;
+        let mut res = Vec::new();
+        for r in rows {
+            res.push(r?);
+        }
+        Ok(res)
+    }
+
+    pub fn get_deploy_telemetry_runs(&self, limit: usize) -> Result<Vec<DeployTelemetryRunRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT
+                id, console_session_id, app_slug, app_name, started_at, finished_at,
+                wall_duration_sec, exit_code, engine_version, release_id, cache_posture, status,
+                host_typecheck_sec, semver_bump_sec, build_total_sec, deps_stage_sec, deps_cache_hit,
+                next_build_sec, arm64_natives_sec, arm64_natives_cache_hit, export_tar_sec,
+                context_transfer_kb, elf_verified_count, stage3_preflight_sec, stage4_upload_sec,
+                stage5_snapshot_sec, stage5_swap_sec, stage5_verify_sec, stage5_smoke_sec,
+                stage5_finalize_sec, stage5_cron_sec, stage5_manifest_sync_sec,
+                bumped, ran_smoke, warnings_json, source
+             FROM deploy_telemetry_runs
+             ORDER BY datetime(started_at) DESC, started_at DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            let warnings_raw: Option<String> = row.get(34)?;
+            let warnings: Vec<String> = warnings_raw
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default();
+            let deps_hit_opt: Option<i32> = row.get(16)?;
+            let arm64_hit_opt: Option<i32> = row.get(19)?;
+            Ok(DeployTelemetryRunRow {
+                id: row.get(0)?,
+                console_session_id: row.get(1)?,
+                app_slug: row.get(2)?,
+                app_name: row.get(3)?,
+                started_at: row.get(4)?,
+                finished_at: row.get(5)?,
+                wall_duration_sec: row.get(6)?,
+                exit_code: row.get(7)?,
+                engine_version: row.get(8)?,
+                release_id: row.get(9)?,
+                cache_posture: row.get(10)?,
+                status: row.get(11)?,
+                host_typecheck_sec: row.get(12)?,
+                semver_bump_sec: row.get(13)?,
+                build_total_sec: row.get(14)?,
+                deps_stage_sec: row.get(15)?,
+                deps_cache_hit: deps_hit_opt.map(|v| v != 0),
+                next_build_sec: row.get(17)?,
+                arm64_natives_sec: row.get(18)?,
+                arm64_natives_cache_hit: arm64_hit_opt.map(|v| v != 0),
+                export_tar_sec: row.get(20)?,
+                context_transfer_kb: row.get(21)?,
+                elf_verified_count: row.get(22)?,
+                stage3_preflight_sec: row.get(23)?,
+                stage4_upload_sec: row.get(24)?,
+                stage5_snapshot_sec: row.get(25)?,
+                stage5_swap_sec: row.get(26)?,
+                stage5_verify_sec: row.get(27)?,
+                stage5_smoke_sec: row.get(28)?,
+                stage5_finalize_sec: row.get(29)?,
+                stage5_cron_sec: row.get(30)?,
+                stage5_manifest_sync_sec: row.get(31)?,
+                bumped: row.get::<_, i32>(32)? != 0,
+                ran_smoke: row.get::<_, i32>(33)? != 0,
+                warnings,
+                source: row.get(35)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for item in rows {
+            out.push(item?);
+        }
+        Ok(out)
     }
 }
 

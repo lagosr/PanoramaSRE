@@ -19,6 +19,7 @@ export interface BatchDeployOptions {
   selectedApps: DiscoveredApp[];
   bumpVersion: string;
   allowDirty: boolean;
+  autoRollbackOnSmokeFailure: boolean;
 }
 
 interface BatchDeployModalProps {
@@ -49,6 +50,7 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
   const [selectedSlugs, setSelectedSlugs] = useState<Set<string>>(new Set());
   const [bumpVersion, setBumpVersion] = useState<string>('none');
   const [allowDirty, setAllowDirty] = useState<boolean>(false);
+  const [autoRollbackOnSmokeFailure, setAutoRollbackOnSmokeFailure] = useState<boolean>(true);
   const [confirmText, setConfirmText] = useState<string>('');
 
   const wasOpenRef = useRef(false);
@@ -141,6 +143,7 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
       selectedApps: executionQueue,
       bumpVersion,
       allowDirty,
+      autoRollbackOnSmokeFailure,
     });
   };
 
@@ -181,7 +184,7 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
               onClick={selectAll}
               className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 transition-colors"
             >
-              All ({apps.length})
+              All ({wshApps.length})
             </button>
             <button
               type="button"
@@ -200,7 +203,7 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
           </div>
 
           <span className="font-mono text-emerald-600 dark:text-emerald-400 font-semibold">
-            {executionQueue.length} of {apps.length} selected for deployment
+            {executionQueue.length} of {wshApps.length} selected for deployment
           </span>
         </div>
 
@@ -324,11 +327,23 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
             />
           </div>
 
+          {executionQueue.length > 1 && (
+            <div className="pt-1 border-t border-slate-200/70 dark:border-slate-800/70">
+              <ToggleSwitch
+                size="sm"
+                checked={autoRollbackOnSmokeFailure}
+                onChange={setAutoRollbackOnSmokeFailure}
+                disabled={isProcessing}
+                label="Auto-rollback implicated app(s) on final suite smoke failure (skips DB_MIGRATION apps)"
+              />
+            </div>
+          )}
+
           {/* Safety & Order Warning */}
-          <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
-            <Info className="w-4 h-4 text-[var(--color-brand-text)] shrink-0" />
+          <div className="flex items-start gap-2 text-xs text-slate-600 dark:text-slate-400">
+            <Info className="w-4 h-4 text-[var(--color-brand-text)] shrink-0 mt-0.5" />
             <span>
-              Deployments execute sequentially. If any application fails post-deployment verification, the circuit-breaker halts all subsequent steps immediately.
+              Deployments execute sequentially with per-app swap/health verification &amp; instant revert. Multi-app batches run one consolidated suite smoke gate at completion and isolate failing app(s) for targeted rollback.
             </span>
           </div>
         </div>

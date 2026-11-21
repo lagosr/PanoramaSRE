@@ -1,6 +1,12 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { DiscoveredApp, TerminalTab, CloudflareDeployment } from '../../lib/types';
+import {
+  BatchPreDeploySnapshot,
+  BatchSmokeFailureReport,
+  CloudflareDeployment,
+  DiscoveredApp,
+  TerminalTab,
+} from '../../lib/types';
 import { 
   GitBranch, 
   Rocket, 
@@ -8,6 +14,7 @@ import {
   AlertTriangle, 
   CheckCircle2, 
   Layers, 
+  BarChart3,
   Server, 
   Activity, 
   Clock, 
@@ -23,6 +30,7 @@ import {
   Eye,
   XCircle,
   Terminal,
+  X,
 } from 'lucide-react';
 import { BatchDeployModal, BatchDeployOptions } from './BatchDeployModal';
 import { CustomSelect } from '../ui/CustomSelect';
@@ -56,10 +64,20 @@ interface ReleasePipelineViewProps {
     allowDirty: boolean,
     edgeMode?: 'GitCi' | 'Wrangler'
   ) => void;
-  onTriggerDeployAll: (apps: DiscoveredApp[], bump: string, allowDirty: boolean) => void;
+  onTriggerDeployAll: (
+    apps: DiscoveredApp[],
+    bump: string,
+    allowDirty: boolean,
+    autoRollbackOnSmokeFailure?: boolean
+  ) => void;
   onTriggerRollback: (app: DiscoveredApp, tag: string) => void;
   isDeployingAll?: boolean;
   onHaltDeployments?: () => void;
+  batchSmokeFailureReport?: BatchSmokeFailureReport | null;
+  onDismissBatchSmokeFailure?: () => void;
+  onRollbackBatchTargets?: (targets: BatchPreDeploySnapshot[]) => void;
+  onOpenSmokeTests?: () => void;
+  onOpenTelemetry?: (appSlug: string) => void;
 }
 
 export function ReleasePipelineView({
@@ -79,6 +97,11 @@ export function ReleasePipelineView({
   onTriggerRollback,
   isDeployingAll = false,
   onHaltDeployments,
+  batchSmokeFailureReport = null,
+  onDismissBatchSmokeFailure,
+  onRollbackBatchTargets,
+  onOpenSmokeTests,
+  onOpenTelemetry,
 }: ReleasePipelineViewProps) {
   const [localSelectedAppSlug, setLocalSelectedAppSlug] = useState<string>(apps[0]?.manifest.slug || '');
   const [localTrackedJobIds, setLocalTrackedJobIds] = useState<Record<string, string>>({});
@@ -513,6 +536,124 @@ export function ReleasePipelineView({
         </div>
       </div>
 
+      {/* Consolidated Batch Smoke Failure Attribution & Recovery Panel */}
+      {batchSmokeFailureReport && (
+        <div className="rounded-2xl border border-rose-500/50 bg-white dark:bg-slate-900 p-5 shadow-lg space-y-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <div className="p-2.5 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-600 dark:text-rose-400 shrink-0">
+                <ShieldAlert className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                  Batch Smoke Gate Failure &amp; Targeted Recovery
+                </h3>
+                <p className="text-xs text-slate-700 dark:text-slate-300 mt-0.5">
+                  {batchSmokeFailureReport.attribution.summaryReason}
+                </p>
+                {batchSmokeFailureReport.autoRollbackSummary && (
+                  <p className="text-xs font-mono text-amber-700 dark:text-amber-300 mt-1">
+                    {batchSmokeFailureReport.autoRollbackSummary}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {onDismissBatchSmokeFailure && (
+              <button
+                type="button"
+                onClick={onDismissBatchSmokeFailure}
+                className="btn-ghost text-xs p-1.5"
+                aria-label="Dismiss batch smoke failure alert"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+
+          {batchSmokeFailureReport.attribution.blockedByDbMigrationSlugs.length > 0 && (
+            <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-800 dark:text-amber-300 flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span>
+                <strong>DB_MIGRATION Guard Active:</strong> Automatic rollback was paused for{' '}
+                <code className="font-mono font-bold">
+                  {batchSmokeFailureReport.attribution.blockedByDbMigrationSlugs.join(', ')}
+                </code>{' '}
+                to avoid downgrading container code over a forward-migrated SQLite schema.
+              </span>
+            </div>
+          )}
+
+          <div className="space-y-1.5 max-h-40 overflow-y-auto font-mono text-xs">
+            {batchSmokeFailureReport.failedChecks.map((fc, idx) => (
+              <div
+                key={idx}
+                className="p-2 rounded-lg bg-slate-50 dark:bg-slate-950 border border-rose-500/25 flex items-center justify-between gap-3"
+              >
+                <span className="font-semibold text-rose-700 dark:text-rose-300 truncate">
+                  {fc.name}
+                </span>
+                <span className="text-[11px] text-slate-600 dark:text-slate-400 truncate max-w-[45%]">
+                  {fc.detail}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+            {onOpenSmokeTests && (
+              <button
+                type="button"
+                onClick={onOpenSmokeTests}
+                className="btn-secondary text-xs flex items-center gap-1.5"
+              >
+                <Activity className="w-3.5 h-3.5" />
+                <span>View in Smoke Tests</span>
+              </button>
+            )}
+            {onRollbackBatchTargets &&
+              batchSmokeFailureReport.attribution.rollbackPlan.some((t) => Boolean(t.preBatchTag)) && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onRollbackBatchTargets(
+                      batchSmokeFailureReport.attribution.rollbackPlan.filter((t) =>
+                        Boolean(t.preBatchTag)
+                      )
+                    )
+                  }
+                  disabled={isDeployingAll}
+                  className="btn-tonal text-xs font-semibold flex items-center gap-1.5"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>
+                    Rollback Implicated Only (
+                    {batchSmokeFailureReport.attribution.rollbackPlan.length})
+                  </span>
+                </button>
+              )}
+            {onRollbackBatchTargets &&
+              batchSmokeFailureReport.deployedApps.some((d) => Boolean(d.preBatchTag)) && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onRollbackBatchTargets(
+                      [...batchSmokeFailureReport.deployedApps]
+                        .filter((d) => Boolean(d.preBatchTag))
+                        .sort((a, b) => b.deployOrderIndex - a.deployOrderIndex)
+                    )
+                  }
+                  disabled={isDeployingAll}
+                  className="btn-danger text-xs font-semibold flex items-center gap-1.5"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Rollback Entire Batch (Reverse Order)</span>
+                </button>
+              )}
+          </div>
+        </div>
+      )}
+
       {/* Suite Release Status & Drift Overview Dashboard */}
       <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800 pb-3">
@@ -800,6 +941,16 @@ export function ReleasePipelineView({
                   Profile: {selectedTelemetry?.profile || 'nextjs-standalone'} • Warm Target: ≤{selectedTelemetryTargets.targetWarmSec}s • Cold Target: ≤{selectedTelemetryTargets.targetColdSec}s • Ceiling: {selectedTelemetryTargets.maxCeilingSec}s
                 </p>
               </div>
+              {onOpenTelemetry && (
+                <button
+                  type="button"
+                  onClick={() => onOpenTelemetry(selectedApp.manifest.slug)}
+                  className="btn-secondary text-xs flex items-center gap-1.5"
+                >
+                  <BarChart3 className="w-3.5 h-3.5 text-[var(--color-brand-text)]" />
+                  <span>Full Telemetry &amp; Trends →</span>
+                </button>
+              )}
             </div>
 
             {selectedTelemetry ? (
@@ -947,6 +1098,46 @@ export function ReleasePipelineView({
                     </div>
                   );
                 })()}
+
+                {/* End-to-End Pipeline Stage Waterfall Chips (v0.7.0+) */}
+                {selectedTelemetry.deploy_stages && (
+                  <div className="pt-2 border-t border-slate-100 dark:border-slate-800/80 flex flex-wrap items-center gap-2 text-[11px] font-mono tabular-nums">
+                    <span className="text-[10px] uppercase font-sans font-semibold text-slate-500 mr-1">
+                      Stage Waterfall:
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                      S1 Typecheck: {selectedTelemetry.deploy_stages.stage1_typecheck_sec}s
+                    </span>
+                    {selectedTelemetry.deploy_stages.semver_bump_sec > 0 && (
+                      <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                        Bump: {selectedTelemetry.deploy_stages.semver_bump_sec}s
+                      </span>
+                    )}
+                    <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                      S2 Build: {selectedTelemetry.deploy_stages.stage2_build_sec}s
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                      S4 Upload: {selectedTelemetry.deploy_stages.stage4_upload_sec}s
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                      S5 Swap+Verify:{' '}
+                      {Math.round(
+                        (selectedTelemetry.deploy_stages.stage5_swap_sec +
+                          selectedTelemetry.deploy_stages.stage5_verify_sec) *
+                          10
+                      ) / 10}
+                      s
+                    </span>
+                    {selectedTelemetry.deploy_stages.stage5_smoke_sec > 0 && (
+                      <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                        Smoke: {selectedTelemetry.deploy_stages.stage5_smoke_sec}s
+                      </span>
+                    )}
+                    <span className="px-2 py-0.5 rounded bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-500/30 font-bold">
+                      Total: {selectedTelemetry.deploy_stages.total_deploy_sec}s
+                    </span>
+                  </div>
+                )}
 
                 {/* High-Contrast Build Regression & Budget Warnings Banner */}
                 {selectedHealthBadge.warnings.length > 0 && (
@@ -1564,7 +1755,12 @@ export function ReleasePipelineView({
         apps={apps}
         onConfirm={(options: BatchDeployOptions) => {
           setShowDeployAllModal(false);
-          onTriggerDeployAll(options.selectedApps, options.bumpVersion, options.allowDirty);
+          onTriggerDeployAll(
+            options.selectedApps,
+            options.bumpVersion,
+            options.allowDirty,
+            options.autoRollbackOnSmokeFailure
+          );
         }}
         onCancel={() => setShowDeployAllModal(false)}
       />

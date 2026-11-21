@@ -41,12 +41,12 @@ fn smoke_tester_dir(workspace_root: &str) -> PathBuf {
 /// Validates and normalizes an IPC `triggeredBy` label for smoke runs.
 pub fn sanitize_smoke_trigger(raw: Option<&str>) -> String {
     let trimmed = raw.unwrap_or("").trim();
-    if trimmed.is_empty() || trimmed.len() > 48 {
+    if trimmed.is_empty() || trimmed.len() > 96 {
         return "mcp-agent".to_string();
     }
     if trimmed
         .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == ':' || c == '_' || c == '-')
+        .all(|c| c.is_ascii_alphanumeric() || c == ':' || c == '_' || c == '-' || c == ',')
     {
         trimmed.to_string()
     } else {

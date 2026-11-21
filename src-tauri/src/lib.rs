@@ -10,6 +10,7 @@ pub mod commands {
     pub mod runner;
     pub mod smoke_ops;
     pub mod ssl_ops;
+    pub mod telemetry_ops;
     pub mod workspace;
 }
 pub mod control_server;
@@ -34,6 +35,7 @@ use commands::optin_ops::*;
 use commands::runner::*;
 use commands::smoke_ops::*;
 use commands::ssl_ops::*;
+use commands::telemetry_ops::*;
 use commands::workspace::*;
 use db::SreDatabase;
 use dev_supervisor::{get_dev_servers_status, start_dev_server, stop_dev_server, DevSupervisor};
@@ -141,6 +143,8 @@ pub fn run() {
             exit_app_completely,
             get_smoke_test_history,
             run_smoke_tests_now,
+            get_deploy_telemetry_history,
+            get_local_docker_disk_usage,
             list_cloudflare_deployments,
             get_cached_parakith_opt_ins,
             sync_parakith_opt_ins,

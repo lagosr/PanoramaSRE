@@ -172,4 +172,23 @@ describe('buildTelemetry utilities', () => {
     });
     expect(badge.status).toBe('OPTIMAL');
   });
+
+  it('evaluates cached posture against warm target budget with CACHED label', () => {
+    const cachedTel = makeTelemetry({
+      cache_posture: 'cached',
+      total_duration_sec: 4.4,
+      next_build_sec: 0,
+      baseline_duration_sec: null,
+      delta_sec: null,
+      regression_pct: null,
+    });
+    const badge = evaluateBuildHealthBadge(cachedTel, 'biomed-maven');
+
+    expect(badge.status).toBe('OPTIMAL');
+    expect(badge.tone).toBe('emerald');
+    expect(badge.cachePosture).toBe('cached');
+    expect(badge.targetSec).toBe(35);
+    expect(badge.label).toBe('OPTIMAL (4.4s • CACHED)');
+    expect(badge.shortLabel).toBe('4.4s • CACHED');
+  });
 });
