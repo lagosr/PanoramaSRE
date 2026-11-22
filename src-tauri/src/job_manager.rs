@@ -93,11 +93,14 @@ impl JobManager {
         };
 
         if let Some(pid) = pid {
-            // Terminate whole process tree cleanly on Windows
+            // Terminate whole process tree cleanly on Windows without flashing a console window
             #[cfg(target_os = "windows")]
             {
+                use std::os::windows::process::CommandExt;
+                const CREATE_NO_WINDOW: u32 = 0x08000000;
                 let output = Command::new("taskkill")
                     .args(["/PID", &pid.to_string(), "/T", "/F"])
+                    .creation_flags(CREATE_NO_WINDOW)
                     .output()
                     .map_err(|e| format!("Failed to execute taskkill: {}", e))?;
 
@@ -123,8 +126,11 @@ impl JobManager {
         for (job_id, pid) in pids {
             #[cfg(target_os = "windows")]
             {
+                use std::os::windows::process::CommandExt;
+                const CREATE_NO_WINDOW: u32 = 0x08000000;
                 let _ = Command::new("taskkill")
                     .args(["/PID", &pid.to_string(), "/T", "/F"])
+                    .creation_flags(CREATE_NO_WINDOW)
                     .output();
             }
             self.update_completion(&job_id, None, true).await;

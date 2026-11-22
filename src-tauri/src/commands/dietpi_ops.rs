@@ -122,6 +122,9 @@ pub async fn fetch_wsh_snapshot(
             cmd.args([
                 "-o", "BatchMode=yes",
                 "-o", "StrictHostKeyChecking=accept-new",
+                "-o", "ConnectTimeout=10",
+                "-o", "ServerAliveInterval=15",
+                "-o", "ServerAliveCountMax=3",
                 "-i", &key,
                 "root@wsh.panoramadr.com",
                 &format!("bash -s -- {}", run_mode),

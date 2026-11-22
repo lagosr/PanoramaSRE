@@ -3,9 +3,26 @@ use serde_json::json;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::time::Duration;
 use tauri::{AppHandle, Emitter};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Command;
+
+const SMOKE_TIMEOUT_SECS: u64 = 180;
+
+fn terminate_process_tree(pid: Option<u32>) {
+    #[cfg(windows)]
+    if let Some(target_pid) = pid {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &target_pid.to_string(), "/T", "/F"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+    }
+    #[cfg(not(windows))]
+    let _ = pid;
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -126,25 +143,57 @@ pub async fn run_smoke_tests_now(
         .arg("--triggered-by")
         .arg(&trigger)
         .arg("--json")
-        .current_dir(&dir);
+        .current_dir(&dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
 
     #[cfg(windows)]
     {
         cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
 
-    let output = cmd
-        .output()
-        .await
-        .map_err(|e| format!("Failed to execute node smoke-tests.ts: {}", e))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to spawn node smoke-tests.ts: {}", e))?;
+    let child_pid = child.id();
 
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout_pipe = child.stdout.take();
+    let stderr_pipe = child.stderr.take();
+    let stdout_task = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        if let Some(mut s) = stdout_pipe {
+            let _ = s.read_to_end(&mut buf).await;
+        }
+        String::from_utf8_lossy(&buf).trim().to_string()
+    });
+    let stderr_task = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        if let Some(mut s) = stderr_pipe {
+            let _ = s.read_to_end(&mut buf).await;
+        }
+        String::from_utf8_lossy(&buf).trim().to_string()
+    });
+
+    let wait_res = tokio::time::timeout(Duration::from_secs(SMOKE_TIMEOUT_SECS), child.wait()).await;
+    let status = match wait_res {
+        Ok(res) => res.map_err(|e| format!("Failed waiting for smoke-tests.ts: {}", e))?,
+        Err(_) => {
+            terminate_process_tree(child_pid);
+            let _ = child.kill().await;
+            return Err(format!(
+                "Smoke test run timed out after {}s",
+                SMOKE_TIMEOUT_SECS
+            ));
+        }
+    };
+
+    let stdout = stdout_task.await.unwrap_or_default();
+    let stderr = stderr_task.await.unwrap_or_default();
 
     if stdout.is_empty() {
         return Err(format!(
             "Smoke tests produced no JSON output (exit={:?}): {}",
-            output.status.code(),
+            status.code(),
             stderr
         ));
     }
@@ -213,8 +262,9 @@ pub async fn run_smoke_tests_streaming(
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("Failed to spawn node smoke-tests.ts: {}", e))?;
+    let child_pid = child.id();
 
-    if let Some(stdout) = child.stdout.take() {
+    let stdout_handle = child.stdout.take().map(|stdout| {
         let app_clone = app_handle.clone();
         let job_id_clone = job_id.clone();
         tokio::spawn(async move {
@@ -230,10 +280,10 @@ pub async fn run_smoke_tests_streaming(
                     );
                 }
             }
-        });
-    }
+        })
+    });
 
-    if let Some(stderr) = child.stderr.take() {
+    let stderr_handle = child.stderr.take().map(|stderr| {
         let app_clone = app_handle.clone();
         let job_id_clone = job_id.clone();
         tokio::spawn(async move {
@@ -249,13 +299,47 @@ pub async fn run_smoke_tests_streaming(
                     );
                 }
             }
-        });
-    }
+        })
+    });
 
-    let status = child
-        .wait()
+    let status = match tokio::time::timeout(Duration::from_secs(SMOKE_TIMEOUT_SECS), child.wait())
         .await
-        .map_err(|e| format!("Failed waiting for smoke-tests.ts: {}", e))?;
+    {
+        Ok(res) => res.map_err(|e| format!("Failed waiting for smoke-tests.ts: {}", e))?,
+        Err(_) => {
+            terminate_process_tree(child_pid);
+            let _ = child.kill().await;
+            let err_msg = format!("Smoke test run timed out after {}s", SMOKE_TIMEOUT_SECS);
+            if let Some(app) = app_handle {
+                let _ = app.emit(
+                    "sre://smoke-run-line",
+                    json!({
+                        "jobId": job_id,
+                        "line": format!("[SMOKE] ERROR: {}", err_msg),
+                    }),
+                );
+                let _ = app.emit(
+                    "sre://smoke-run-complete",
+                    json!({
+                        "jobId": job_id,
+                        "exitCode": 124,
+                    }),
+                );
+            }
+            return Err(err_msg);
+        }
+    };
+
+    let _ = tokio::time::timeout(Duration::from_secs(3), async {
+        if let Some(h) = stdout_handle {
+            let _ = h.await;
+        }
+        if let Some(h) = stderr_handle {
+            let _ = h.await;
+        }
+    })
+    .await;
+
     let exit_code = status.code().unwrap_or(-1);
 
     let history = get_smoke_test_history(workspace_root, Some(1)).await?;

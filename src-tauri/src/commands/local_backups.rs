@@ -321,6 +321,11 @@ pub async fn check_pageant_status(custom_key_path: Option<String>) -> Result<Pag
 #[tauri::command]
 pub async fn launch_pageant_with_key(custom_key_path: Option<String>) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
+        #[cfg(windows)]
+        use std::os::windows::process::CommandExt;
+        #[cfg(windows)]
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
         let key_path = custom_key_path.unwrap_or_else(|| {
             crate::commands::dietpi_ops::default_ssh_key_path()
         });
@@ -338,14 +343,17 @@ pub async fn launch_pageant_with_key(custom_key_path: Option<String>) -> Result<
             return Err(format!("Deployment key not found at: {}", key_path));
         }
 
-        // Launch Pageant with the key path using PowerShell Start-Process
+        // Launch Pageant with the key path using PowerShell Start-Process (without flashing a PowerShell window)
         // This opens Pageant and prompts the user once for the passphrase GUI in their user desktop session
         let mut cmd = Command::new("pwsh.exe");
         cmd.args([
             "-NoProfile",
+            "-NonInteractive",
             "-Command",
             &format!("Start-Process -FilePath '{}' -ArgumentList '\"{}\"'", pageant_executable, key_path),
         ]);
+        #[cfg(windows)]
+        cmd.creation_flags(CREATE_NO_WINDOW);
 
         let out = cmd.output().map_err(|e| format!("Failed to spawn Pageant: {}", e))?;
         if !out.status.success() {
