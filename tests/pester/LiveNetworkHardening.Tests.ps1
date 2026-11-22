@@ -25,14 +25,14 @@ Describe "Live WSH Network Hardening Invariant Integration Suite" {
 
         It "Returns an active hardening report" {
             $report | Should Not BeNullOrEmpty
-            $report.total_checks | Should Be 8
+            $report.total_checks | Should Be 9
         }
 
         It "Achieves a 100% Security Audit Score" {
             $report.score | Should Be 100
             $report.all_passed | Should Be $true
             $report.failed_count | Should Be 0
-            $report.passed_count | Should Be 8
+            $report.passed_count | Should Be 9
         }
 
         Context "Individual Invariant Audits" {
