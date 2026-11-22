@@ -90,6 +90,98 @@ pub struct DeployTelemetryRunRow {
     pub source: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreatAuditRunRow {
+    pub id: String,
+    pub started_at: String,
+    pub completed_at: Option<String>,
+    pub window_start: String,
+    pub window_end: String,
+    pub window_hours: u32,
+    pub trigger_source: String,
+    pub status: String,
+    pub overall_severity: String,
+    pub intrusion_verdict: String,
+    pub tier1_model: Option<String>,
+    pub tier2_model: Option<String>,
+    pub escalated_to_tier2: bool,
+    pub escalation_reasons_json: Option<String>,
+    pub collector_statuses_json: Option<String>,
+    pub zones_summary_json: Option<String>,
+    pub zero_trust_summary_json: Option<String>,
+    pub internal_summary_json: Option<String>,
+    pub gemini_brief_json: Option<String>,
+    pub token_usage_json: Option<String>,
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreatActorRow {
+    pub id: String,
+    pub actor_type: String,
+    pub ip_address: Option<String>,
+    pub asn: Option<String>,
+    pub as_org: Option<String>,
+    pub country: Option<String>,
+    pub intel_tags_json: String,
+    pub intel_summary: Option<String>,
+    pub first_seen_at: String,
+    pub last_seen_at: String,
+    pub runs_seen: u32,
+    pub total_requests: u64,
+    pub total_origin_200s: u64,
+    pub highest_severity: String,
+    pub latest_classification: Option<String>,
+    pub target_hosts_json: String,
+    pub sample_paths_json: String,
+    pub disposition: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreatFindingRow {
+    pub id: String,
+    pub run_id: String,
+    pub source_layer: String,
+    pub rule_id: String,
+    pub severity: String,
+    pub category: String,
+    pub title: String,
+    pub summary: String,
+    pub host: Option<String>,
+    pub actor_ip: Option<String>,
+    pub actor_asn: Option<String>,
+    pub ray_ids_json: String,
+    pub evidence_json: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LanClientBaselineRow {
+    pub mac_address: String,
+    pub ip_address: Option<String>,
+    pub hostname: Option<String>,
+    pub network_vlan: Option<String>,
+    pub oui_vendor: Option<String>,
+    pub first_seen_at: String,
+    pub last_seen_at: String,
+    pub is_trusted: bool,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreatAllowlistRow {
+    pub id: String,
+    pub entry_type: String,
+    pub value: String,
+    pub label: String,
+    pub created_at: String,
+}
+
 pub struct SreDatabase {
     conn: Connection,
     log_file_path: PathBuf,
@@ -231,7 +323,105 @@ impl SreDatabase {
             );
 
             CREATE INDEX IF NOT EXISTS idx_deploy_telemetry_started_slug
-                ON deploy_telemetry_runs (started_at DESC, app_slug);"
+                ON deploy_telemetry_runs (started_at DESC, app_slug);
+
+            CREATE TABLE IF NOT EXISTS threat_audit_runs (
+                id TEXT PRIMARY KEY,
+                started_at TEXT NOT NULL,
+                completed_at TEXT,
+                window_start TEXT NOT NULL,
+                window_end TEXT NOT NULL,
+                window_hours INTEGER NOT NULL DEFAULT 6,
+                trigger_source TEXT NOT NULL,
+                status TEXT NOT NULL,
+                overall_severity TEXT NOT NULL,
+                intrusion_verdict TEXT NOT NULL,
+                tier1_model TEXT,
+                tier2_model TEXT,
+                escalated_to_tier2 INTEGER NOT NULL DEFAULT 0,
+                escalation_reasons_json TEXT,
+                collector_statuses_json TEXT,
+                zones_summary_json TEXT,
+                zero_trust_summary_json TEXT,
+                internal_summary_json TEXT,
+                gemini_brief_json TEXT,
+                token_usage_json TEXT,
+                error_message TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_threat_runs_started
+                ON threat_audit_runs (started_at DESC);
+
+            CREATE TABLE IF NOT EXISTS threat_actors (
+                id TEXT PRIMARY KEY,
+                actor_type TEXT NOT NULL,
+                ip_address TEXT,
+                asn TEXT,
+                as_org TEXT,
+                country TEXT,
+                intel_tags_json TEXT NOT NULL DEFAULT '[]',
+                intel_summary TEXT,
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                runs_seen INTEGER NOT NULL DEFAULT 1,
+                total_requests INTEGER NOT NULL DEFAULT 0,
+                total_origin_200s INTEGER NOT NULL DEFAULT 0,
+                highest_severity TEXT NOT NULL DEFAULT 'LOW',
+                latest_classification TEXT,
+                target_hosts_json TEXT NOT NULL DEFAULT '[]',
+                sample_paths_json TEXT NOT NULL DEFAULT '[]',
+                disposition TEXT NOT NULL DEFAULT 'ACTIVE'
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_threat_actors_disp_seen
+                ON threat_actors (disposition, last_seen_at DESC);
+
+            CREATE TABLE IF NOT EXISTS threat_findings (
+                id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                source_layer TEXT NOT NULL,
+                rule_id TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                category TEXT NOT NULL,
+                title TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                host TEXT,
+                actor_ip TEXT,
+                actor_asn TEXT,
+                ray_ids_json TEXT NOT NULL DEFAULT '[]',
+                evidence_json TEXT NOT NULL DEFAULT '{}',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_threat_findings_run
+                ON threat_findings (run_id, severity);
+
+            CREATE TABLE IF NOT EXISTS lan_clients_baseline (
+                mac_address TEXT PRIMARY KEY,
+                ip_address TEXT,
+                hostname TEXT,
+                network_vlan TEXT,
+                oui_vendor TEXT,
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                is_trusted INTEGER NOT NULL DEFAULT 0,
+                label TEXT NOT NULL DEFAULT ''
+            );
+
+            CREATE TABLE IF NOT EXISTS threat_allowlist (
+                id TEXT PRIMARY KEY,
+                entry_type TEXT NOT NULL,
+                value TEXT NOT NULL UNIQUE,
+                label TEXT NOT NULL DEFAULT '',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS cf_ip_intel_cache (
+                ip TEXT PRIMARY KEY,
+                payload_json TEXT NOT NULL,
+                fetched_at TEXT NOT NULL
+            );"
         )?;
 
         // Idempotent column migration for existing console_sessions tables
@@ -248,6 +438,8 @@ impl SreDatabase {
 
         // Auto-purge console sessions and system logs older than 28 days
         self.purge_old_entries(28).ok();
+        // Auto-purge detailed threat runs & findings older than 90 days (keeps actor & LAN baseline history)
+        self.purge_old_threat_runs(90).ok();
 
         Ok(())
     }
@@ -804,6 +996,711 @@ impl SreDatabase {
             out.push(item?);
         }
         Ok(out)
+    }
+
+    pub fn delete_setting(&self, key: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM app_settings WHERE key = ?1", params![key])?;
+        Ok(())
+    }
+
+    pub fn purge_old_threat_runs(&self, days: i64) -> Result<()> {
+        let modifier = format!("-{} days", days.max(1));
+        self.conn.execute(
+            "DELETE FROM threat_findings WHERE created_at < datetime('now', ?1)",
+            params![modifier],
+        )?;
+        self.conn.execute(
+            "DELETE FROM threat_audit_runs WHERE created_at < datetime('now', ?1)",
+            params![modifier],
+        )?;
+        Ok(())
+    }
+
+    pub fn save_threat_audit_run(&self, run: &ThreatAuditRunRow) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO threat_audit_runs (
+                id, started_at, completed_at, window_start, window_end, window_hours,
+                trigger_source, status, overall_severity, intrusion_verdict,
+                tier1_model, tier2_model, escalated_to_tier2, escalation_reasons_json,
+                collector_statuses_json, zones_summary_json, zero_trust_summary_json,
+                internal_summary_json, gemini_brief_json, token_usage_json, error_message
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6,
+                ?7, ?8, ?9, ?10,
+                ?11, ?12, ?13, ?14,
+                ?15, ?16, ?17,
+                ?18, ?19, ?20, ?21
+            )
+            ON CONFLICT(id) DO UPDATE SET
+                completed_at = excluded.completed_at,
+                status = excluded.status,
+                overall_severity = excluded.overall_severity,
+                intrusion_verdict = excluded.intrusion_verdict,
+                tier1_model = excluded.tier1_model,
+                tier2_model = excluded.tier2_model,
+                escalated_to_tier2 = excluded.escalated_to_tier2,
+                escalation_reasons_json = excluded.escalation_reasons_json,
+                collector_statuses_json = excluded.collector_statuses_json,
+                zones_summary_json = excluded.zones_summary_json,
+                zero_trust_summary_json = excluded.zero_trust_summary_json,
+                internal_summary_json = excluded.internal_summary_json,
+                gemini_brief_json = excluded.gemini_brief_json,
+                token_usage_json = excluded.token_usage_json,
+                error_message = excluded.error_message",
+            params![
+                run.id,
+                run.started_at,
+                run.completed_at,
+                run.window_start,
+                run.window_end,
+                run.window_hours as i64,
+                run.trigger_source,
+                run.status,
+                run.overall_severity,
+                run.intrusion_verdict,
+                run.tier1_model,
+                run.tier2_model,
+                if run.escalated_to_tier2 { 1 } else { 0 },
+                run.escalation_reasons_json,
+                run.collector_statuses_json,
+                run.zones_summary_json,
+                run.zero_trust_summary_json,
+                run.internal_summary_json,
+                run.gemini_brief_json,
+                run.token_usage_json,
+                run.error_message,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn map_threat_audit_run_row(row: &rusqlite::Row<'_>) -> Result<ThreatAuditRunRow> {
+        let win_hrs: i64 = row.get(5)?;
+        let esc_int: i32 = row.get(12)?;
+        Ok(ThreatAuditRunRow {
+            id: row.get(0)?,
+            started_at: row.get(1)?,
+            completed_at: row.get(2)?,
+            window_start: row.get(3)?,
+            window_end: row.get(4)?,
+            window_hours: win_hrs.max(1) as u32,
+            trigger_source: row.get(6)?,
+            status: row.get(7)?,
+            overall_severity: row.get(8)?,
+            intrusion_verdict: row.get(9)?,
+            tier1_model: row.get(10)?,
+            tier2_model: row.get(11)?,
+            escalated_to_tier2: esc_int != 0,
+            escalation_reasons_json: row.get(13)?,
+            collector_statuses_json: row.get(14)?,
+            zones_summary_json: row.get(15)?,
+            zero_trust_summary_json: row.get(16)?,
+            internal_summary_json: row.get(17)?,
+            gemini_brief_json: row.get(18)?,
+            token_usage_json: row.get(19)?,
+            error_message: row.get(20)?,
+        })
+    }
+
+    pub fn list_threat_audit_runs(&self, limit: usize) -> Result<Vec<ThreatAuditRunRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT
+                id, started_at, completed_at, window_start, window_end, window_hours,
+                trigger_source, status, overall_severity, intrusion_verdict,
+                tier1_model, tier2_model, escalated_to_tier2, escalation_reasons_json,
+                collector_statuses_json, zones_summary_json, zero_trust_summary_json,
+                internal_summary_json, gemini_brief_json, token_usage_json, error_message
+             FROM threat_audit_runs
+             ORDER BY datetime(started_at) DESC, started_at DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit.max(1) as i64], Self::map_threat_audit_run_row)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    pub fn get_threat_audit_run(&self, run_id: &str) -> Result<Option<ThreatAuditRunRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT
+                id, started_at, completed_at, window_start, window_end, window_hours,
+                trigger_source, status, overall_severity, intrusion_verdict,
+                tier1_model, tier2_model, escalated_to_tier2, escalation_reasons_json,
+                collector_statuses_json, zones_summary_json, zero_trust_summary_json,
+                internal_summary_json, gemini_brief_json, token_usage_json, error_message
+             FROM threat_audit_runs
+             WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![run_id], Self::map_threat_audit_run_row)?;
+        if let Some(first) = rows.next() {
+            Ok(Some(first?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn get_latest_completed_threat_audit_at(&self) -> Result<Option<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT completed_at
+             FROM threat_audit_runs
+             WHERE completed_at IS NOT NULL AND status IN ('COMPLETED', 'DEGRADED')
+             ORDER BY datetime(completed_at) DESC, completed_at DESC
+             LIMIT 1",
+        )?;
+        let mut rows = stmt.query([])?;
+        if let Some(row) = rows.next()? {
+            Ok(row.get(0)?)
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn count_carbon_escalations_since(&self, since_iso: &str) -> Result<u32> {
+        let Ok(since_dt) = chrono::DateTime::parse_from_rfc3339(since_iso) else {
+            return Ok(0);
+        };
+        let since_utc = since_dt.with_timezone(&chrono::Utc);
+        let mut stmt = self.conn.prepare(
+            "SELECT started_at
+             FROM threat_audit_runs
+             WHERE escalated_to_tier2 = 1 AND trigger_source != 'manual'
+             ORDER BY datetime(started_at) DESC
+             LIMIT 100",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut count = 0u32;
+        for item in rows {
+            let ts = item?;
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&ts) {
+                if dt.with_timezone(&chrono::Utc) >= since_utc {
+                    count += 1;
+                }
+            }
+        }
+        Ok(count)
+    }
+
+    pub fn replace_threat_findings_for_run(
+        &self,
+        run_id: &str,
+        findings: &[ThreatFindingRow],
+    ) -> Result<()> {
+        self.conn.execute_batch("BEGIN IMMEDIATE;")?;
+        let res = (|| -> Result<()> {
+            self.conn
+                .execute("DELETE FROM threat_findings WHERE run_id = ?1", params![run_id])?;
+            let mut stmt = self.conn.prepare(
+                "INSERT INTO threat_findings (
+                    id, run_id, source_layer, rule_id, severity, category,
+                    title, summary, host, actor_ip, actor_asn, ray_ids_json, evidence_json
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            )?;
+            for f in findings {
+                stmt.execute(params![
+                    f.id,
+                    run_id,
+                    f.source_layer,
+                    f.rule_id,
+                    f.severity,
+                    f.category,
+                    f.title,
+                    f.summary,
+                    f.host,
+                    f.actor_ip,
+                    f.actor_asn,
+                    f.ray_ids_json,
+                    f.evidence_json,
+                ])?;
+            }
+            Ok(())
+        })();
+        match res {
+            Ok(_) => {
+                self.conn.execute_batch("COMMIT;")?;
+                Ok(())
+            }
+            Err(err) => {
+                let _ = self.conn.execute_batch("ROLLBACK;");
+                Err(err)
+            }
+        }
+    }
+
+    pub fn list_threat_findings_for_run(&self, run_id: &str) -> Result<Vec<ThreatFindingRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, run_id, source_layer, rule_id, severity, category,
+                    title, summary, host, actor_ip, actor_asn, ray_ids_json, evidence_json, created_at
+             FROM threat_findings
+             WHERE run_id = ?1
+             ORDER BY CASE severity
+                 WHEN 'CRITICAL' THEN 0
+                 WHEN 'HIGH' THEN 1
+                 WHEN 'MEDIUM' THEN 2
+                 ELSE 3
+             END, id ASC",
+        )?;
+        let rows = stmt.query_map(params![run_id], |row| {
+            Ok(ThreatFindingRow {
+                id: row.get(0)?,
+                run_id: row.get(1)?,
+                source_layer: row.get(2)?,
+                rule_id: row.get(3)?,
+                severity: row.get(4)?,
+                category: row.get(5)?,
+                title: row.get(6)?,
+                summary: row.get(7)?,
+                host: row.get(8)?,
+                actor_ip: row.get(9)?,
+                actor_asn: row.get(10)?,
+                ray_ids_json: row.get(11)?,
+                evidence_json: row.get(12)?,
+                created_at: row.get(13)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    fn severity_rank(sev: &str) -> u8 {
+        match sev.trim().to_ascii_uppercase().as_str() {
+            "CRITICAL" => 4,
+            "HIGH" => 3,
+            "MEDIUM" => 2,
+            "LOW" => 1,
+            _ => 0,
+        }
+    }
+
+    fn merge_json_string_arrays(existing_json: &str, incoming_json: &str, cap: usize) -> String {
+        let mut merged: Vec<String> = serde_json::from_str(existing_json).unwrap_or_default();
+        let incoming: Vec<String> = serde_json::from_str(incoming_json).unwrap_or_default();
+        for item in incoming {
+            let trimmed = item.trim().to_string();
+            if !trimmed.is_empty() && !merged.iter().any(|e| e == &trimmed) {
+                merged.push(trimmed);
+                if merged.len() >= cap {
+                    break;
+                }
+            }
+        }
+        serde_json::to_string(&merged).unwrap_or_else(|_| "[]".to_string())
+    }
+
+    pub fn upsert_threat_actor(&self, actor: &ThreatActorRow) -> Result<()> {
+        let mut existing_stmt = self.conn.prepare(
+            "SELECT first_seen_at, runs_seen, total_requests, total_origin_200s, highest_severity,
+                    intel_tags_json, target_hosts_json, sample_paths_json, disposition
+             FROM threat_actors WHERE id = ?1",
+        )?;
+        let existing_opt: Option<(String, i64, i64, i64, String, String, String, String, String)> =
+            existing_stmt
+                .query_row(params![actor.id], |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                        row.get(8)?,
+                    ))
+                })
+                .ok();
+        drop(existing_stmt);
+
+        if let Some((
+            prev_first_seen,
+            prev_runs,
+            prev_reqs,
+            prev_o200,
+            prev_sev,
+            prev_tags,
+            prev_hosts,
+            prev_paths,
+            prev_disp,
+        )) = existing_opt
+        {
+            let highest_severity =
+                if Self::severity_rank(&actor.highest_severity) > Self::severity_rank(&prev_sev) {
+                    actor.highest_severity.clone()
+                } else {
+                    prev_sev.clone()
+                };
+            let merged_tags = Self::merge_json_string_arrays(&prev_tags, &actor.intel_tags_json, 24);
+            let merged_hosts = Self::merge_json_string_arrays(&prev_hosts, &actor.target_hosts_json, 24);
+            let merged_paths = Self::merge_json_string_arrays(&prev_paths, &actor.sample_paths_json, 32);
+
+            let new_disp = if prev_disp == "ALLOWLISTED" {
+                "ALLOWLISTED".to_string()
+            } else if prev_disp == "RESOLVED"
+                && Self::severity_rank(&actor.highest_severity) > Self::severity_rank(&prev_sev)
+            {
+                "ACTIVE".to_string()
+            } else {
+                prev_disp
+            };
+
+            self.conn.execute(
+                "UPDATE threat_actors SET
+                    ip_address = COALESCE(?2, ip_address),
+                    asn = COALESCE(?3, asn),
+                    as_org = COALESCE(?4, as_org),
+                    country = COALESCE(?5, country),
+                    intel_tags_json = ?6,
+                    intel_summary = COALESCE(?7, intel_summary),
+                    first_seen_at = ?8,
+                    last_seen_at = ?9,
+                    runs_seen = ?10,
+                    total_requests = ?11,
+                    total_origin_200s = ?12,
+                    highest_severity = ?13,
+                    latest_classification = COALESCE(?14, latest_classification),
+                    target_hosts_json = ?15,
+                    sample_paths_json = ?16,
+                    disposition = ?17
+                 WHERE id = ?1",
+                params![
+                    actor.id,
+                    actor.ip_address,
+                    actor.asn,
+                    actor.as_org,
+                    actor.country,
+                    merged_tags,
+                    actor.intel_summary,
+                    prev_first_seen,
+                    actor.last_seen_at,
+                    prev_runs + 1,
+                    prev_reqs + actor.total_requests as i64,
+                    prev_o200 + actor.total_origin_200s as i64,
+                    highest_severity,
+                    actor.latest_classification,
+                    merged_hosts,
+                    merged_paths,
+                    new_disp,
+                ],
+            )?;
+        } else {
+            self.conn.execute(
+                "INSERT INTO threat_actors (
+                    id, actor_type, ip_address, asn, as_org, country,
+                    intel_tags_json, intel_summary, first_seen_at, last_seen_at,
+                    runs_seen, total_requests, total_origin_200s, highest_severity,
+                    latest_classification, target_hosts_json, sample_paths_json, disposition
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                params![
+                    actor.id,
+                    actor.actor_type,
+                    actor.ip_address,
+                    actor.asn,
+                    actor.as_org,
+                    actor.country,
+                    actor.intel_tags_json,
+                    actor.intel_summary,
+                    actor.first_seen_at,
+                    actor.last_seen_at,
+                    actor.runs_seen.max(1) as i64,
+                    actor.total_requests as i64,
+                    actor.total_origin_200s as i64,
+                    actor.highest_severity,
+                    actor.latest_classification,
+                    actor.target_hosts_json,
+                    actor.sample_paths_json,
+                    actor.disposition,
+                ],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn list_threat_actors(&self, disposition: Option<&str>) -> Result<Vec<ThreatActorRow>> {
+        let mut sql = String::from(
+            "SELECT id, actor_type, ip_address, asn, as_org, country,
+                    intel_tags_json, intel_summary, first_seen_at, last_seen_at,
+                    runs_seen, total_requests, total_origin_200s, highest_severity,
+                    latest_classification, target_hosts_json, sample_paths_json, disposition
+             FROM threat_actors",
+        );
+        let filter_clean = disposition
+            .map(|d| d.trim().to_ascii_uppercase())
+            .filter(|d| !d.is_empty() && d != "ALL");
+        if filter_clean.is_some() {
+            sql.push_str(" WHERE disposition = ?1");
+        }
+        sql.push_str(
+            " ORDER BY CASE highest_severity
+                WHEN 'CRITICAL' THEN 0
+                WHEN 'HIGH' THEN 1
+                WHEN 'MEDIUM' THEN 2
+                ELSE 3
+              END, last_seen_at DESC LIMIT 500",
+        );
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let map_row = |row: &rusqlite::Row<'_>| -> Result<ThreatActorRow> {
+            Ok(ThreatActorRow {
+                id: row.get(0)?,
+                actor_type: row.get(1)?,
+                ip_address: row.get(2)?,
+                asn: row.get(3)?,
+                as_org: row.get(4)?,
+                country: row.get(5)?,
+                intel_tags_json: row.get(6)?,
+                intel_summary: row.get(7)?,
+                first_seen_at: row.get(8)?,
+                last_seen_at: row.get(9)?,
+                runs_seen: row.get::<_, i64>(10)?.max(1) as u32,
+                total_requests: row.get::<_, i64>(11)?.max(0) as u64,
+                total_origin_200s: row.get::<_, i64>(12)?.max(0) as u64,
+                highest_severity: row.get(13)?,
+                latest_classification: row.get(14)?,
+                target_hosts_json: row.get(15)?,
+                sample_paths_json: row.get(16)?,
+                disposition: row.get(17)?,
+            })
+        };
+
+        let mut out = Vec::new();
+        if let Some(disp) = filter_clean {
+            let rows = stmt.query_map(params![disp], map_row)?;
+            for r in rows {
+                out.push(r?);
+            }
+        } else {
+            let rows = stmt.query_map([], map_row)?;
+            for r in rows {
+                out.push(r?);
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn set_threat_actor_disposition(&self, actor_id: &str, disposition: &str) -> Result<()> {
+        let normalized = match disposition.trim().to_ascii_uppercase().as_str() {
+            "ALLOWLISTED" => "ALLOWLISTED",
+            "RESOLVED" => "RESOLVED",
+            _ => "ACTIVE",
+        };
+        self.conn.execute(
+            "UPDATE threat_actors SET disposition = ?2 WHERE id = ?1",
+            params![actor_id, normalized],
+        )?;
+        Ok(())
+    }
+
+    pub fn upsert_lan_client(&self, client: &LanClientBaselineRow) -> Result<bool> {
+        let mac_norm = client.mac_address.trim().to_ascii_uppercase();
+        let exists: bool = self
+            .conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM lan_clients_baseline WHERE mac_address = ?1)",
+                params![mac_norm],
+                |row| row.get::<_, i32>(0),
+            )
+            .map(|v| v != 0)?;
+
+        if exists {
+            self.conn.execute(
+                "UPDATE lan_clients_baseline SET
+                    ip_address = COALESCE(?2, ip_address),
+                    hostname = COALESCE(?3, hostname),
+                    network_vlan = COALESCE(?4, network_vlan),
+                    oui_vendor = COALESCE(?5, oui_vendor),
+                    last_seen_at = ?6
+                 WHERE mac_address = ?1",
+                params![
+                    mac_norm,
+                    client.ip_address,
+                    client.hostname,
+                    client.network_vlan,
+                    client.oui_vendor,
+                    client.last_seen_at,
+                ],
+            )?;
+            Ok(false)
+        } else {
+            self.conn.execute(
+                "INSERT INTO lan_clients_baseline (
+                    mac_address, ip_address, hostname, network_vlan, oui_vendor,
+                    first_seen_at, last_seen_at, is_trusted, label
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    mac_norm,
+                    client.ip_address,
+                    client.hostname,
+                    client.network_vlan,
+                    client.oui_vendor,
+                    client.first_seen_at,
+                    client.last_seen_at,
+                    if client.is_trusted { 1 } else { 0 },
+                    client.label,
+                ],
+            )?;
+            Ok(true)
+        }
+    }
+
+    pub fn list_lan_clients(&self) -> Result<Vec<LanClientBaselineRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT mac_address, ip_address, hostname, network_vlan, oui_vendor,
+                    first_seen_at, last_seen_at, is_trusted, label
+             FROM lan_clients_baseline
+             ORDER BY is_trusted ASC, last_seen_at DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(LanClientBaselineRow {
+                mac_address: row.get(0)?,
+                ip_address: row.get(1)?,
+                hostname: row.get(2)?,
+                network_vlan: row.get(3)?,
+                oui_vendor: row.get(4)?,
+                first_seen_at: row.get(5)?,
+                last_seen_at: row.get(6)?,
+                is_trusted: row.get::<_, i32>(7)? != 0,
+                label: row.get(8)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    pub fn count_lan_clients(&self) -> Result<usize> {
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM lan_clients_baseline", [], |row| row.get(0))?;
+        Ok(count.max(0) as usize)
+    }
+
+    pub fn set_lan_client_trusted(
+        &self,
+        mac: &str,
+        trusted: bool,
+        label: Option<&str>,
+    ) -> Result<()> {
+        let mac_norm = mac.trim().to_ascii_uppercase();
+        if let Some(lbl) = label {
+            self.conn.execute(
+                "UPDATE lan_clients_baseline SET is_trusted = ?2, label = ?3 WHERE mac_address = ?1",
+                params![mac_norm, if trusted { 1 } else { 0 }, lbl.trim()],
+            )?;
+        } else {
+            self.conn.execute(
+                "UPDATE lan_clients_baseline SET is_trusted = ?2 WHERE mac_address = ?1",
+                params![mac_norm, if trusted { 1 } else { 0 }],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn trust_all_lan_clients(&self) -> Result<usize> {
+        let changed = self
+            .conn
+            .execute("UPDATE lan_clients_baseline SET is_trusted = 1 WHERE is_trusted = 0", [])?;
+        Ok(changed)
+    }
+
+    pub fn list_threat_allowlist(&self) -> Result<Vec<ThreatAllowlistRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, entry_type, value, label, created_at
+             FROM threat_allowlist
+             ORDER BY entry_type ASC, value ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(ThreatAllowlistRow {
+                id: row.get(0)?,
+                entry_type: row.get(1)?,
+                value: row.get(2)?,
+                label: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    pub fn upsert_threat_allowlist(
+        &self,
+        entry_type: &str,
+        value: &str,
+        label: &str,
+    ) -> Result<ThreatAllowlistRow> {
+        let norm_type = entry_type.trim().to_ascii_uppercase();
+        let norm_val = if norm_type == "LAN_MAC" {
+            value.trim().to_ascii_uppercase()
+        } else if norm_type == "EMAIL" {
+            value.trim().to_ascii_lowercase()
+        } else {
+            value.trim().to_string()
+        };
+        let id = uuid::Uuid::new_v4().to_string();
+        self.conn.execute(
+            "INSERT INTO threat_allowlist (id, entry_type, value, label)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(value) DO UPDATE SET
+                entry_type = excluded.entry_type,
+                label = CASE WHEN length(trim(excluded.label)) > 0 THEN excluded.label ELSE threat_allowlist.label END",
+            params![id, norm_type, norm_val, label.trim()],
+        )?;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT id, entry_type, value, label, created_at FROM threat_allowlist WHERE value = ?1",
+        )?;
+        stmt.query_row(params![norm_val], |row| {
+            Ok(ThreatAllowlistRow {
+                id: row.get(0)?,
+                entry_type: row.get(1)?,
+                value: row.get(2)?,
+                label: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })
+    }
+
+    pub fn delete_threat_allowlist(&self, id: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM threat_allowlist WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn get_cached_cf_ip_intel(&self, ip: &str, max_age_hours: i64) -> Result<Option<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT payload_json, fetched_at FROM cf_ip_intel_cache WHERE ip = ?1",
+        )?;
+        let mut rows = stmt.query(params![ip.trim()])?;
+        if let Some(row) = rows.next()? {
+            let payload: String = row.get(0)?;
+            let fetched_at: String = row.get(1)?;
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&fetched_at) {
+                let age = chrono::Utc::now() - dt.with_timezone(&chrono::Utc);
+                if age.num_hours() < max_age_hours.max(1) {
+                    return Ok(Some(payload));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    pub fn put_cached_cf_ip_intel(&self, ip: &str, payload_json: &str) -> Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO cf_ip_intel_cache (ip, payload_json, fetched_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(ip) DO UPDATE SET payload_json = excluded.payload_json, fetched_at = excluded.fetched_at",
+            params![ip.trim(), payload_json, now],
+        )?;
+        Ok(())
     }
 }
 

@@ -391,7 +391,7 @@ pub fn save_preferences(db: &SreDatabase, prefs: &PushoverPreferences) -> Result
         .map_err(|e| format!("Failed to save Pushover preferences: {}", e))
 }
 
-fn candidate_env_key_workspaces(db: &SreDatabase) -> Vec<PathBuf> {
+pub fn candidate_env_key_workspaces(db: &SreDatabase) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Ok(cwd) = std::env::current_dir() {
         dirs.push(cwd.clone());

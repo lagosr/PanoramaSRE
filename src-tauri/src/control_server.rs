@@ -1462,6 +1462,51 @@ pub async fn process_ipc_message(
                         Err(e) => IpcResponse::err(&req.id, "OPT_INS_TELEMETRY_ERROR", e),
                     }
                 }
+                "security" => {
+                    let Ok(guard) = sre_db.lock() else {
+                        return IpcResponse::err(&req.id, "DB_LOCK_ERROR", "Mutex poisoned");
+                    };
+                    let prefs = crate::commands::threat_intel_ops::load_threat_preferences(&guard);
+                    let runs = guard.list_threat_audit_runs(5).unwrap_or_default();
+                    let latest_findings = runs
+                        .first()
+                        .and_then(|r| guard.list_threat_findings_for_run(&r.id).ok())
+                        .unwrap_or_default();
+                    let actors = guard.list_threat_actors(Some("ACTIVE")).unwrap_or_default();
+                    let lan_count = guard.count_lan_clients().unwrap_or(0);
+                    let since_24h = (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
+                    let carbon_used = guard.count_carbon_escalations_since(&since_24h).unwrap_or(0);
+                    let latest_run_json = runs.first().map(|r| {
+                        json!({
+                            "id": r.id,
+                            "startedAt": r.started_at,
+                            "completedAt": r.completed_at,
+                            "windowHours": r.window_hours,
+                            "triggerSource": r.trigger_source,
+                            "status": r.status,
+                            "overallSeverity": r.overall_severity,
+                            "intrusionVerdict": r.intrusion_verdict,
+                            "tier1Model": r.tier1_model,
+                            "tier2Model": r.tier2_model,
+                            "escalatedToTier2": r.escalated_to_tier2,
+                            "collectorStatuses": r.collector_statuses_json.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()),
+                            "errorMessage": r.error_message.as_deref().map(scrub_secrets),
+                        })
+                    });
+                    IpcResponse::success(
+                        &req.id,
+                        json!({
+                            "latestRun": latest_run_json,
+                            "latestFindingsCount": latest_findings.len(),
+                            "recentRunsCount": runs.len(),
+                            "activeActorsCount": actors.len(),
+                            "topActiveActors": actors.into_iter().take(15).collect::<Vec<_>>(),
+                            "lanClientsCount": lan_count,
+                            "carbonUsedLast24h": carbon_used,
+                            "dailyCarbonCap": prefs.daily_carbon_cap,
+                        }),
+                    )
+                }
                 other => IpcResponse::err(
                     &req.id,
                     "UNKNOWN_TELEMETRY_DOMAIN",

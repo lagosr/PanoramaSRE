@@ -11,6 +11,8 @@ pub mod commands {
     pub mod smoke_ops;
     pub mod ssl_ops;
     pub mod telemetry_ops;
+    pub mod threat_intel_ops;
+    pub mod unifi_ops;
     pub mod workspace;
 }
 pub mod control_server;
@@ -36,6 +38,7 @@ use commands::runner::*;
 use commands::smoke_ops::*;
 use commands::ssl_ops::*;
 use commands::telemetry_ops::*;
+use commands::threat_intel_ops::*;
 use commands::workspace::*;
 use db::SreDatabase;
 use dev_supervisor::{get_dev_servers_status, start_dev_server, stop_dev_server, DevSupervisor};
@@ -92,6 +95,8 @@ pub fn run() {
     ));
     let sre_db_clone = Arc::clone(&sre_db);
     let dev_supervisor_ipc = Arc::clone(&dev_supervisor);
+    let sre_db_threat = Arc::clone(&sre_db);
+    let dev_supervisor_threat = Arc::clone(&dev_supervisor);
 
     {
         if let Ok(guard) = sre_db.lock() {
@@ -158,7 +163,27 @@ pub fn run() {
             send_test_pushover_notification,
             evaluate_and_notify_sync,
             get_dismissed_backup_incidents,
-            dismiss_backup_incident
+            dismiss_backup_incident,
+            get_threat_intel_settings,
+            save_threat_intel_settings,
+            test_cloudflare_threat_connection,
+            test_unifi_connection,
+            test_wsh_security_probe,
+            test_gemini_connection,
+            run_threat_audit_now,
+            escalate_threat_run_to_carbon,
+            get_threat_audit_runs,
+            get_threat_run_detail,
+            get_threat_actors,
+            set_threat_actor_disposition,
+            get_lan_clients_baseline,
+            set_lan_client_trusted,
+            trust_all_lan_clients,
+            get_threat_allowlist,
+            upsert_threat_allowlist,
+            delete_threat_allowlist,
+            get_windows_autostart_status,
+            set_windows_autostart
         ])
         .setup(move |app| {
             // Setup System Tray
@@ -169,6 +194,13 @@ pub fn run() {
             // Start background TelemetryScheduler
             scheduler_clone.start(app.handle().clone());
 
+            // Start 360 Threat Intelligence & Zero Trust 6h scheduler
+            commands::threat_intel_ops::spawn_threat_audit_scheduler(
+                app.handle().clone(),
+                Arc::clone(&sre_db_threat),
+                Arc::clone(&dev_supervisor_threat),
+            );
+
             // Start Zero-Trust Named Pipe IPC Control Server for AI Agent MCP Bridge
             control_server::start_control_server(
                 app.handle().clone(),
@@ -178,6 +210,9 @@ pub fn run() {
 
             // Window close-to-tray handler per ADR-01
             if let Some(window) = app.get_webview_window("main") {
+                if std::env::args().any(|arg| arg == "--minimized") {
+                    let _ = window.hide();
+                }
                 if let Ok(app_icon) = tauri::image::Image::from_bytes(include_bytes!("../icons/128x128@2x.png")) {
                     let _ = window.set_icon(app_icon);
                 } else if let Some(default_icon) = app.default_window_icon().cloned() {

@@ -22,10 +22,24 @@ mod tests {
         ingest_deploy_history_jsonl, parse_console_session_to_telemetry, parse_docker_size_bytes,
         parse_docker_system_df_json,
     };
-    use panorama_sre_lib::db::{ConsoleSessionRecord, OptInCacheRow, SreDatabase};
+    use panorama_sre_lib::commands::threat_intel_ops::{
+        build_waf_rule_expression, classify_host_sensitivity, evaluate_stage0_triage,
+        is_allowlisted, parse_gemini_threat_brief, parse_unifi_cef_ndjson,
+        should_escalate_to_tier2, CfHttpEvent, CloudflareSecuritySnapshot, DomainProfile,
+        PanoramaAuthTelemetry, WshSecuritySnapshot,
+    };
+    use panorama_sre_lib::commands::unifi_ops::{
+        parse_unifi_clients_json, parse_unifi_devices_json, parse_unifi_policies_json,
+        parse_unifi_sites_json, UnifiClientDto, UnifiSecuritySnapshot, UnifiSiteDto,
+    };
+    use panorama_sre_lib::db::{
+        ConsoleSessionRecord, LanClientBaselineRow, OptInCacheRow, SreDatabase, ThreatActorRow,
+        ThreatAllowlistRow, ThreatAuditRunRow, ThreatFindingRow,
+    };
     use panorama_sre_lib::dev_supervisor::{is_dev_server_ready_line, DevSupervisor};
     use panorama_sre_lib::ipc_security::validate_dev_command;
     use panorama_sre_lib::scheduler::{evaluate_due_tiers, TelemetryScheduler};
+    use panorama_sre_lib::scrubber::scrub_secrets;
 
     #[test]
     fn test_console_session_scope_and_startup_reconciliation() {
@@ -842,6 +856,393 @@ mod tests {
         assert_eq!(
             sanitize_smoke_trigger(Some("deploy:batch:auth,spendy,biomed,water,basket,energy")),
             "deploy:batch:auth,spendy,biomed,water,basket,energy"
+        );
+    }
+
+    #[test]
+    fn test_threat_intel_sqlite_schema_and_actor_upserts() {
+        let db = SreDatabase::new(":memory:").expect("init memory db");
+        let now = chrono::Utc::now();
+        let now_iso = now.to_rfc3339();
+        let start_iso = (now - chrono::Duration::hours(6)).to_rfc3339();
+
+        let scheduled_run = ThreatAuditRunRow {
+            id: "run-sched-1".into(),
+            started_at: now_iso.clone(),
+            completed_at: Some(now_iso.clone()),
+            window_start: start_iso.clone(),
+            window_end: now_iso.clone(),
+            window_hours: 6,
+            trigger_source: "scheduled".into(),
+            status: "COMPLETED".into(),
+            overall_severity: "MEDIUM".into(),
+            intrusion_verdict: "NO_EVIDENCE".into(),
+            tier1_model: Some("gemini-4-hydrogen".into()),
+            tier2_model: Some("gemini-4-carbon".into()),
+            escalated_to_tier2: true,
+            escalation_reasons_json: Some("[\"Stage 1 MEDIUM\"]".into()),
+            collector_statuses_json: Some("{\"cloudflare\":\"Connected\"}".into()),
+            zones_summary_json: Some("[]".into()),
+            zero_trust_summary_json: Some("{}".into()),
+            internal_summary_json: Some("{}".into()),
+            gemini_brief_json: Some("{}".into()),
+            token_usage_json: Some("{}".into()),
+            error_message: None,
+        };
+        let manual_run = ThreatAuditRunRow {
+            id: "run-manual-2".into(),
+            trigger_source: "manual".into(),
+            ..scheduled_run.clone()
+        };
+        db.save_threat_audit_run(&scheduled_run).expect("save scheduled run");
+        db.save_threat_audit_run(&manual_run).expect("save manual run");
+
+        let runs = db.list_threat_audit_runs(10).expect("list runs");
+        assert_eq!(runs.len(), 2);
+        assert!(db.get_threat_audit_run("run-sched-1").unwrap().is_some());
+        assert!(db.get_latest_completed_threat_audit_at().unwrap().is_some());
+
+        // Only non-manual escalated runs count toward the 24h auto-escalation cap
+        let since_24h = (now - chrono::Duration::hours(24)).to_rfc3339();
+        assert_eq!(db.count_carbon_escalations_since(&since_24h).unwrap(), 1);
+
+        let finding = ThreatFindingRow {
+            id: "f-1".into(),
+            run_id: "run-sched-1".into(),
+            source_layer: "CLOUDFLARE".into(),
+            rule_id: "SECRET_EXPLOIT_PROBE".into(),
+            severity: "MEDIUM".into(),
+            category: "HTTP_ATTACK".into(),
+            title: "Probe burst".into(),
+            summary: "41 hits on /.env".into(),
+            host: Some("parakith.com".into()),
+            actor_ip: Some("185.220.101.4".into()),
+            actor_asn: Some("205100".into()),
+            ray_ids_json: "[\"ray123\"]".into(),
+            evidence_json: "{}".into(),
+            created_at: now_iso.clone(),
+        };
+        db.replace_threat_findings_for_run("run-sched-1", &[finding]).expect("save findings");
+        assert_eq!(db.list_threat_findings_for_run("run-sched-1").unwrap().len(), 1);
+
+        // Actor repeat accumulation + highest severity latch + ALLOWLISTED preservation
+        let actor1 = ThreatActorRow {
+            id: "43.153.74.75".into(),
+            actor_type: "IP".into(),
+            ip_address: Some("43.153.74.75".into()),
+            asn: Some("132203".into()),
+            as_org: Some("Tencent".into()),
+            country: Some("US".into()),
+            intel_tags_json: "[\"Cloud Hosting\"]".into(),
+            intel_summary: Some("Tencent Cloud".into()),
+            first_seen_at: start_iso.clone(),
+            last_seen_at: start_iso.clone(),
+            runs_seen: 1,
+            total_requests: 12,
+            total_origin_200s: 0,
+            highest_severity: "LOW".into(),
+            latest_classification: Some("TARGETED_RECON".into()),
+            target_hosts_json: "[\"wsh.panoramadr.com\"]".into(),
+            sample_paths_json: "[\"/\"]".into(),
+            disposition: "ACTIVE".into(),
+        };
+        db.upsert_threat_actor(&actor1).expect("insert actor");
+        db.set_threat_actor_disposition("43.153.74.75", "ALLOWLISTED").expect("allowlist actor");
+
+        let actor2 = ThreatActorRow {
+            last_seen_at: now_iso.clone(),
+            total_requests: 20,
+            total_origin_200s: 2,
+            highest_severity: "HIGH".into(),
+            intel_tags_json: "[\"Scanner\"]".into(),
+            sample_paths_json: "[\"/.env\"]".into(),
+            ..actor1.clone()
+        };
+        db.upsert_threat_actor(&actor2).expect("upsert actor");
+        let actors = db.list_threat_actors(Some("ALL")).expect("list actors");
+        assert_eq!(actors.len(), 1);
+        assert_eq!(actors[0].runs_seen, 2);
+        assert_eq!(actors[0].total_requests, 32);
+        assert_eq!(actors[0].total_origin_200s, 2);
+        assert_eq!(actors[0].highest_severity, "HIGH");
+        assert_eq!(actors[0].disposition, "ALLOWLISTED");
+        assert_eq!(actors[0].first_seen_at, start_iso);
+
+        // LAN clients baseline + trust all
+        let mac = LanClientBaselineRow {
+            mac_address: "aa:bb:cc:dd:ee:ff".into(),
+            ip_address: Some("172.16.200.98".into()),
+            hostname: Some("workstation".into()),
+            network_vlan: Some("Adult Secure".into()),
+            oui_vendor: Some("Intel".into()),
+            first_seen_at: now_iso.clone(),
+            last_seen_at: now_iso.clone(),
+            is_trusted: false,
+            label: "Admin PC".into(),
+        };
+        assert!(db.upsert_lan_client(&mac).unwrap());
+        assert!(!db.upsert_lan_client(&mac).unwrap());
+        assert_eq!(db.trust_all_lan_clients().unwrap(), 1);
+        assert!(db.list_lan_clients().unwrap()[0].is_trusted);
+
+        // Allowlist & IP intel cache
+        let al = db.upsert_threat_allowlist("CIDR", "172.16.200.0/24", "Home LAN").unwrap();
+        assert_eq!(db.list_threat_allowlist().unwrap().len(), 1);
+        db.delete_threat_allowlist(&al.id).unwrap();
+        assert!(db.list_threat_allowlist().unwrap().is_empty());
+
+        db.put_cached_cf_ip_intel("1.1.1.1", "{\"ok\":true}").unwrap();
+        assert_eq!(db.get_cached_cf_ip_intel("1.1.1.1", 24).unwrap().as_deref(), Some("{\"ok\":true}"));
+    }
+
+    #[test]
+    fn test_scrubber_redacts_threat_intel_secrets() {
+        let raw = "CLOUDFLARE_API_TOKEN=cf_tok_secret123 GEMINI_API_KEY=AIzaSyDummyKeyValue1234567890ABCDEFGHIJK UNIFI_API_KEY=\"uni_secret_abc\" header x-goog-api-key: AIzaSyAnotherKeyValue1234567890ABCDEFG X-API-Key: unifi_hdr_999";
+        let scrubbed = scrub_secrets(raw);
+        assert!(!scrubbed.contains("cf_tok_secret123"));
+        assert!(!scrubbed.contains("AIzaSyDummyKeyValue1234567890ABCDEFGHIJK"));
+        assert!(!scrubbed.contains("uni_secret_abc"));
+        assert!(!scrubbed.contains("AIzaSyAnotherKeyValue1234567890ABCDEFG"));
+        assert!(!scrubbed.contains("unifi_hdr_999"));
+        assert!(scrubbed.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn test_unifi_integration_v1_parsers() {
+        let sites_json = serde_json::json!({
+            "data": [{ "id": "site-uuid-1", "name": "default", "internalReference": "Main" }]
+        });
+        let sites = parse_unifi_sites_json(&sites_json);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].id, "site-uuid-1");
+
+        let dev_json = serde_json::json!({
+            "data": [{
+                "id": "dev-1",
+                "name": "CloudKey G2",
+                "macAddress": "78:45:58:11:22:33",
+                "ipAddress": "10.10.1.5",
+                "model": "UCK-G2-PLUS",
+                "state": "ONLINE",
+                "firmwareVersion": "4.1.11"
+            }]
+        });
+        let devs = parse_unifi_devices_json(&dev_json);
+        assert_eq!(devs.len(), 1);
+        assert_eq!(devs[0].mac_address, "78:45:58:11:22:33");
+
+        let cli_json = serde_json::json!({
+            "data": [{
+                "id": "cli-1",
+                "macAddress": "aa:bb:cc:11:22:33",
+                "ipAddress": "172.16.200.98",
+                "hostname": "RODRIGO-AERO",
+                "uplink": { "networkName": "Adult Secure" },
+                "oui": "Intel"
+            }]
+        });
+        let clis = parse_unifi_clients_json(&cli_json);
+        assert_eq!(clis.len(), 1);
+        assert_eq!(clis[0].mac_address, "AA:BB:CC:11:22:33");
+        assert_eq!(clis[0].network_name.as_deref(), Some("Adult Secure"));
+
+        let pol_json = serde_json::json!({
+            "data": [{ "id": "pol-1", "name": "Block Compute -> Gateway", "action": "BLOCK", "enabled": true }]
+        });
+        let pols = parse_unifi_policies_json(&pol_json);
+        assert_eq!(pols.len(), 1);
+        assert_eq!(pols[0].action, "BLOCK");
+    }
+
+    #[test]
+    fn test_stage0_split_sensitivity_and_allowlist() {
+        assert_eq!(classify_host_sensitivity("wsh.panoramadr.com"), DomainProfile::StrictPrivate);
+        assert_eq!(classify_host_sensitivity("parakith.com"), DomainProfile::PublicWeb);
+        assert_eq!(classify_host_sensitivity("panoramadr.com"), DomainProfile::ApexMonitor);
+
+        let allowlist = vec![
+            ThreatAllowlistRow {
+                id: "1".into(),
+                entry_type: "CIDR".into(),
+                value: "172.16.200.0/24".into(),
+                label: "Admin VLAN".into(),
+                created_at: "".into(),
+            },
+            ThreatAllowlistRow {
+                id: "2".into(),
+                entry_type: "ASN".into(),
+                value: "AS21928".into(),
+                label: "T-Mobile".into(),
+                created_at: "".into(),
+            },
+            ThreatAllowlistRow {
+                id: "3".into(),
+                entry_type: "EMAIL".into(),
+                value: "lagosr@gmail.com".into(),
+                label: "Owner".into(),
+                created_at: "".into(),
+            },
+        ];
+
+        assert!(is_allowlisted(&allowlist, Some("172.16.200.98"), None, None, None));
+        assert!(!is_allowlisted(&allowlist, Some("43.153.74.75"), Some("132203"), None, None));
+        assert!(is_allowlisted(&allowlist, Some("100.1.2.3"), Some("21928"), None, None));
+        assert!(is_allowlisted(&allowlist, None, None, Some("LAGOSR@gmail.com"), None));
+
+        let cf_snap = CloudflareSecuritySnapshot {
+            account_id: "acct-1".into(),
+            zones: vec![],
+            http_events: vec![
+                // Normal public traffic on parakith.com -> ignored
+                CfHttpEvent {
+                    datetime: "2026-11-22T15:00:00Z".into(),
+                    client_ip: "99.1.2.3".into(),
+                    client_asn: "7922".into(),
+                    client_asn_desc: "Comcast".into(),
+                    client_country: "US".into(),
+                    host: "parakith.com".into(),
+                    method: "GET".into(),
+                    path: "/".into(),
+                    query: "".into(),
+                    user_agent: "Mozilla/5.0".into(),
+                    edge_status: 200,
+                    origin_status: 200,
+                    security_action: "".into(),
+                    security_source: "".into(),
+                    ray_name: "ray-pub".into(),
+                },
+                // Untrusted origin 200 on wsh.panoramadr.com/spendy -> HIGH ORIGIN_BREACH_THROUGH
+                CfHttpEvent {
+                    datetime: "2026-11-22T15:05:00Z".into(),
+                    client_ip: "43.153.74.75".into(),
+                    client_asn: "132203".into(),
+                    client_asn_desc: "Tencent".into(),
+                    client_country: "US".into(),
+                    host: "wsh.panoramadr.com".into(),
+                    method: "GET".into(),
+                    path: "/spendy/api/health".into(),
+                    query: "".into(),
+                    user_agent: "curl/8.0".into(),
+                    edge_status: 200,
+                    origin_status: 200,
+                    security_action: "".into(),
+                    security_source: "".into(),
+                    ray_name: "ray-breach".into(),
+                },
+            ],
+            firewall_events: vec![],
+            access_app_count: 1,
+            access_logs: vec![],
+            tunnels: vec![],
+            audit_logs: vec![],
+            ip_intel: Default::default(),
+        };
+
+        let unifi_snap = UnifiSecuritySnapshot {
+            base_url: "https://ui.panoramadr.com".into(),
+            app_version: "9.4".into(),
+            sites: vec![UnifiSiteDto { id: "s1".into(), name: "default".into(), internal_reference: None }],
+            devices: vec![],
+            clients: vec![UnifiClientDto {
+                id: "c-rogue".into(),
+                mac_address: "DE:AD:BE:EF:00:01".into(),
+                ip_address: Some("172.16.1.55".into()),
+                name: Some("unknown-box".into()),
+                hostname: None,
+                network_name: Some("Kid Safe".into()),
+                oui_vendor: Some("Unknown".into()),
+                client_type: Some("WIRED".into()),
+            }],
+            policies: vec![],
+        };
+        let prior_lan = vec![LanClientBaselineRow {
+            mac_address: "11:22:33:44:55:66".into(),
+            ip_address: Some("172.16.200.98".into()),
+            hostname: Some("Admin".into()),
+            network_vlan: Some("Adult Secure".into()),
+            oui_vendor: Some("Intel".into()),
+            first_seen_at: "2026-11-20T00:00:00Z".into(),
+            last_seen_at: "2026-11-22T00:00:00Z".into(),
+            is_trusted: true,
+            label: "Admin PC".into(),
+        }];
+
+        let ndjson = "{\"receivedAt\":\"2026-11-22T15:00:00Z\",\"sourceIp\":\"172.25.25.1\",\"signatureId\":\"201\",\"name\":\"Threat Detected and Blocked\",\"severity\":\"7\",\"category\":\"Security\",\"subCategory\":\"Intrusion Prevention\",\"risk\":\"medium\",\"srcIp\":\"81.181.129.172\",\"dstIp\":\"172.25.25.5\",\"dstPort\":\"443\",\"action\":\"blocked\",\"ipsSignature\":\"ET DROP\"}";
+        let cef_events = parse_unifi_cef_ndjson(ndjson);
+        assert_eq!(cef_events.len(), 1);
+
+        let wsh_snap = WshSecuritySnapshot {
+            hostname: "wsh".into(),
+            captured_at: "2026-11-22T15:06:00Z".into(),
+            hours: 6,
+            panorama_auth: PanoramaAuthTelemetry::default(),
+            ssh_logs_raw: String::new(),
+            lighttpd_error_raw: String::new(),
+            lighttpd_anomalous_raw: String::new(),
+            containers: vec![],
+            iptables_docker_user_raw: String::new(),
+            iptables_panorama_input_raw: String::new(),
+            unifi_siem_present: true,
+            unifi_cef_events: cef_events,
+        };
+
+        let triage = evaluate_stage0_triage(
+            "run-test",
+            "2026-11-22T15:10:00Z",
+            Some(&cf_snap),
+            Some(&unifi_snap),
+            Some(&wsh_snap),
+            &allowlist,
+            &prior_lan,
+            &[],
+        );
+
+        assert!(triage.hard_hit);
+        assert_eq!(triage.overall_severity, "HIGH");
+        assert!(triage.findings.iter().any(|f| f.rule_id == "ORIGIN_BREACH_THROUGH"));
+        assert!(triage.findings.iter().any(|f| f.rule_id == "UNIFI_ROGUE_LAN_CLIENT"));
+        assert!(triage.findings.iter().any(|f| f.rule_id == "UNIFI_CEF_IPS_ALERT"));
+        assert!(!triage.suspect_ips.contains(&"99.1.2.3".to_string()));
+        assert!(triage.suspect_ips.contains(&"43.153.74.75".to_string()));
+        assert!(triage.suspect_ips.contains(&"81.181.129.172".to_string()));
+    }
+
+    #[test]
+    fn test_escalation_gate_and_daily_carbon_cap() {
+        let (esc1, _) = should_escalate_to_tier2(false, false, "LOW", 0, 6, false);
+        assert!(!esc1);
+
+        let (esc2, _) = should_escalate_to_tier2(true, false, "LOW", 0, 6, false);
+        assert!(esc2);
+
+        // Cap exhausted blocks MEDIUM auto-escalation
+        let (esc3, reasons3) = should_escalate_to_tier2(false, true, "MEDIUM", 6, 6, false);
+        assert!(!esc3);
+        assert!(reasons3.iter().any(|r| r.contains("daily Carbon cap reached")));
+
+        // CRITICAL or manual force_carbon bypasses daily cap
+        let (esc4, _) = should_escalate_to_tier2(true, true, "CRITICAL", 6, 6, false);
+        assert!(esc4);
+        let (esc5, _) = should_escalate_to_tier2(false, false, "LOW", 6, 6, true);
+        assert!(esc5);
+    }
+
+    #[test]
+    fn test_gemini_brief_parsing_and_waf_rule_builder() {
+        let fenced = "```json\n{\"overall_severity\":\"MEDIUM\",\"intrusion_verdict\":\"NO_EVIDENCE\",\"escalate_to_tier2\":true,\"escalation_reasons\":[\"Repeat probing\"],\"suspect_ips\":[\"43.153.74.75\"],\"suspect_macs\":[],\"executive_summary\":\"Automated recon only.\",\"zero_trust_assessment\":\"All Access logins US\",\"internal_network_assessment\":\"Clean\",\"attack_campaigns\":[],\"actor_assessments\":[{\"identifier\":\"43.153.74.75\",\"classification\":\"TARGETED_RECON\",\"threat_score\":60,\"intent_summary\":\"Probing root\",\"is_repeat_escalating\":true}],\"recommended_actions\":[]}\n```";
+        let brief = parse_gemini_threat_brief(fenced).expect("parse fenced json");
+        assert_eq!(brief.overall_severity, "MEDIUM");
+        assert!(brief.escalate_to_tier2);
+        assert_eq!(brief.actor_assessments.len(), 1);
+        assert!(parse_gemini_threat_brief("not valid json").is_err());
+
+        let waf = build_waf_rule_expression(
+            &["43.153.74.75".into(), "185.220.101.4".into()],
+            &["AS132203".into()],
+        );
+        assert_eq!(
+            waf,
+            "(ip.src in {43.153.74.75 185.220.101.4} or ip.geoip.asnum in {132203})"
         );
     }
 }

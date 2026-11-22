@@ -5,6 +5,12 @@ static SECRET_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
         // Cloudflare Tunnel token
         Regex::new(r"(?i)CLOUDFLARE_TUNNEL_TOKEN\s*=\s*[a-zA-Z0-9_\-\.]+").unwrap(),
+        // Cloudflare, Gemini, and UniFi Threat Intel keys
+        Regex::new(r#"(?i)CLOUDFLARE_API_TOKEN\s*=\s*("[^"]*"|'[^']*'|[^\s]+)"#).unwrap(),
+        Regex::new(r#"(?i)GEMINI_API_KEY\s*=\s*("[^"]*"|'[^']*'|[^\s]+)"#).unwrap(),
+        Regex::new(r#"(?i)UNIFI_API_KEY\s*=\s*("[^"]*"|'[^']*'|[^\s]+)"#).unwrap(),
+        Regex::new(r"AIza[0-9A-Za-z\-_]{35}").unwrap(),
+        Regex::new(r"(?i)(?:x-goog-api-key|x-api-key)\s*:\s*[^\s\r\n]+").unwrap(),
         // Internal service key
         Regex::new(r"(?i)INTERNAL_SERVICE_KEY\s*=\s*[^\s]+").unwrap(),
         Regex::new(r"(?i)X-Panorama-Service-Key:\s*[^\s\r\n]+").unwrap(),
