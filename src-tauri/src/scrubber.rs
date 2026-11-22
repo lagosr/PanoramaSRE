@@ -10,6 +10,7 @@ static SECRET_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         Regex::new(r#"(?i)GEMINI_API_KEY\s*=\s*("[^"]*"|'[^']*'|[^\s]+)"#).unwrap(),
         Regex::new(r#"(?i)UNIFI_API_KEY\s*=\s*("[^"]*"|'[^']*'|[^\s]+)"#).unwrap(),
         Regex::new(r"AIza[0-9A-Za-z\-_]{35}").unwrap(),
+        Regex::new(r"AQ\.[0-9A-Za-z\-_\.]{20,}").unwrap(),
         Regex::new(r"(?i)(?:x-goog-api-key|x-api-key)\s*:\s*[^\s\r\n]+").unwrap(),
         // Internal service key
         Regex::new(r"(?i)INTERNAL_SERVICE_KEY\s*=\s*[^\s]+").unwrap(),

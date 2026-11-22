@@ -127,6 +127,13 @@ describe('threat-utils', () => {
         4
       )
     ).toEqual({ count: 4, severity: 'error' });
+
+    expect(
+      computeThreatSidebarBadge(
+        makeRun({ overallSeverity: 'LOW', intrusionVerdict: 'LIKELY_COMPROMISE' }),
+        2
+      )
+    ).toEqual({ count: 2, severity: 'error' });
   });
 
   it('filters threat actors by disposition and free-text query across IP, ASN, org, host, and paths', () => {
@@ -177,6 +184,7 @@ describe('threat-utils', () => {
     expect(severityToBadgeVariant('LOW')).toBe('info');
 
     expect(verdictToBadgeVariant('CONFIRMED_COMPROMISE')).toBe('danger');
+    expect(verdictToBadgeVariant('LIKELY_COMPROMISE')).toBe('danger');
     expect(verdictToBadgeVariant('SUSPICIOUS_ACTIVITY')).toBe('warning');
     expect(verdictToBadgeVariant('NO_EVIDENCE')).toBe('success');
 

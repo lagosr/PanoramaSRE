@@ -1013,7 +1013,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       type="password"
                       value={geminiKeyInput}
                       onChange={(e) => setGeminiKeyInput(e.target.value)}
-                      placeholder={threatDto?.geminiConfigured ? '•••••••• (enter new key to replace)' : 'Paste AIza... Gemini Paid Tier key'}
+                      placeholder={threatDto?.geminiConfigured ? '•••••••• (enter new key to replace)' : 'Paste AQ... or AIza... Gemini Paid Tier key'}
                       className="flex-1 px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
                     />
                     <button

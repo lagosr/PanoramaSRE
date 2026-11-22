@@ -928,6 +928,7 @@ export type IntrusionVerdict =
   | 'NO_EVIDENCE'
   | 'SUSPICIOUS_ACTIVITY'
   | 'LIKELY_INTRUSION'
+  | 'LIKELY_COMPROMISE'
   | 'CONFIRMED_COMPROMISE'
   | string;
 

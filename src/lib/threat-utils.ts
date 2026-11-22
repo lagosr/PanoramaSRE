@@ -110,6 +110,7 @@ export function computeThreatSidebarBadge(
     sev === 'HIGH' ||
     sev === 'CRITICAL' ||
     verdict === 'LIKELY_INTRUSION' ||
+    verdict === 'LIKELY_COMPROMISE' ||
     verdict === 'CONFIRMED_COMPROMISE'
   ) {
     return { count: Math.max(1, activeActorsCount), severity: 'error' };
@@ -137,6 +138,7 @@ export function severityToBadgeVariant(severity: string): BadgeVariant {
 export function verdictToBadgeVariant(verdict: string): 'danger' | 'warning' | 'success' | 'neutral' {
   switch (verdict.trim().toUpperCase()) {
     case 'CONFIRMED_COMPROMISE':
+    case 'LIKELY_COMPROMISE':
     case 'LIKELY_INTRUSION':
       return 'danger';
     case 'SUSPICIOUS_ACTIVITY':
