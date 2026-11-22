@@ -7,6 +7,7 @@ import {
   Network, 
   Server, 
   ShieldCheck, 
+  ShieldAlert,
   MessageSquare,
   HardDrive, 
   FlaskConical,
@@ -32,6 +33,8 @@ interface SidebarRailProps {
   topologyAlertSeverity?: 'error' | 'warning' | null;
   smokeFailureCount?: number;
   unreadOptInsCount?: number;
+  threatAlertCount?: number;
+  threatAlertSeverity?: 'error' | 'warning' | null;
 }
 
 export const SidebarRail: React.FC<SidebarRailProps> = ({
@@ -49,6 +52,8 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
   topologyAlertSeverity,
   smokeFailureCount = 0,
   unreadOptInsCount = 0,
+  threatAlertCount = 0,
+  threatAlertSeverity = null,
 }) => {
   const effectiveTopologyBadge =
     topologyAlertCount !== undefined ? topologyAlertCount : securityViolationCount;
@@ -106,6 +111,13 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
       severity: effectiveDietPiSeverity || 'warning',
     },
     { id: 'edge', label: 'PKI & Certificates', icon: ShieldCheck },
+    {
+      id: 'security',
+      label: 'Threat & Zero Trust',
+      icon: ShieldAlert,
+      badge: threatAlertCount > 0 ? threatAlertCount : undefined,
+      severity: threatAlertSeverity || 'warning',
+    },
     {
       id: 'opt-ins',
       label: 'SMS Opt-Ins',

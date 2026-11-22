@@ -19,6 +19,7 @@ import {
   Bell,
   Send,
   ShieldCheck,
+  ShieldAlert,
   AlertTriangle,
   RotateCcw,
 } from 'lucide-react';
@@ -26,7 +27,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { CustomSelect } from '../ui/CustomSelect';
 import { WorkStreamContainer } from '../ui/WorkStreamContainer';
-import { SegmentedControl, ToggleSwitch } from '@lagosr/panorama-ui-kit';
+import { SegmentedControl, StatusBadge, ToggleSwitch } from '@lagosr/panorama-ui-kit';
 import { formatConsoleLine, stripAnsiCodes } from '../layout/ConsoleColorizer';
 import { useSmartAutoScroll } from '../../hooks/useSmartAutoScroll';
 import { APP_VERSION_INFO } from '../../lib/version';
@@ -34,7 +35,10 @@ import {
   PushoverPreferences,
   PushoverSendReceipt,
   PushoverSettingsViewDto,
+  SaveThreatIntelSettingsInput,
   TerminalTab,
+  ThreatIntelPreferences,
+  ThreatIntelSettingsViewDto,
 } from '../../lib/types';
 import { useTheme } from '../../context/ThemeContext';
 
@@ -52,6 +56,7 @@ interface SettingsViewProps {
   onAbortJob?: (tabId: string) => void;
   onClearTab?: (tabId: string) => void;
   onEmitSettingsStream?: (title: string, lines: string[], exitCode?: number) => void;
+  onThreatSettingsChanged?: (dto: ThreatIntelSettingsViewDto) => void;
 }
 
 interface SystemLogEntry {
@@ -79,6 +84,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onAbortJob,
   onClearTab,
   onEmitSettingsStream,
+  onThreatSettingsChanged,
 }) => {
   const { theme, resolvedTheme, setTheme } = useTheme();
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
@@ -134,6 +140,194 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     text: string;
     tone: 'ok' | 'err';
   } | null>(null);
+
+  // 360° Threat Intelligence & AI (Cloudflare + Gemini 4 + UniFi) state
+  const [threatDto, setThreatDto] = useState<ThreatIntelSettingsViewDto | null>(null);
+  const [threatPrefs, setThreatPrefs] = useState<ThreatIntelPreferences>({
+    enabled: true,
+    cadenceHours: 6,
+    tier1Model: 'gemini-4-hydrogen',
+    tier2Model: 'gemini-4-carbon',
+    dailyCarbonCap: 6,
+    pushoverThreshold: 'MEDIUM',
+    unifiBaseUrl: 'https://ui.panoramadr.com',
+  });
+  const [cfTokenInput, setCfTokenInput] = useState<string>('');
+  const [cfAccountInput, setCfAccountInput] = useState<string>('');
+  const [geminiKeyInput, setGeminiKeyInput] = useState<string>('');
+  const [unifiKeyInput, setUnifiKeyInput] = useState<string>('');
+  const [windowsAutostart, setWindowsAutostart] = useState<boolean>(false);
+  const [isSavingThreat, setIsSavingThreat] = useState<boolean>(false);
+  const [threatTestingTarget, setThreatTestingTarget] = useState<string | null>(null);
+  const [threatFeedback, setThreatFeedback] = useState<{
+    text: string;
+    tone: 'ok' | 'err';
+  } | null>(null);
+
+  const loadThreatSettings = useCallback(async () => {
+    try {
+      const dto = await invoke<ThreatIntelSettingsViewDto>('get_threat_intel_settings');
+      setThreatDto(dto);
+      setThreatPrefs(dto.preferences);
+      setCfAccountInput(dto.cfAccountId || '');
+      setWindowsAutostart(Boolean(dto.windowsAutostartEnabled));
+    } catch (err) {
+      console.warn('Failed to load Threat Intel settings:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadThreatSettings();
+  }, [loadThreatSettings]);
+
+  const handleToggleWindowsAutostart = async (enabled: boolean) => {
+    try {
+      const actual = await invoke<boolean>('set_windows_autostart', { enabled });
+      setWindowsAutostart(actual);
+      setThreatDto((prev) => (prev ? { ...prev, windowsAutostartEnabled: actual } : prev));
+      setThreatFeedback({
+        text: actual
+          ? 'Windows login autostart enabled (--minimized)'
+          : 'Windows login autostart removed',
+        tone: 'ok',
+      });
+      setTimeout(() => setThreatFeedback(null), 3500);
+    } catch (err) {
+      setThreatFeedback({ text: `Autostart error: ${String(err)}`, tone: 'err' });
+    }
+  };
+
+  const handleSaveThreatSettings = async (clearOverrides?: {
+    clearCfToken?: boolean;
+    clearGeminiKey?: boolean;
+    clearUnifiKey?: boolean;
+  }) => {
+    setIsSavingThreat(true);
+    try {
+      const input: SaveThreatIntelSettingsInput = {
+        cfApiToken: cfTokenInput.trim() || null,
+        cfAccountId: cfAccountInput.trim() || null,
+        geminiApiKey: geminiKeyInput.trim() || null,
+        unifiApiKey: unifiKeyInput.trim() || null,
+        clearCfToken: clearOverrides?.clearCfToken ?? false,
+        clearGeminiKey: clearOverrides?.clearGeminiKey ?? false,
+        clearUnifiKey: clearOverrides?.clearUnifiKey ?? false,
+        preferences: threatPrefs,
+      };
+      const updated = await invoke<ThreatIntelSettingsViewDto>('save_threat_intel_settings', {
+        input,
+      });
+      setThreatDto(updated);
+      setThreatPrefs(updated.preferences);
+      setCfAccountInput(updated.cfAccountId || '');
+      setCfTokenInput('');
+      setGeminiKeyInput('');
+      setUnifiKeyInput('');
+      onThreatSettingsChanged?.(updated);
+      setThreatFeedback({ text: '360° Threat Intel settings sealed in DPAPI & SQLite', tone: 'ok' });
+      setTimeout(() => setThreatFeedback(null), 4000);
+      onEmitSettingsStream?.('Save 360° Threat Intelligence Settings', [
+        '[PanoramaSRE] Persisting 360° Threat Intel preferences & DPAPI-sealed secrets...',
+        `[INFO] Enabled: ${updated.preferences.enabled} | Cadence: ${updated.preferences.cadenceHours}h | Tier1=${updated.preferences.tier1Model} | Tier2=${updated.preferences.tier2Model}`,
+        `[INFO] Keys configured: CF=${updated.cfConfigured} (${updated.cfSource}) | Gemini=${updated.geminiConfigured} (${updated.geminiSource}) | UniFi=${updated.unifiConfigured} (${updated.unifiSource})`,
+        '[PASS] 360° Threat Intelligence settings saved cleanly.',
+      ]);
+    } catch (err) {
+      const msg = String(err);
+      setThreatFeedback({ text: `Save failed: ${msg}`, tone: 'err' });
+      onEmitSettingsStream?.(
+        'Save 360° Threat Intelligence Settings',
+        [`[ERROR] Failed saving threat settings: ${msg}`],
+        1
+      );
+    } finally {
+      setIsSavingThreat(false);
+    }
+  };
+
+  const handleTestThreatConnector = async (target: 'cloudflare' | 'gemini' | 'unifi' | 'wsh') => {
+    setThreatTestingTarget(target);
+    try {
+      if (target === 'cloudflare') {
+        const res = await invoke<{
+          accountId: string;
+          zones: Array<{ name: string; plan: string }>;
+          tunnelsOk: boolean;
+          intelOk: boolean;
+          auditOk: boolean;
+        }>('test_cloudflare_threat_connection', {
+          tokenOverride: cfTokenInput.trim() || null,
+          accountIdOverride: cfAccountInput.trim() || null,
+        });
+        if (res.accountId) setCfAccountInput(res.accountId);
+        const zoneNames = res.zones.map((z) => `${z.name} (${z.plan})`).join(', ');
+        setThreatFeedback({
+          text: `Cloudflare OK: ${zoneNames || res.accountId}`,
+          tone: 'ok',
+        });
+        onEmitSettingsStream?.('Test Cloudflare Threat Connection', [
+          `[PASS] Cloudflare Account ${res.accountId} verified. Zones: ${zoneNames}`,
+          `[INFO] Tunnels=${res.tunnelsOk} | IP Intel=${res.intelOk} | Audit Logs=${res.auditOk}`,
+        ]);
+      } else if (target === 'gemini') {
+        const res = await invoke<{ model: string; severity: string }>(
+          'test_gemini_connection',
+          { apiKeyOverride: geminiKeyInput.trim() || null }
+        );
+        setThreatFeedback({
+          text: `Gemini OK (${res.model})`,
+          tone: 'ok',
+        });
+        onEmitSettingsStream?.('Test Gemini 4 Security API', [
+          `[PASS] Gemini API verified cleanly with structured schema on model=${res.model}.`,
+        ]);
+      } else if (target === 'unifi') {
+        const res = await invoke<{
+          siteCount?: number;
+          deviceCount?: number;
+          clientCount?: number;
+        }>('test_unifi_connection', {
+          baseUrlOverride: threatPrefs.unifiBaseUrl.trim() || null,
+          apiKeyOverride: unifiKeyInput.trim() || null,
+        });
+        setThreatFeedback({
+          text: `UniFi OK (${res.deviceCount ?? 0} devices, ${res.clientCount ?? 0} clients)`,
+          tone: 'ok',
+        });
+        onEmitSettingsStream?.('Test UniFi CloudKey Integration API', [
+          `[PASS] UniFi ${threatPrefs.unifiBaseUrl} responded: ${res.siteCount ?? 1} site(s), ${res.deviceCount ?? 0} devices, ${res.clientCount ?? 0} clients.`,
+        ]);
+      } else {
+        const res = await invoke<{
+          hostname: string;
+          panoramaAuthAvailable: boolean;
+          anomaliesCount: number;
+          auditLogsCount: number;
+          containersCount: number;
+          unifiSiemPresent: boolean;
+          unifiCefCount: number;
+        }>('test_wsh_security_probe');
+        setThreatFeedback({
+          text: `WSH SSH Probe OK (host=${res.hostname}, containers=${res.containersCount})`,
+          tone: 'ok',
+        });
+        onEmitSettingsStream?.('Test WSH Security SSH Probe', [
+          `[PASS] Read-only probe on ${res.hostname}: PanoramaAuth=${res.panoramaAuthAvailable} (anomalies=${res.anomaliesCount}, auditLogs=${res.auditLogsCount}), containers=${res.containersCount}, UniFi CEF=${res.unifiSiemPresent} (${res.unifiCefCount} events).`,
+        ]);
+      }
+      setTimeout(() => setThreatFeedback(null), 5000);
+    } catch (err) {
+      const msg = String(err);
+      setThreatFeedback({ text: `${target.toUpperCase()} test failed: ${msg}`, tone: 'err' });
+      onEmitSettingsStream?.(
+        `Test ${target.toUpperCase()} Connection`,
+        [`[ERROR] ${msg}`],
+        1
+      );
+    } finally {
+      setThreatTestingTarget(null);
+    }
+  };
 
   const loadPushoverSettings = useCallback(async () => {
     setIsLoadingPushover(true);
@@ -597,6 +791,22 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   activeColor="brand"
                 />
               </div>
+
+              <div className="flex items-center justify-between gap-4 pt-2 border-t border-slate-100 dark:border-slate-800">
+                <div>
+                  <div className="text-sm text-slate-800 dark:text-slate-300">
+                    Start PanoramaSRE minimized to tray at Windows login
+                  </div>
+                  <div className="text-xs text-slate-600 dark:text-slate-400">
+                    Registers HKCU\...\Run\PanoramaSRE with --minimized (zero UAC) for uninterrupted 6-hour security audits.
+                  </div>
+                </div>
+                <ToggleSwitch
+                  checked={windowsAutostart}
+                  onChange={(val) => void handleToggleWindowsAutostart(val)}
+                  activeColor="brand"
+                />
+              </div>
             </div>
 
             <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4 shadow-sm">
@@ -688,6 +898,325 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     <div className="text-slate-500">Cloudflare Tunnel Release (ETag), SSL Fleet, Backup Ledger</div>
                   </div>
                 </div>
+              </div>
+            </div>
+
+            {/* 360° Threat Intelligence & AI (Cloudflare + Gemini 4 + UniFi) Card */}
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-5 shadow-sm">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <ShieldAlert className="w-4 h-4 text-[var(--color-brand-text)] shrink-0" />
+                    <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                      360° Threat Intelligence &amp; AI (Cloudflare + Gemini 4 + UniFi)
+                    </h3>
+                  </div>
+                  <p className="text-xs text-slate-600 dark:text-slate-400">
+                    Autonomous 6-hour security audits sealed with Windows DPAPI encryption. Uses strictly read-only credentials.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 text-xs font-mono tabular-nums">
+                  <StatusBadge
+                    label={`Carbon (24h): ${threatDto?.carbonUsedLast24h ?? 0} / ${threatPrefs.dailyCarbonCap === 0 ? '∞' : threatPrefs.dailyCarbonCap}`}
+                    variant="info"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between gap-4 pt-1">
+                <div>
+                  <div className="text-sm font-medium text-slate-800 dark:text-slate-200">
+                    Enable Scheduled 360° Threat &amp; Zero Trust Audits
+                  </div>
+                  <div className="text-xs text-slate-600 dark:text-slate-400">
+                    Sleep-safe background timer checks due cadence on the alert leader instance and recovers missed windows up to 24h.
+                  </div>
+                </div>
+                <ToggleSwitch
+                  checked={threatPrefs.enabled}
+                  onChange={(val) =>
+                    setThreatPrefs((prev) => ({ ...prev, enabled: val }))
+                  }
+                  activeColor="brand"
+                />
+              </div>
+
+              {/* DPAPI Sealed Secrets */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-3 border-t border-slate-200 dark:border-slate-800">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="text-xs font-mono text-slate-600 dark:text-slate-400">
+                      Cloudflare Read-Only API Token
+                    </label>
+                    <span className="text-[11px] font-mono text-slate-500">
+                      {threatDto?.cfConfigured
+                        ? `${threatDto.cfSource} • ${threatDto.maskedCfToken}`
+                        : 'Not set'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="password"
+                      value={cfTokenInput}
+                      onChange={(e) => setCfTokenInput(e.target.value)}
+                      placeholder={threatDto?.cfConfigured ? '•••••••• (enter new token to replace)' : 'Paste Cloudflare read-only API token'}
+                      className="flex-1 px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void handleTestThreatConnector('cloudflare')}
+                      disabled={threatTestingTarget !== null}
+                      className="btn-secondary text-xs whitespace-nowrap flex-shrink-0"
+                    >
+                      {threatTestingTarget === 'cloudflare' ? 'Testing...' : 'Test CF'}
+                    </button>
+                    {threatDto?.cfConfigured && threatDto.cfSource === 'dpapi' && (
+                      <button
+                        type="button"
+                        onClick={() => void handleSaveThreatSettings({ clearCfToken: true })}
+                        className="btn-ghost text-xs whitespace-nowrap flex-shrink-0"
+                        title="Clear stored DPAPI token"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-mono text-slate-600 dark:text-slate-400">
+                    Cloudflare Account ID (Auto-detected on Test)
+                  </label>
+                  <input
+                    type="text"
+                    value={cfAccountInput}
+                    onChange={(e) => setCfAccountInput(e.target.value)}
+                    placeholder="Optional override (e.g. fb9fa6bffe4bdd6f...)"
+                    className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="text-xs font-mono text-slate-600 dark:text-slate-400">
+                      Gemini API Key (Paid Tier for Log Privacy)
+                    </label>
+                    <span className="text-[11px] font-mono text-slate-500">
+                      {threatDto?.geminiConfigured
+                        ? `${threatDto.geminiSource} • ${threatDto.maskedGeminiKey}`
+                        : 'Not set'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="password"
+                      value={geminiKeyInput}
+                      onChange={(e) => setGeminiKeyInput(e.target.value)}
+                      placeholder={threatDto?.geminiConfigured ? '•••••••• (enter new key to replace)' : 'Paste AIza... Gemini Paid Tier key'}
+                      className="flex-1 px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void handleTestThreatConnector('gemini')}
+                      disabled={threatTestingTarget !== null}
+                      className="btn-secondary text-xs whitespace-nowrap flex-shrink-0"
+                    >
+                      {threatTestingTarget === 'gemini' ? 'Testing...' : 'Test Gemini'}
+                    </button>
+                    {threatDto?.geminiConfigured && threatDto.geminiSource === 'dpapi' && (
+                      <button
+                        type="button"
+                        onClick={() => void handleSaveThreatSettings({ clearGeminiKey: true })}
+                        className="btn-ghost text-xs whitespace-nowrap flex-shrink-0"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="text-xs font-mono text-slate-600 dark:text-slate-400">
+                      UniFi Integration X-API-Key &amp; Base URL
+                    </label>
+                    <span className="text-[11px] font-mono text-slate-500">
+                      {threatDto?.unifiConfigured
+                        ? `${threatDto.unifiSource} • ${threatDto.maskedUnifiKey}`
+                        : 'Optional'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="password"
+                      value={unifiKeyInput}
+                      onChange={(e) => setUnifiKeyInput(e.target.value)}
+                      placeholder={threatDto?.unifiConfigured ? '•••••••• (enter new X-API-Key)' : 'Paste UniFi CloudKey Integration API Key'}
+                      className="flex-1 px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void handleTestThreatConnector('unifi')}
+                      disabled={threatTestingTarget !== null}
+                      className="btn-secondary text-xs whitespace-nowrap flex-shrink-0"
+                    >
+                      {threatTestingTarget === 'unifi' ? 'Testing...' : 'Test UniFi'}
+                    </button>
+                    {threatDto?.unifiConfigured && threatDto.unifiSource === 'dpapi' && (
+                      <button
+                        type="button"
+                        onClick={() => void handleSaveThreatSettings({ clearUnifiKey: true })}
+                        className="btn-ghost text-xs whitespace-nowrap flex-shrink-0"
+                        title="Clear stored DPAPI key"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    type="text"
+                    value={threatPrefs.unifiBaseUrl}
+                    onChange={(e) =>
+                      setThreatPrefs((prev) => ({ ...prev, unifiBaseUrl: e.target.value }))
+                    }
+                    placeholder="https://ui.panoramadr.com"
+                    className="w-full px-3 py-1.5 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
+                  />
+                </div>
+              </div>
+
+              {/* Cadence, Models & Alert Controls (All CustomSelect) */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 pt-3 border-t border-slate-200 dark:border-slate-800">
+                <div>
+                  <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
+                    Audit Cadence
+                  </label>
+                  <CustomSelect
+                    value={String(threatPrefs.cadenceHours)}
+                    onChange={(val) =>
+                      setThreatPrefs((prev) => ({
+                        ...prev,
+                        cadenceHours: Number.parseInt(val, 10) || 6,
+                      }))
+                    }
+                    options={[
+                      { value: '3', label: 'Every 3 hours' },
+                      { value: '6', label: 'Every 6 hours (Recommended)' },
+                      { value: '12', label: 'Every 12 hours' },
+                      { value: '24', label: 'Every 24 hours' },
+                    ]}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
+                    Tier 1 Triage Model
+                  </label>
+                  <CustomSelect
+                    value={threatPrefs.tier1Model}
+                    onChange={(val) =>
+                      setThreatPrefs((prev) => ({ ...prev, tier1Model: val }))
+                    }
+                    options={[
+                      { value: 'gemini-4-hydrogen', label: 'Gemini 4 Hydrogen (Fast Default)' },
+                      { value: 'gemini-4-neon', label: 'Gemini 4 Neon (Balanced)' },
+                      { value: 'gemini-4-argon', label: 'Gemini 4 Argon (Legacy Alias)' },
+                    ]}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
+                    Tier 2 Forensic Escalation Model
+                  </label>
+                  <CustomSelect
+                    value={threatPrefs.tier2Model}
+                    onChange={(val) =>
+                      setThreatPrefs((prev) => ({ ...prev, tier2Model: val }))
+                    }
+                    options={[
+                      { value: 'gemini-4-carbon', label: 'Gemini 4 Carbon (Deep Sec Recommended)' },
+                      { value: 'gemini-4-neon', label: 'Gemini 4 Neon' },
+                    ]}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
+                    Daily Auto-Escalation Cap
+                  </label>
+                  <CustomSelect
+                    value={String(threatPrefs.dailyCarbonCap)}
+                    onChange={(val) =>
+                      setThreatPrefs((prev) => ({
+                        ...prev,
+                        dailyCarbonCap: Number.parseInt(val, 10),
+                      }))
+                    }
+                    options={[
+                      { value: '3', label: '3 Carbon escalations / 24h' },
+                      { value: '6', label: '6 Carbon escalations / 24h (Default)' },
+                      { value: '10', label: '10 Carbon escalations / 24h' },
+                      { value: '0', label: 'Unlimited (Manual/Auto Uncapped)' },
+                    ]}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
+                    Pushover Alert Threshold
+                  </label>
+                  <CustomSelect
+                    value={threatPrefs.pushoverThreshold}
+                    onChange={(val) =>
+                      setThreatPrefs((prev) => ({ ...prev, pushoverThreshold: val }))
+                    }
+                    options={[
+                      { value: 'MEDIUM', label: 'MEDIUM+ (Recommended)' },
+                      { value: 'HIGH', label: 'HIGH & CRITICAL Only' },
+                      { value: 'CRITICAL', label: 'CRITICAL Only' },
+                      { value: 'OFF', label: 'Disabled' },
+                    ]}
+                  />
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex flex-wrap sm:flex-nowrap items-center justify-between gap-2">
+                <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleSaveThreatSettings()}
+                    disabled={isSavingThreat}
+                    className="btn-primary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    <span>{isSavingThreat ? 'Saving...' : 'Save Threat Intel Settings'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => void handleTestThreatConnector('wsh')}
+                    disabled={threatTestingTarget !== null}
+                    className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                  >
+                    <Terminal className="w-3.5 h-3.5" />
+                    <span>{threatTestingTarget === 'wsh' ? 'Probing WSH...' : 'Test WSH SSH Probe'}</span>
+                  </button>
+                </div>
+
+                {threatFeedback && (
+                  <span
+                    className={`text-xs font-mono px-2.5 py-1 rounded border whitespace-nowrap flex-shrink-0 ${
+                      threatFeedback.tone === 'ok'
+                        ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
+                        : 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border-rose-500/30'
+                    }`}
+                  >
+                    {threatFeedback.text}
+                  </span>
+                )}
               </div>
             </div>
 

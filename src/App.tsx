@@ -14,6 +14,7 @@ import { TopologyStacksView } from './components/topology/TopologyStacksView';
 import { DietPiHostView } from './components/dietpi/DietPiHostView';
 import type { CronActionRequest } from './components/dietpi/CronManagerPanel';
 import { EdgePkiView } from './components/edge/EdgePkiView';
+import { ThreatIntelView } from './components/security/ThreatIntelView';
 import { ReleasePipelineView } from './components/releases/ReleasePipelineView';
 import { BuildTelemetryView } from './components/telemetry/BuildTelemetryView';
 import { BackupsRecoveryView } from './components/backups/BackupsRecoveryView';
@@ -50,7 +51,12 @@ import {
   BatchSmokeFailureReport,
   DeployTelemetryRunRecord,
   LocalDockerDiskUsage,
+  ThreatIntelSettingsViewDto,
+  ThreatAuditRunRow,
+  ThreatRunDetailDto,
+  ThreatActorRow,
 } from './lib/types';
+import { computeThreatSidebarBadge } from './lib/threat-utils';
 import { inferPageScopeFromJob } from './lib/stream-utils';
 import { buildSyncAlertEvaluationInput } from './lib/pushover-payload';
 import {
@@ -124,6 +130,11 @@ export const App: React.FC = () => {
   const [isPruningBuildKitCache, setIsPruningBuildKitCache] = useState<boolean>(false);
   const [batchSmokeFailureReport, setBatchSmokeFailureReport] =
     useState<BatchSmokeFailureReport | null>(null);
+  const [threatSettings, setThreatSettings] = useState<ThreatIntelSettingsViewDto | null>(null);
+  const [threatRuns, setThreatRuns] = useState<ThreatAuditRunRow[]>([]);
+  const [selectedThreatDetail, setSelectedThreatDetail] = useState<ThreatRunDetailDto | null>(null);
+  const [activeThreatActorsCount, setActiveThreatActorsCount] = useState<number>(0);
+  const [isRunningThreatAudit, setIsRunningThreatAudit] = useState<boolean>(false);
   const haltDeploymentsRef = useRef<boolean>(false);
   const currentRunningDeployJobIdRef = useRef<string | null>(null);
   const lastOptInSyncMsRef = useRef<number>(0);
@@ -827,11 +838,125 @@ export const App: React.FC = () => {
   }, [computeBackupIncidentKey, refreshAppliances, refreshBackupLedger, refreshSslStatus, refreshTunnelVersion, refreshOptIns, saveTabToDb]);
 
   // Initial sync on mount (all tiers once on startup + cached opt-ins hydration)
+  const refreshThreatIntelState = useCallback(async (preferredRunId?: string) => {
+    try {
+      const [settingsDto, runsList, activeActors] = await Promise.all([
+        invoke<ThreatIntelSettingsViewDto>('get_threat_intel_settings'),
+        invoke<ThreatAuditRunRow[]>('get_threat_audit_runs', { limit: 30 }),
+        invoke<ThreatActorRow[]>('get_threat_actors', { disposition: 'ACTIVE' }),
+      ]);
+      setThreatSettings(settingsDto);
+      const safeRuns = Array.isArray(runsList) ? runsList : [];
+      setThreatRuns(safeRuns);
+      setActiveThreatActorsCount(Array.isArray(activeActors) ? activeActors.length : 0);
+
+      const targetRunId = preferredRunId || safeRuns[0]?.id;
+      if (targetRunId) {
+        const detail = await invoke<ThreatRunDetailDto>('get_threat_run_detail', {
+          runId: targetRunId,
+        });
+        setSelectedThreatDetail(detail);
+      } else {
+        setSelectedThreatDetail(null);
+      }
+    } catch (err) {
+      console.warn('[PanoramaSRE] Failed refreshing 360 Threat Intel state:', err);
+    }
+  }, []);
+
+  const handleRunThreatAuditNow = useCallback(
+    async (windowHours: number, forceCarbon = false) => {
+      if (isRunningThreatAudit) return;
+      setIsRunningThreatAudit(true);
+      showActionFeedback(
+        forceCarbon
+          ? `Running 72h Deep Carbon threat audit (${windowHours}h window)...`
+          : `Running 360° Threat & Zero Trust audit (${windowHours}h window)...`,
+        'pending'
+      );
+      try {
+        const detail = await invoke<ThreatRunDetailDto>('run_threat_audit_now', {
+          windowHours,
+          forceCarbon,
+        });
+        setSelectedThreatDetail(detail);
+        await refreshThreatIntelState(detail.run.id);
+        showActionFeedback(
+          `360° Threat Audit finished: ${detail.run.overallSeverity} (${detail.run.intrusionVerdict})`,
+          detail.run.overallSeverity === 'HIGH' || detail.run.overallSeverity === 'CRITICAL'
+            ? 'error'
+            : 'success',
+          6000
+        );
+      } catch (err) {
+        showActionFeedback(`360° Threat Audit failed: ${String(err)}`, 'error', 7000);
+      } finally {
+        setIsRunningThreatAudit(false);
+      }
+    },
+    [isRunningThreatAudit, refreshThreatIntelState, showActionFeedback]
+  );
+
+  const handleEscalateThreatRunToCarbon = useCallback(
+    async (runId: string) => {
+      if (isRunningThreatAudit) return;
+      setIsRunningThreatAudit(true);
+      showActionFeedback('Escalating to 72h Deep Gemini 4 Carbon investigation...', 'pending');
+      try {
+        const detail = await invoke<ThreatRunDetailDto>('escalate_threat_run_to_carbon', {
+          runId,
+        });
+        setSelectedThreatDetail(detail);
+        await refreshThreatIntelState(detail.run.id);
+        showActionFeedback(
+          `Carbon Deep Investigation complete: ${detail.run.overallSeverity} (${detail.run.intrusionVerdict})`,
+          detail.run.overallSeverity === 'HIGH' || detail.run.overallSeverity === 'CRITICAL'
+            ? 'error'
+            : 'success',
+          6000
+        );
+      } catch (err) {
+        showActionFeedback(`Carbon escalation failed: ${String(err)}`, 'error', 7000);
+      } finally {
+        setIsRunningThreatAudit(false);
+      }
+    },
+    [isRunningThreatAudit, refreshThreatIntelState, showActionFeedback]
+  );
+
+  const handleSelectThreatRunId = useCallback(async (runId: string) => {
+    try {
+      const detail = await invoke<ThreatRunDetailDto>('get_threat_run_detail', { runId });
+      setSelectedThreatDetail(detail);
+    } catch (err) {
+      console.warn('[PanoramaSRE] Failed loading selected threat run detail:', err);
+    }
+  }, []);
+
   useEffect(() => {
     loadCachedOptIns();
     syncFullTelemetry(false, true, 'hud', true);
     refreshMcpStatus();
-  }, [loadCachedOptIns, syncFullTelemetry, refreshMcpStatus]);
+    void refreshThreatIntelState();
+  }, [loadCachedOptIns, syncFullTelemetry, refreshMcpStatus, refreshThreatIntelState]);
+
+  useEffect(() => {
+    let unlistenThreat: (() => void) | undefined;
+    listen<ThreatRunDetailDto>('sre://threat-audit-updated', (event) => {
+      const detail = event.payload;
+      if (detail?.run?.id) {
+        setSelectedThreatDetail(detail);
+        void refreshThreatIntelState(detail.run.id);
+      } else {
+        void refreshThreatIntelState();
+      }
+    }).then((unsub) => {
+      unlistenThreat = unsub;
+    });
+    return () => {
+      if (unlistenThreat) unlistenThreat();
+    };
+  }, [refreshThreatIntelState]);
 
   // Background 15-minute D1 SMS Opt-In sync with new-record desktop notification
   useEffect(() => {
@@ -2411,6 +2536,14 @@ export const App: React.FC = () => {
     [wshSnapshot, fleetCronSummary]
   );
   const dietpiPackagesCount = dietpiBadges.tabs.host.count;
+  const threatBadge = useMemo(
+    () =>
+      computeThreatSidebarBadge(
+        threatRuns[0] ?? selectedThreatDetail?.run ?? null,
+        activeThreatActorsCount
+      ),
+    [threatRuns, selectedThreatDetail, activeThreatActorsCount]
+  );
 
   const getWorkspaceRoot = useCallback(() => {
     if (apps.length > 0 && apps[0].workspacePath) {
@@ -2972,6 +3105,8 @@ export const App: React.FC = () => {
           topologyAlertSeverity={topologyBadges.severity}
           smokeFailureCount={smokeFailureCount}
           unreadOptInsCount={optInSnapshot?.unreadCount ?? 0}
+          threatAlertCount={threatBadge.count}
+          threatAlertSeverity={threatBadge.severity}
         />
 
         <main className="flex-1 flex flex-col h-full overflow-hidden relative">
@@ -3286,6 +3421,20 @@ export const App: React.FC = () => {
             />
           )}
 
+          {activeTab === 'security' && (
+            <ThreatIntelView
+              latestDetail={selectedThreatDetail}
+              runs={threatRuns}
+              settings={threatSettings}
+              isRunningAudit={isRunningThreatAudit}
+              onRunAuditNow={handleRunThreatAuditNow}
+              onEscalateRunToCarbon={handleEscalateThreatRunToCarbon}
+              onSelectRunId={handleSelectThreatRunId}
+              onRefreshAll={() => refreshThreatIntelState(selectedThreatDetail?.run?.id)}
+              onNavigateToSettings={() => setActiveTab('settings')}
+            />
+          )}
+
           {activeTab === 'settings' && (
             <SettingsView
               terminalTabs={terminalTabs}
@@ -3308,6 +3457,7 @@ export const App: React.FC = () => {
               onAbortJob={handleAbortJob}
               onClearTab={handleClearTab}
               onEmitSettingsStream={handleEmitSettingsStream}
+              onThreatSettingsChanged={(dto) => setThreatSettings(dto)}
             />
           )}
 
@@ -3340,6 +3490,7 @@ export const App: React.FC = () => {
             activeTab !== 'topology' &&
             activeTab !== 'dietpi' &&
             activeTab !== 'edge' &&
+            activeTab !== 'security' &&
             activeTab !== 'backups' &&
             activeTab !== 'smoke' &&
             activeTab !== 'opt-ins' &&

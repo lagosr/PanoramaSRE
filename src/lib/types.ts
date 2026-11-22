@@ -6,6 +6,7 @@ export type NavSectionId =
   | 'topology'
   | 'dietpi'
   | 'edge'
+  | 'security'
   | 'opt-ins'
   | 'backups'
   | 'smoke'
@@ -915,6 +916,230 @@ export interface SyncEvaluationSummaryDto {
   networkState: TrustedNetworkState;
   dispatchedBatches: number;
   notifiedKeys: string[];
+}
+
+// ============================================================================
+// 360° Threat Intelligence & Zero Trust Monitor DTOs
+// ============================================================================
+
+export type ThreatSeverity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' | string;
+
+export type IntrusionVerdict =
+  | 'NO_EVIDENCE'
+  | 'SUSPICIOUS_ACTIVITY'
+  | 'LIKELY_INTRUSION'
+  | 'CONFIRMED_COMPROMISE'
+  | string;
+
+export interface ThreatIntelPreferences {
+  enabled: boolean;
+  cadenceHours: number;
+  tier1Model: string;
+  tier2Model: string;
+  dailyCarbonCap: number;
+  pushoverThreshold: string;
+  unifiBaseUrl: string;
+}
+
+export interface ThreatIntelSettingsViewDto {
+  cfConfigured: boolean;
+  cfSource: 'dpapi' | 'env_local_keys' | 'env' | 'none' | string;
+  maskedCfToken: string;
+  cfAccountId: string;
+  geminiConfigured: boolean;
+  geminiSource: 'dpapi' | 'env_local_keys' | 'env' | 'none' | string;
+  maskedGeminiKey: string;
+  unifiConfigured: boolean;
+  unifiSource: 'dpapi' | 'env_local_keys' | 'env' | 'none' | string;
+  maskedUnifiKey: string;
+  preferences: ThreatIntelPreferences;
+  carbonUsedLast24h: number;
+  windowsAutostartEnabled: boolean;
+}
+
+export interface SaveThreatIntelSettingsInput {
+  cfApiToken?: string | null;
+  cfAccountId?: string | null;
+  geminiApiKey?: string | null;
+  unifiApiKey?: string | null;
+  clearCfToken?: boolean | null;
+  clearGeminiKey?: boolean | null;
+  clearUnifiKey?: boolean | null;
+  preferences: ThreatIntelPreferences;
+}
+
+export interface ThreatAuditRunRow {
+  id: string;
+  startedAt: string;
+  completedAt?: string | null;
+  windowStart: string;
+  windowEnd: string;
+  windowHours: number;
+  triggerSource: string;
+  status: string;
+  overallSeverity: ThreatSeverity;
+  intrusionVerdict: IntrusionVerdict;
+  tier1Model?: string | null;
+  tier2Model?: string | null;
+  escalatedToTier2: boolean;
+  escalationReasonsJson?: string | null;
+  collectorStatusesJson?: string | null;
+  zonesSummaryJson?: string | null;
+  zeroTrustSummaryJson?: string | null;
+  internalSummaryJson?: string | null;
+  geminiBriefJson?: string | null;
+  tokenUsageJson?: string | null;
+  errorMessage?: string | null;
+}
+
+export interface ThreatActorRow {
+  id: string;
+  actorType: string;
+  ipAddress?: string | null;
+  asn?: string | null;
+  asOrg?: string | null;
+  country?: string | null;
+  intelTagsJson: string;
+  intelSummary?: string | null;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  runsSeen: number;
+  totalRequests: number;
+  totalOrigin200s: number;
+  highestSeverity: ThreatSeverity;
+  latestClassification?: string | null;
+  targetHostsJson: string;
+  samplePathsJson: string;
+  disposition: 'ACTIVE' | 'ALLOWLISTED' | 'RESOLVED' | string;
+}
+
+export interface ThreatFindingRow {
+  id: string;
+  runId: string;
+  sourceLayer: string;
+  ruleId: string;
+  severity: ThreatSeverity;
+  category: string;
+  title: string;
+  summary: string;
+  host?: string | null;
+  actorIp?: string | null;
+  actorAsn?: string | null;
+  rayIdsJson: string;
+  evidenceJson: string;
+  createdAt: string;
+}
+
+export interface ThreatRunDetailDto {
+  run: ThreatAuditRunRow;
+  findings: ThreatFindingRow[];
+}
+
+export interface LanClientBaselineRow {
+  macAddress: string;
+  ipAddress?: string | null;
+  hostname?: string | null;
+  networkVlan?: string | null;
+  ouiVendor?: string | null;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  isTrusted: boolean;
+  label: string;
+}
+
+export interface ThreatAllowlistRow {
+  id: string;
+  entryType: string;
+  value: string;
+  label: string;
+  createdAt: string;
+}
+
+export interface CollectorStatuses {
+  cloudflare: string;
+  unifi: string;
+  wshAuth: string;
+}
+
+export interface CfZoneSummary {
+  id: string;
+  name: string;
+  plan: string;
+  totalRequests: number;
+  totalBytes: number;
+  error4xx5xx: number;
+  firewallEventsCount: number;
+  untrustedOrigin200s: number;
+}
+
+export interface CfTunnelInfo {
+  id: string;
+  name: string;
+  status: string;
+  activeConnections: number;
+}
+
+export interface ZeroTrustSummary {
+  accessAppCount: number;
+  accessAllowed: number;
+  accessDenied: number;
+  tunnels: CfTunnelInfo[];
+  auditMutations: number;
+}
+
+export interface InternalNetworkSummary {
+  unifiDevicesTotal: number;
+  unifiOfflineDevices: string[];
+  unifiClientsTotal: number;
+  newUnknownLanMacs: string[];
+  unifiPoliciesTotal: number;
+  panoramaAuthAvailable: boolean;
+  panoramaAuthAnomalies: number;
+  sshAnomalyCount: number;
+  unifiSiemCefEvents: number;
+  unifiCefSecurityAlerts: number;
+}
+
+export interface GeminiCampaignDto {
+  name: string;
+  severity: ThreatSeverity;
+  sourceLayers: string[];
+  targetHosts: string[];
+  pattern: string;
+  countEstimate: number;
+  sampleRayIds: string[];
+  suggestedWafExpression?: string | null;
+}
+
+export interface GeminiActorAssessmentDto {
+  identifier: string;
+  classification: string;
+  threatScore: number;
+  intentSummary: string;
+  isRepeatEscalating: boolean;
+}
+
+export interface GeminiActionDto {
+  priority: 'IMMEDIATE' | 'SOON' | 'MONITOR' | string;
+  surface: string;
+  action: string;
+  rationale: string;
+  wafRuleSnippet?: string | null;
+}
+
+export interface GeminiBriefDto {
+  overallSeverity: ThreatSeverity;
+  intrusionVerdict: IntrusionVerdict;
+  escalateToTier2: boolean;
+  escalationReasons: string[];
+  suspectIps: string[];
+  suspectMacs: string[];
+  executiveSummary: string;
+  zeroTrustAssessment: string;
+  internalNetworkAssessment: string;
+  attackCampaigns: GeminiCampaignDto[];
+  actorAssessments: GeminiActorAssessmentDto[];
+  recommendedActions: GeminiActionDto[];
 }
 
 

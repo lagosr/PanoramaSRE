@@ -9,6 +9,7 @@ export const PAGE_SCOPE_BADGE_LABELS: Record<NavSectionId, string> = {
   topology: 'TOPO',
   dietpi: 'HOST',
   edge: 'SSL',
+  security: 'SEC',
   backups: 'DR',
   smoke: 'SMOKE',
   'opt-ins': 'OPTIN',
@@ -48,6 +49,7 @@ export function inferPageScopeFromJob(
     return 'dietpi';
   }
   if (lowerId.startsWith('ssl-')) return 'edge';
+  if (lowerId.startsWith('threat-') || lowerId.startsWith('security-')) return 'security';
   if (
     lowerId.startsWith('gfs-backup-') ||
     lowerId.startsWith('backup-app-') ||
