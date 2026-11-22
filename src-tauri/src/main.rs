@@ -997,9 +997,10 @@ mod tests {
 
     #[test]
     fn test_scrubber_redacts_threat_intel_secrets() {
-        let raw = "CLOUDFLARE_API_TOKEN=cf_tok_secret123 GEMINI_API_KEY=AIzaSyDummyKeyValue1234567890ABCDEFGHIJK AQ.DummyTestKey1234567890ABCDEFGHIJKLMN UNIFI_API_KEY=\"uni_secret_abc\" header x-goog-api-key: AIzaSyAnotherKeyValue1234567890ABCDEFG X-API-Key: unifi_hdr_999";
+        let raw = "CLOUDFLARE_API_TOKEN=cf_tok_secret123 cfat_DummyAccountToken1234567890ABCDEF GEMINI_API_KEY=AIzaSyDummyKeyValue1234567890ABCDEFGHIJK AQ.DummyTestKey1234567890ABCDEFGHIJKLMN UNIFI_API_KEY=\"uni_secret_abc\" header x-goog-api-key: AIzaSyAnotherKeyValue1234567890ABCDEFG X-API-Key: unifi_hdr_999";
         let scrubbed = scrub_secrets(raw);
         assert!(!scrubbed.contains("cf_tok_secret123"));
+        assert!(!scrubbed.contains("cfat_DummyAccountToken1234567890ABCDEF"));
         assert!(!scrubbed.contains("AIzaSyDummyKeyValue1234567890ABCDEFGHIJK"));
         assert!(!scrubbed.contains("AQ.DummyTestKey1234567890ABCDEFGHIJKLMN"));
         assert!(!scrubbed.contains("uni_secret_abc"));
