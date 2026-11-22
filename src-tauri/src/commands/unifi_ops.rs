@@ -173,7 +173,12 @@ pub fn parse_unifi_policies_json(raw: &Value) -> Vec<UnifiPolicyDto> {
         let Some(obj) = item.as_object() else { continue };
         let Some(id) = pick_opt_str(obj, &["id"]) else { continue };
         let name = pick_opt_str(obj, &["name", "description"]).unwrap_or_else(|| id.clone());
-        let action = pick_opt_str(obj, &["action", "type"]).unwrap_or_else(|| "UNKNOWN".to_string());
+        let action = obj
+            .get("action")
+            .and_then(|a| a.as_object())
+            .and_then(|o| pick_opt_str(o, &["type"]))
+            .or_else(|| pick_opt_str(obj, &["action", "type"]))
+            .unwrap_or_else(|| "UNKNOWN".to_string());
         let enabled = obj.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
         out.push(UnifiPolicyDto {
             id,
@@ -226,6 +231,44 @@ async fn fetch_unifi_json(
     Ok((status, val))
 }
 
+async fn fetch_unifi_paginated<T, F>(
+    client: &reqwest::Client,
+    url_base: &str,
+    api_key: &str,
+    page_limit: usize,
+    max_pages: usize,
+    parser: F,
+) -> Result<Vec<T>, String>
+where
+    F: Fn(&Value) -> Vec<T>,
+{
+    let limit = page_limit.clamp(1, 200);
+    let mut out = Vec::new();
+    let mut offset = 0usize;
+    let sep = if url_base.contains('?') { '&' } else { '?' };
+
+    for _ in 0..max_pages.max(1) {
+        let page_url = format!("{}{}offset={}&limit={}", url_base, sep, offset, limit);
+        let (_, val) = fetch_unifi_json(client, &page_url, api_key).await?;
+        let batch_len = extract_data_items(&val).len();
+        out.extend(parser(&val));
+
+        let total_count = val.get("totalCount").and_then(|v| v.as_u64()).map(|v| v as usize);
+        offset += batch_len;
+
+        if batch_len < limit {
+            break;
+        }
+        if let Some(total) = total_count {
+            if offset >= total {
+                break;
+            }
+        }
+    }
+
+    Ok(out)
+}
+
 pub async fn collect_unifi_snapshot(
     base_url: &str,
     api_key: &str,
@@ -243,7 +286,12 @@ pub async fn collect_unifi_snapshot(
         .unwrap_or("unknown")
         .to_string();
 
-    let (_, sites_val) = fetch_unifi_json(client, &format!("{}/sites?limit=25", prefix), api_key).await?;
+    let (_, sites_val) = fetch_unifi_json(
+        client,
+        &format!("{}/sites?offset=0&limit=25", prefix),
+        api_key,
+    )
+    .await?;
     let sites = parse_unifi_sites_json(&sites_val);
 
     let mut devices = Vec::new();
@@ -251,30 +299,41 @@ pub async fn collect_unifi_snapshot(
     let mut policies = Vec::new();
 
     for site in &sites {
-        let (_, dev_val) = fetch_unifi_json(
-            client,
-            &format!("{}/sites/{}/devices?limit=100", prefix, site.id),
-            api_key,
-        )
-        .await?;
-        devices.extend(parse_unifi_devices_json(&dev_val));
+        devices.extend(
+            fetch_unifi_paginated(
+                client,
+                &format!("{}/sites/{}/devices", prefix, site.id),
+                api_key,
+                100,
+                5,
+                parse_unifi_devices_json,
+            )
+            .await?,
+        );
 
-        let (_, cli_val) = fetch_unifi_json(
-            client,
-            &format!("{}/sites/{}/clients?limit=250", prefix, site.id),
-            api_key,
-        )
-        .await?;
-        clients.extend(parse_unifi_clients_json(&cli_val));
+        clients.extend(
+            fetch_unifi_paginated(
+                client,
+                &format!("{}/sites/{}/clients", prefix, site.id),
+                api_key,
+                200,
+                5,
+                parse_unifi_clients_json,
+            )
+            .await?,
+        );
 
-        if let Ok((_, pol_val)) = fetch_unifi_json(
+        if let Ok(pols) = fetch_unifi_paginated(
             client,
-            &format!("{}/sites/{}/firewall/policies?limit=200", prefix, site.id),
+            &format!("{}/sites/{}/firewall/policies", prefix, site.id),
             api_key,
+            200,
+            3,
+            parse_unifi_policies_json,
         )
         .await
         {
-            policies.extend(parse_unifi_policies_json(&pol_val));
+            policies.extend(pols);
         }
     }
 

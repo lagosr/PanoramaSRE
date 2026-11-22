@@ -1049,11 +1049,15 @@ mod tests {
         assert_eq!(clis[0].network_name.as_deref(), Some("Adult Secure"));
 
         let pol_json = serde_json::json!({
-            "data": [{ "id": "pol-1", "name": "Block Compute -> Gateway", "action": "BLOCK", "enabled": true }]
+            "data": [
+                { "id": "pol-1", "name": "Block Compute -> Gateway", "action": { "type": "BLOCK" }, "enabled": true },
+                { "id": "pol-2", "name": "Legacy Flat Policy", "action": "ALLOW", "enabled": true }
+            ]
         });
         let pols = parse_unifi_policies_json(&pol_json);
-        assert_eq!(pols.len(), 1);
+        assert_eq!(pols.len(), 2);
         assert_eq!(pols[0].action, "BLOCK");
+        assert_eq!(pols[1].action, "ALLOW");
     }
 
     #[test]
