@@ -64,6 +64,46 @@ fn is_safe_app_segment(app_name: &str) -> bool {
         && !app_name.contains('\\')
 }
 
+#[cfg(windows)]
+fn is_pid_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    if pid == std::process::id() {
+        return true;
+    }
+
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    const STILL_ACTIVE: u32 = 259;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn OpenProcess(
+            dw_desired_access: u32,
+            b_inherit_handle: i32,
+            dw_process_id: u32,
+        ) -> *mut core::ffi::c_void;
+        fn GetExitCodeProcess(h_process: *mut core::ffi::c_void, lp_exit_code: *mut u32) -> i32;
+        fn CloseHandle(h_object: *mut core::ffi::c_void) -> i32;
+    }
+
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return false;
+        }
+        let mut exit_code: u32 = 0;
+        let ok = GetExitCodeProcess(handle, &mut exit_code);
+        CloseHandle(handle);
+        ok != 0 && exit_code == STILL_ACTIVE
+    }
+}
+
+#[cfg(not(windows))]
+fn is_pid_alive(pid: u32) -> bool {
+    pid == std::process::id()
+}
+
 fn resolve_app_backup_dir(
     app_name: &str,
     workspace_root: &Path,
@@ -370,76 +410,330 @@ pub fn read_backup_ledger_from_paths(
     let mut effective_last_run_status = parsed.first().map(|r| r.status.clone());
     let mut effective_records = records.clone();
 
-    if let Some(last_run_utc) = effective_last_run_timestamp
-        .as_deref()
-        .and_then(parse_record_utc)
-    {
-        let mut manual_snapshot_details: Vec<AppBackupDetail> = Vec::new();
-        let mut latest_manual_utc: Option<chrono::DateTime<chrono::Utc>> = None;
+    const STUCK_RUN_THRESHOLD_SECS: i64 = 20 * 60;
 
-        for detail in &mut latest_app_details {
-            if let Some((file_name, size_bytes, archive_utc)) = find_newer_manual_snapshot(
-                &detail.app_name,
-                last_run_utc,
-                workspace_root,
-                backups_root,
-            ) {
-                detail.file = Some(file_name.clone());
-                detail.size_bytes = Some(size_bytes);
-                if detail.status.eq_ignore_ascii_case("failed") {
-                    detail.status = "Success".to_string();
-                    detail.error = None;
-                    detail.duration_seconds = None;
+    #[derive(Debug, Clone, Deserialize)]
+    struct BackupRunStateFile {
+        pid: Option<u32>,
+        started_at: Option<String>,
+        current_app: Option<String>,
+    }
+
+    let last_history_run_utc = effective_last_run_timestamp
+        .as_deref()
+        .and_then(parse_record_utc);
+    let last_run_local_date = effective_last_run_timestamp
+        .as_deref()
+        .map(record_local_date_str)
+        .unwrap_or_default();
+
+    let mut in_flight_active = false;
+    let mut stuck_or_crashed: Option<(String, String, String)> = None;
+
+    if let Some(run_state_path) = history_path.parent().map(|p| p.join("backup_run_state.json")) {
+        if run_state_path.exists() {
+            if let Ok(state_raw) = fs::read_to_string(&run_state_path) {
+                let state_clean = state_raw.trim_start_matches('\u{feff}');
+                if let Ok(state) = serde_json::from_str::<BackupRunStateFile>(state_clean) {
+                    if let Some(started_str) = state.started_at.as_deref() {
+                        if let Some(started_utc) = parse_record_utc(started_str) {
+                            let superseded = last_history_run_utc
+                                .map(|l| l >= started_utc)
+                                .unwrap_or(false);
+                            if !superseded {
+                                let now_utc = now_local.with_timezone(&chrono::Utc);
+                                let elapsed_secs = (now_utc - started_utc).num_seconds();
+                                let pid_val = state.pid.unwrap_or(0);
+                                let pid_alive = state.pid.map(is_pid_alive).unwrap_or(false);
+                                let current_app = state
+                                    .current_app
+                                    .clone()
+                                    .filter(|s| !s.trim().is_empty())
+                                    .unwrap_or_else(|| "Unknown".to_string());
+
+                                if pid_alive
+                                    && (-30..=STUCK_RUN_THRESHOLD_SECS).contains(&elapsed_secs)
+                                {
+                                    in_flight_active = true;
+                                } else {
+                                    let diag = if pid_alive {
+                                        format!(
+                                            "Automated backup stuck on {} for {}m (PID {})",
+                                            current_app,
+                                            (elapsed_secs / 60).max(1),
+                                            pid_val
+                                        )
+                                    } else {
+                                        format!(
+                                            "Automated backup terminated unexpectedly while processing {}",
+                                            current_app
+                                        )
+                                    };
+                                    stuck_or_crashed = Some((
+                                        started_utc.to_rfc3339(),
+                                        diag,
+                                        current_app,
+                                    ));
+                                }
+                            }
+                        }
+                    }
                 }
-                manual_snapshot_details.push(detail.clone());
-                latest_manual_utc = Some(match latest_manual_utc {
-                    Some(prev) if prev >= archive_utc => prev,
-                    _ => archive_utc,
-                });
+            }
+        }
+    }
+
+    let mut synthesized_manual_day: Option<String> = None;
+
+    if !in_flight_active {
+        if let Some(last_run_utc) = last_history_run_utc {
+            let mut matched_snapshots: Vec<(
+                usize,
+                String,
+                u64,
+                chrono::DateTime<chrono::Utc>,
+                String,
+            )> = Vec::new();
+            let mut latest_manual_utc: Option<chrono::DateTime<chrono::Utc>> = None;
+
+            for (idx, detail) in latest_app_details.iter().enumerate() {
+                if detail.status.eq_ignore_ascii_case("skipped") {
+                    continue;
+                }
+                if let Some((file_name, size_bytes, archive_utc)) = find_newer_manual_snapshot(
+                    &detail.app_name,
+                    last_run_utc,
+                    workspace_root,
+                    backups_root,
+                ) {
+                    let archive_local_date = archive_utc
+                        .with_timezone(&chrono::Local)
+                        .format("%Y-%m-%d")
+                        .to_string();
+                    matched_snapshots.push((
+                        idx,
+                        file_name,
+                        size_bytes,
+                        archive_utc,
+                        archive_local_date,
+                    ));
+                    latest_manual_utc = Some(match latest_manual_utc {
+                        Some(prev) if prev >= archive_utc => prev,
+                        _ => archive_utc,
+                    });
+                }
+            }
+
+            if let Some(manual_utc) = latest_manual_utc {
+                let manual_local_date = manual_utc
+                    .with_timezone(&chrono::Local)
+                    .format("%Y-%m-%d")
+                    .to_string();
+                let is_new_day =
+                    !last_run_local_date.is_empty() && manual_local_date != last_run_local_date;
+                synthesized_manual_day = Some(manual_local_date.clone());
+
+                let mut matched_for_day = vec![false; latest_app_details.len()];
+                let mut manual_snapshot_details: Vec<AppBackupDetail> = Vec::new();
+
+                for (idx, file_name, size_bytes, _archive_utc, archive_local_date) in
+                    matched_snapshots
+                {
+                    let detail = &mut latest_app_details[idx];
+                    detail.file = Some(file_name);
+                    detail.size_bytes = Some(size_bytes);
+                    if detail.status.eq_ignore_ascii_case("failed") {
+                        detail.status = "Success".to_string();
+                        detail.error = None;
+                        detail.duration_seconds = None;
+                    }
+                    if !is_new_day || archive_local_date == manual_local_date {
+                        matched_for_day[idx] = true;
+                        manual_snapshot_details.push(detail.clone());
+                    }
+                }
+
+                if is_new_day {
+                    let mut missing_count = 0usize;
+                    for (idx, detail) in latest_app_details.iter_mut().enumerate() {
+                        if detail.status.eq_ignore_ascii_case("skipped") {
+                            continue;
+                        }
+                        if !matched_for_day[idx] {
+                            missing_count += 1;
+                            detail.status = "Failed".to_string();
+                            detail.error = Some(
+                                if let Some((_, ref stuck_diag, ref stuck_app)) = stuck_or_crashed {
+                                    if detail.app_name.eq_ignore_ascii_case(stuck_app) {
+                                        stuck_diag.clone()
+                                    } else {
+                                        format!(
+                                            "Missing {} backup snapshot (run stalled/interrupted on {})",
+                                            manual_local_date, stuck_app
+                                        )
+                                    }
+                                } else {
+                                    format!(
+                                        "Missing {} backup snapshot (run interrupted or hung before backing up {})",
+                                        manual_local_date, detail.app_name
+                                    )
+                                },
+                            );
+                            manual_snapshot_details.push(detail.clone());
+                        }
+                    }
+
+                    let resolved_status = if missing_count > 0
+                        || latest_app_details
+                            .iter()
+                            .any(|d| d.status.eq_ignore_ascii_case("failed"))
+                    {
+                        "Failed".to_string()
+                    } else {
+                        "Success".to_string()
+                    };
+                    let synthetic_run_type = if resolved_status == "Failed" {
+                        "Incomplete Run".to_string()
+                    } else {
+                        "Manual Snapshot".to_string()
+                    };
+                    let manual_total_size: u64 = manual_snapshot_details
+                        .iter()
+                        .filter(|d| d.status.eq_ignore_ascii_case("success"))
+                        .filter_map(|d| d.size_bytes)
+                        .sum();
+                    let manual_ts = manual_utc.to_rfc3339();
+                    let destination = if resolved_status == "Failed" {
+                        "Google Drive DatabaseBackups (Incomplete Run)".to_string()
+                    } else {
+                        "Google Drive DatabaseBackups (Manual Snapshot)".to_string()
+                    };
+
+                    parsed.insert(
+                        0,
+                        BackupRecord {
+                            timestamp: manual_ts.clone(),
+                            status: resolved_status.clone(),
+                            run_type: Some(synthetic_run_type.clone()),
+                            total_apps: manual_snapshot_details.len() as u32,
+                            total_size_bytes: if manual_total_size > 0 {
+                                Some(manual_total_size)
+                            } else {
+                                None
+                            },
+                            destination,
+                            app_details: manual_snapshot_details,
+                            pruned_files: HashMap::new(),
+                        },
+                    );
+                    parsed.truncate(50);
+
+                    effective_last_run_status = Some(resolved_status.clone());
+                    effective_last_run_timestamp = Some(manual_ts.clone());
+                    effective_records.push(serde_json::json!({
+                        "timestamp": manual_ts,
+                        "status": resolved_status,
+                        "run_type": synthetic_run_type
+                    }));
+                } else {
+                    let any_remaining_failed = latest_app_details
+                        .iter()
+                        .any(|d| d.status.eq_ignore_ascii_case("failed"));
+                    let resolved_status = if any_remaining_failed {
+                        "Failed".to_string()
+                    } else {
+                        "Success".to_string()
+                    };
+                    let manual_total_size: u64 = manual_snapshot_details
+                        .iter()
+                        .filter_map(|d| d.size_bytes)
+                        .sum();
+                    let manual_ts = manual_utc.to_rfc3339();
+
+                    parsed.insert(
+                        0,
+                        BackupRecord {
+                            timestamp: manual_ts.clone(),
+                            status: resolved_status.clone(),
+                            run_type: Some("Manual Snapshot".to_string()),
+                            total_apps: manual_snapshot_details.len() as u32,
+                            total_size_bytes: if manual_total_size > 0 {
+                                Some(manual_total_size)
+                            } else {
+                                None
+                            },
+                            destination: "Google Drive DatabaseBackups (Manual Snapshot)"
+                                .to_string(),
+                            app_details: manual_snapshot_details,
+                            pruned_files: HashMap::new(),
+                        },
+                    );
+                    parsed.truncate(50);
+
+                    effective_last_run_status = Some(resolved_status.clone());
+                    effective_last_run_timestamp = Some(manual_ts.clone());
+                    effective_records.push(serde_json::json!({
+                        "timestamp": manual_ts,
+                        "status": resolved_status,
+                        "run_type": "Manual Snapshot"
+                    }));
+                }
             }
         }
 
-        if let Some(manual_utc) = latest_manual_utc {
-            let any_remaining_failed = latest_app_details
-                .iter()
-                .any(|d| d.status.eq_ignore_ascii_case("failed"));
-            let resolved_status = if any_remaining_failed {
-                "Failed".to_string()
-            } else {
-                "Success".to_string()
-            };
-            let manual_total_size: u64 = manual_snapshot_details
-                .iter()
-                .filter_map(|d| d.size_bytes)
-                .sum();
-            let manual_ts = manual_utc.to_rfc3339();
+        if let Some((stuck_ts, stuck_diag, stuck_app)) = stuck_or_crashed {
+            let stuck_local_date = record_local_date_str(&stuck_ts);
+            let already_handled_by_incomplete =
+                synthesized_manual_day.as_deref() == Some(stuck_local_date.as_str())
+                    && effective_last_run_status.as_deref() == Some("Failed");
+            if !already_handled_by_incomplete {
+                let mut stuck_details: Vec<AppBackupDetail> = Vec::new();
+                for detail in &mut latest_app_details {
+                    if detail.status.eq_ignore_ascii_case("skipped") {
+                        continue;
+                    }
+                    let has_today_file = detail
+                        .file
+                        .as_deref()
+                        .map(|f| f.contains(&stuck_local_date))
+                        .unwrap_or(false);
+                    if detail.app_name.eq_ignore_ascii_case(&stuck_app) || !has_today_file {
+                        detail.status = "Failed".to_string();
+                        detail.error = Some(if !has_today_file
+                            && !detail.app_name.eq_ignore_ascii_case(&stuck_app)
+                        {
+                            format!("Not reached ({})", stuck_diag)
+                        } else {
+                            stuck_diag.clone()
+                        });
+                    }
+                    stuck_details.push(detail.clone());
+                }
 
-            parsed.insert(
-                0,
-                BackupRecord {
-                    timestamp: manual_ts.clone(),
-                    status: resolved_status.clone(),
-                    run_type: Some("Manual Snapshot".to_string()),
-                    total_apps: manual_snapshot_details.len() as u32,
-                    total_size_bytes: if manual_total_size > 0 {
-                        Some(manual_total_size)
-                    } else {
-                        None
+                parsed.insert(
+                    0,
+                    BackupRecord {
+                        timestamp: stuck_ts.clone(),
+                        status: "Failed".to_string(),
+                        run_type: Some("Incomplete Run".to_string()),
+                        total_apps: stuck_details.len() as u32,
+                        total_size_bytes: None,
+                        destination: "Google Drive DatabaseBackups (Stuck / Interrupted)"
+                            .to_string(),
+                        app_details: stuck_details,
+                        pruned_files: HashMap::new(),
                     },
-                    destination: "Google Drive DatabaseBackups (Manual Snapshot)".to_string(),
-                    app_details: manual_snapshot_details,
-                    pruned_files: HashMap::new(),
-                },
-            );
-            parsed.truncate(50);
+                );
+                parsed.truncate(50);
 
-            effective_last_run_status = Some(resolved_status.clone());
-            effective_last_run_timestamp = Some(manual_ts.clone());
-            effective_records.push(serde_json::json!({
-                "timestamp": manual_ts,
-                "status": resolved_status,
-                "run_type": "Manual Snapshot"
-            }));
+                effective_last_run_status = Some("Failed".to_string());
+                effective_last_run_timestamp = Some(stuck_ts.clone());
+                effective_records.push(serde_json::json!({
+                    "timestamp": stuck_ts,
+                    "status": "Failed",
+                    "run_type": "Incomplete Run"
+                }));
+            }
         }
     }
 

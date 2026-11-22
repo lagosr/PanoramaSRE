@@ -748,6 +748,9 @@ export const App: React.FC = () => {
         hourlyLedger = ledgerRes;
         hourlySsl = sslRes;
         hourlyTunnel = tunnelRes;
+      } else {
+        // Refresh local GFS backup ledger & run-state watchdog on every Tier 3 tick (zero network/SSH)
+        hourlyLedger = await refreshBackupLedger();
       }
 
       // 7. Evaluate edge-triggered Pushover notifications (coalesced across this sync tick; paused if roaming)
@@ -1199,6 +1202,7 @@ export const App: React.FC = () => {
       args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', './db-manager.ps1', 'Backup'],
       workingDir: app.workspacePath,
       lockType: 'LocalBackupIo',
+      timeoutSecs: 600,
       onLine: (line) => {
         appendTerminalLine(jobId, line);
       },
@@ -2191,6 +2195,7 @@ export const App: React.FC = () => {
         '-AutomatedRun',
       ],
       lockType: 'LocalBackupIo',
+      timeoutSecs: 1800,
       onLine: (line) => {
         appendTerminalLine(jobId, line);
       },

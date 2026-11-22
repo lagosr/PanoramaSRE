@@ -416,6 +416,7 @@ mod tests {
 
     #[test]
     fn test_backup_ledger_reconciles_manual_snapshots_and_same_day_recovery() {
+        use chrono::{Datelike, TimeZone};
         use panorama_sre_lib::commands::ledger::read_backup_ledger_from_paths;
         use std::fs;
         use std::time::{SystemTime, UNIX_EPOCH};
@@ -597,6 +598,113 @@ mod tests {
         assert_eq!(retried.last_run_status.as_deref(), Some("Success"));
         assert_eq!(retried.failed_runs_7d, 0);
         assert_eq!(retried.daily_pips_7d.last().unwrap().status, "Success");
+
+        // 6. Cross-day partial archives (next day has only 1 of 2 apps -> Incomplete Run / Failed)
+        let tomorrow = today + chrono::Duration::days(1);
+        let tomorrow_str = tomorrow.format("%Y-%m-%d").to_string();
+        let next_day_local = chrono::Local
+            .with_ymd_and_hms(
+                tomorrow.year(),
+                tomorrow.month(),
+                tomorrow.day(),
+                8,
+                0,
+                0,
+            )
+            .single()
+            .unwrap_or(now_local + chrono::Duration::days(1));
+
+        let partial_next_day_file = energy_backup_dir.join(format!(
+            "db-backup_v4_{}_02-00-05.tar.gz",
+            tomorrow_str
+        ));
+        fs::write(&partial_next_day_file, payload).unwrap();
+
+        let cross_day_partial =
+            read_backup_ledger_from_paths(&history_path, &ws_root, &backups_root, next_day_local)
+                .unwrap();
+        assert_eq!(cross_day_partial.last_run_status.as_deref(), Some("Failed"));
+        assert!(cross_day_partial.failed_runs_7d >= 1);
+        assert_eq!(
+            cross_day_partial.daily_pips_7d.last().unwrap().status,
+            "Failed"
+        );
+        let spendy_partial = cross_day_partial
+            .latest_app_details
+            .iter()
+            .find(|d| d.app_name == "SpendyLedger")
+            .unwrap();
+        assert_eq!(spendy_partial.status, "Failed");
+        assert_eq!(
+            cross_day_partial.recent_records[0].run_type.as_deref(),
+            Some("Incomplete Run")
+        );
+
+        // 7. Active in-flight backup_run_state.json suppresses premature partial-archive failure mid-run
+        let run_state_path = temp_root.join("backup_run_state.json");
+        let active_started_at = (next_day_local.with_timezone(&chrono::Utc) - chrono::Duration::minutes(2)).to_rfc3339();
+        fs::write(
+            &run_state_path,
+            serde_json::json!({
+                "pid": std::process::id(),
+                "started_at": active_started_at,
+                "current_app": "SpendyLedger"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let in_flight =
+            read_backup_ledger_from_paths(&history_path, &ws_root, &backups_root, next_day_local)
+                .unwrap();
+        assert_eq!(in_flight.last_run_status.as_deref(), Some("Success"));
+
+        // 8. Stale/stuck backup_run_state.json (> 20m) flags Failed with stuck app error
+        let stuck_started_at = (next_day_local.with_timezone(&chrono::Utc) - chrono::Duration::minutes(25)).to_rfc3339();
+        fs::write(
+            &run_state_path,
+            serde_json::json!({
+                "pid": std::process::id(),
+                "started_at": stuck_started_at,
+                "current_app": "SpendyLedger"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let stuck =
+            read_backup_ledger_from_paths(&history_path, &ws_root, &backups_root, next_day_local)
+                .unwrap();
+        assert_eq!(stuck.last_run_status.as_deref(), Some("Failed"));
+        assert_eq!(stuck.daily_pips_7d.last().unwrap().status, "Failed");
+        let spendy_stuck = stuck
+            .latest_app_details
+            .iter()
+            .find(|d| d.app_name == "SpendyLedger")
+            .unwrap();
+        assert_eq!(spendy_stuck.status, "Failed");
+        assert!(spendy_stuck
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("SpendyLedger"));
+
+        // 9. Completing remaining app archive & removing run_state clears partial failure to Success
+        let _ = fs::remove_file(&run_state_path);
+        let spendy_next_day_file = spendy_backup_dir.join(format!(
+            "db-backup_v10_{}_02-00-13.tar.gz",
+            tomorrow_str
+        ));
+        fs::write(&spendy_next_day_file, payload).unwrap();
+        let cross_day_complete =
+            read_backup_ledger_from_paths(&history_path, &ws_root, &backups_root, next_day_local)
+                .unwrap();
+        assert_eq!(
+            cross_day_complete.last_run_status.as_deref(),
+            Some("Success")
+        );
+        assert_eq!(
+            cross_day_complete.daily_pips_7d.last().unwrap().status,
+            "Success"
+        );
 
         let _ = fs::remove_dir_all(&temp_root);
     }

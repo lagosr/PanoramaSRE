@@ -8,6 +8,7 @@ export interface StreamJobOptions {
   workingDir?: string;
   lockType?: 'WshRemoteMutation' | 'LocalBackupIo' | 'PortainerApi' | 'PesterRunner' | 'None';
   elevated?: boolean;
+  timeoutSecs?: number;
   onLine?: (line: string, stream: string) => void;
   onComplete?: (exitCode: number) => void;
   onError?: (error: any) => void;
@@ -36,6 +37,7 @@ export function runStreamJob(options: StreamJobOptions): Promise<number> {
       working_dir: options.workingDir || null,
       lock_type: options.lockType || 'None',
       elevated: options.elevated || false,
+      ...(typeof options.timeoutSecs === 'number' ? { timeout_secs: options.timeoutSecs } : {}),
     },
     channel,
   })

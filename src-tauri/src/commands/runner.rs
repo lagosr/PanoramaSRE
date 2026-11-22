@@ -4,6 +4,7 @@ use crate::scrubber::scrub_secrets;
 use serde::{Deserialize, Serialize};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tauri::ipc::Channel;
 use tauri::State;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -26,6 +27,8 @@ pub struct RunCommandRequest {
     pub working_dir: Option<String>,
     pub lock_type: ResourceLock,
     pub elevated: bool,
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
 }
 
 #[tauri::command]
@@ -162,12 +165,53 @@ pub async fn run_process_stream(
         }
     });
 
-    // Wait for streams and process completion
-    let _ = tokio::join!(stdout_handle, stderr_handle);
-    let status = child.wait().await.map_err(|e| e.to_string())?;
-    let exit_code = status.code().unwrap_or(-1);
+    // Wait for process completion with optional watchdog timeout (defaults to 1800s)
+    let effective_timeout_secs = request.timeout_secs.unwrap_or(1800);
+    let mut timed_out = false;
+    let exit_code: i32 = if effective_timeout_secs > 0 {
+        match tokio::time::timeout(Duration::from_secs(effective_timeout_secs), child.wait()).await {
+            Ok(wait_res) => {
+                let status = wait_res.map_err(|e| e.to_string())?;
+                status.code().unwrap_or(-1)
+            }
+            Err(_) => {
+                timed_out = true;
+                let timeout_msg = format!(
+                    "[RUNNER] ERROR: Job timed out after {}s; terminating process tree",
+                    effective_timeout_secs
+                );
+                if let Ok(guard) = db.lock() {
+                    let _ = guard.log_action(
+                        "RUNNER",
+                        "ERROR",
+                        &timeout_msg,
+                        Some(&format!("job_id={}", job_id)),
+                    );
+                }
+                let _ = channel.send(ProcessOutputChunk {
+                    job_id: job_id.clone(),
+                    stream: "stderr".to_string(),
+                    line: timeout_msg,
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                });
+                if job_manager.abort_job(&job_id).await.is_err() {
+                    let _ = child.kill().await;
+                }
+                124
+            }
+        }
+    } else {
+        let status = child.wait().await.map_err(|e| e.to_string())?;
+        status.code().unwrap_or(-1)
+    };
 
-    job_manager.update_completion(&job_id, Some(exit_code), false).await;
+    // Allow stdout/stderr reader tasks to drain briefly after process exit/termination
+    let _ = tokio::time::timeout(Duration::from_secs(3), async {
+        let _ = tokio::join!(stdout_handle, stderr_handle);
+    })
+    .await;
+
+    job_manager.update_completion(&job_id, Some(exit_code), timed_out).await;
 
     if let Ok(guard) = db.lock() {
         let _ = guard.log_action(
