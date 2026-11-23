@@ -25,8 +25,7 @@ import {
   AlertTriangle,
   Sliders,
   Terminal,
-  Play,
-  Square,
+  Clock,
   Save,
   ArrowRight,
   ArrowLeftRight,
@@ -36,9 +35,9 @@ import {
 } from 'lucide-react';
 import { CustomSelect } from '../ui/CustomSelect';
 import { WorkStreamContainer } from '../ui/WorkStreamContainer';
+import { SnoozeSplitButton } from './SnoozeSplitButton';
 import { UnifiVlanZbfPanel } from './UnifiVlanZbfPanel';
-import { formatLocalDateTime, formatRelativeTime } from '../../lib/formatters';
-import type { UnifiSiemAction } from '../../lib/script-adapters';
+import { formatLocalDateTime, formatRelativeTime, parseUtcDate } from '../../lib/formatters';
 import { getVlanBadgeStyle } from '../../lib/unifi-zbf';
 import {
   buildActorCountryOptions,
@@ -52,6 +51,7 @@ import {
   buildWafRuleExpression,
   classifyActionSurface,
   classifyAllowlistSurface,
+  classifyCampaignSurface,
   classifyFindingSurface,
   collectorStatusToBadgeVariant,
   filterExternalCampaigns,
@@ -59,6 +59,7 @@ import {
   filterLanClients,
   filterThreatActors,
   formatCompactBytes,
+  formatSnoozeRemaining,
   normalizeHostname,
   safeParseJson,
   severityToBadgeVariant,
@@ -88,13 +89,23 @@ import type {
   ThreatFindingRow,
   ThreatIntelSettingsViewDto,
   ThreatRunDetailDto,
-  UnifiSiemEnvConfigDto,
   UnifiTopologySnapshotDto,
   WshSnapshot,
   ZeroTrustSummary,
 } from '../../lib/types';
 
 type SubViewTab = 'overview' | 'external' | 'internal' | 'allowlist';
+
+function formatRunDuration(startedAt: string, completedAt?: string | null): string | null {
+  const s = parseUtcDate(startedAt);
+  const c = parseUtcDate(completedAt);
+  if (!s || !c) return null;
+  const secs = Math.max(0, Math.round((c.getTime() - s.getTime()) / 1000));
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  const rem = secs % 60;
+  return `${mins}m ${rem}s`;
+}
 
 export interface ThreatAuditProgressUiState {
   runId: string;
@@ -118,8 +129,6 @@ interface ThreatIntelViewProps {
   onNavigateToSettings: () => void;
   wshSnapshot?: WshSnapshot | null;
   terminalTabs?: TerminalTab[];
-  onTriggerUnifiSiemAction?: (action: UnifiSiemAction) => void;
-  onReapplyHardening?: () => void;
   onOpenInBottomConsole?: (tabId?: string) => void;
   onAbortJob?: (tabId: string) => void;
   onClearTab?: (tabId: string) => void;
@@ -182,8 +191,6 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   onNavigateToSettings,
   wshSnapshot = null,
   terminalTabs = [],
-  onTriggerUnifiSiemAction,
-  onReapplyHardening,
   onOpenInBottomConsole,
   onAbortJob,
   onClearTab,
@@ -228,9 +235,6 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   const [isLoadingTopology, setIsLoadingTopology] = useState<boolean>(false);
   const [topologyError, setTopologyError] = useState<string | null>(null);
   const [allowlist, setAllowlist] = useState<ThreatAllowlistRow[]>([]);
-  const [siemEnv, setSiemEnv] = useState<UnifiSiemEnvConfigDto | null>(null);
-  const [siemAllowedIpsInput, setSiemAllowedIpsInput] = useState<string>('');
-  const [isSavingSiemEnv, setIsSavingSiemEnv] = useState<boolean>(false);
   const [isLoadingSources, setIsLoadingSources] = useState<boolean>(false);
   const [newRuleType, setNewRuleType] = useState<string>('IP');
   const [newRuleValue, setNewRuleValue] = useState<string>('');
@@ -296,17 +300,12 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   const loadSourcesAndAllowlist = useCallback(async () => {
     setIsLoadingSources(true);
     try {
-      const [lan, rules, envCfg] = await Promise.all([
+      const [lan, rules] = await Promise.all([
         invoke<LanClientBaselineRow[]>('get_lan_clients_baseline'),
         invoke<ThreatAllowlistRow[]>('get_threat_allowlist'),
-        invoke<UnifiSiemEnvConfigDto>('get_unifi_siem_env_config').catch(() => null),
       ]);
       setLanClients(Array.isArray(lan) ? lan : []);
       setAllowlist(Array.isArray(rules) ? rules : []);
-      if (envCfg) {
-        setSiemEnv(envCfg);
-        setSiemAllowedIpsInput(envCfg.allowedIps || '');
-      }
     } catch (err) {
       console.warn('[PanoramaSRE] Failed loading LAN baseline & allowlist:', err);
     } finally {
@@ -471,7 +470,20 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   );
 
   const externalCampaigns = useMemo(
-    () => geminiBrief?.attackCampaigns ?? [],
+    () =>
+      (geminiBrief?.attackCampaigns ?? []).filter((c) => {
+        const surf = classifyCampaignSurface(c);
+        return surf === 'external' || surf === 'crossover';
+      }),
+    [geminiBrief]
+  );
+
+  const internalCampaigns = useMemo(
+    () =>
+      (geminiBrief?.attackCampaigns ?? []).filter((c) => {
+        const surf = classifyCampaignSurface(c);
+        return surf === 'internal' || surf === 'crossover';
+      }),
     [geminiBrief]
   );
 
@@ -728,33 +740,23 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
     [zonesSummary]
   );
 
-  const handleSaveSiemEnv = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSavingSiemEnv(true);
-    try {
-      const updated = await invoke<UnifiSiemEnvConfigDto>('save_unifi_siem_env_config', {
-        allowedIps: siemAllowedIpsInput,
-      });
-      setSiemEnv(updated);
-      setSiemAllowedIpsInput(updated.allowedIps);
-      setSourceFeedback({
-        text: `Saved .env.siem UNIFI_SIEM_ALLOWED_IPS=${updated.allowedIps}`,
-        tone: 'ok',
-      });
-      setTimeout(() => setSourceFeedback(null), 4000);
-    } catch (err) {
-      setSourceFeedback({ text: `Save .env.siem failed: ${String(err)}`, tone: 'err' });
-    } finally {
-      setIsSavingSiemEnv(false);
-    }
-  };
-
   const handleSetDisposition = async (actorId: string, disposition: string) => {
     try {
       await invoke('set_threat_actor_disposition', { actorId, disposition });
       await Promise.all([loadActors(), onRefreshAll()]);
     } catch (err) {
       setSourceFeedback({ text: `Disposition update failed: ${String(err)}`, tone: 'err' });
+    }
+  };
+
+  const handleSnoozeActor = async (actorId: string, days: number) => {
+    try {
+      await invoke('snooze_threat_actor', { actorId, days });
+      setSourceFeedback({ text: `Snoozed ${actorId} for ${days} day(s).`, tone: 'ok' });
+      setTimeout(() => setSourceFeedback(null), 3500);
+      await Promise.all([loadActors(), onRefreshAll()]);
+    } catch (err) {
+      setSourceFeedback({ text: `Snooze failed: ${String(err)}`, tone: 'err' });
     }
   };
 
@@ -897,16 +899,55 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
 
   const renderFindingRow = (f: ThreatFindingRow) => {
     const rayIds = safeParseJson<string[]>(f.rayIdsJson, []);
-    const wafExpr = buildWafRuleExpression(
-      f.actorIp ? [f.actorIp] : [],
-      f.actorAsn ? [f.actorAsn] : []
-    );
+    const isExt = classifyFindingSurface(f.sourceLayer) === 'external';
+    const wafExpr = isExt
+      ? buildWafRuleExpression(
+          f.actorIp ? [f.actorIp] : [],
+          f.actorAsn ? [f.actorAsn] : []
+        )
+      : '';
     const copyWafKey = `find-waf-${f.id}`;
     const zoneForLink = f.host?.includes('parakith') ? 'parakith.com' : 'panoramadr.com';
-    const isExt = classifyFindingSurface(f.sourceLayer) === 'external';
     const findWafCov = isExt ? evaluateFindingWafCoverage(f, wafRules) : null;
     const isCovered = findWafCov?.status === 'COVERED';
     const isPartial = findWafCov?.status === 'PARTIAL';
+
+    const rogueEvidence =
+      f.ruleId === 'UNIFI_ROGUE_LAN_CLIENT'
+        ? safeParseJson<{ macAddress?: string; name?: string | null; hostname?: string | null }>(
+            f.evidenceJson,
+            {}
+          )
+        : null;
+    const rogueMac = (rogueEvidence?.macAddress || '').trim().toUpperCase();
+    const matchedLanClient = rogueMac
+      ? lanClients.find((c) => c.macAddress.trim().toUpperCase() === rogueMac) ?? null
+      : null;
+    const isRogueAlreadyTrusted = matchedLanClient?.isTrusted ?? false;
+
+    const handleQuickTrustRogueDevice = async () => {
+      if (!rogueMac) return;
+      try {
+        await invoke('set_lan_client_trusted', {
+          macAddress: rogueMac,
+          trusted: true,
+          label:
+            matchedLanClient?.label ||
+            matchedLanClient?.hostname ||
+            rogueEvidence?.hostname ||
+            rogueEvidence?.name ||
+            null,
+        });
+        setSourceFeedback({
+          text: `Marked ${rogueMac} as owner-verified trusted LAN hardware.`,
+          tone: 'ok',
+        });
+        setTimeout(() => setSourceFeedback(null), 4000);
+        await Promise.all([loadSourcesAndAllowlist(), onRefreshAll()]);
+      } catch (err) {
+        setSourceFeedback({ text: `Failed trusting LAN MAC ${rogueMac}: ${String(err)}`, tone: 'err' });
+      }
+    };
 
     return (
       <div
@@ -963,14 +1004,38 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
               </button>
             )}
             {f.sourceLayer === 'UNIFI' && (
-              <button
-                type="button"
-                onClick={() => void handleOpenExternal(buildUnifiConsoleUrl(unifiBaseUrl, 'threats'))}
-                className="btn-ghost text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-              >
-                <ExternalLink className="w-3.5 h-3.5" />
-                <span>UniFi Console</span>
-              </button>
+              <>
+                {f.ruleId === 'UNIFI_ROGUE_LAN_CLIENT' && rogueMac && (
+                  isRogueAlreadyTrusted ? (
+                    <StatusBadge label="Device Trusted" variant="success" />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => void handleQuickTrustRogueDevice()}
+                      className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                      title={`Mark MAC ${rogueMac} as owner-verified hardware in PanoramaSRE (read-only local inventory)`}
+                    >
+                      <ShieldCheck className="w-3.5 h-3.5" />
+                      <span>Trust Device</span>
+                    </button>
+                  )
+                )}
+                <button
+                  type="button"
+                  onClick={() =>
+                    void handleOpenExternal(
+                      buildUnifiConsoleUrl(
+                        unifiBaseUrl,
+                        f.ruleId === 'UNIFI_ROGUE_LAN_CLIENT' ? 'clients' : 'threats'
+                      )
+                    )
+                  }
+                  className="btn-ghost text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>{f.ruleId === 'UNIFI_ROGUE_LAN_CLIENT' ? 'UniFi Clients' : 'UniFi Flows'}</span>
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -1189,11 +1254,6 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
               <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 tabular-nums">
                 Carbon Escalations (24h): {carbonUsed24h} / {dailyCarbonCap === 0 ? '∞' : dailyCarbonCap}
               </span>
-              {activeRun && (
-                <span className="text-[11px] text-slate-500 dark:text-slate-400 tabular-nums">
-                  Last run: {formatLocalDateTime(activeRun.completedAt || activeRun.startedAt)} ({activeRun.triggerSource})
-                </span>
-              )}
             </div>
           </div>
 
@@ -1247,6 +1307,80 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Prominent Last Audit Run Strip */}
+        {activeRun && (() => {
+          const runDur = formatRunDuration(activeRun.startedAt, activeRun.completedAt);
+          const triggerLabel =
+            activeRun.triggerSource.charAt(0).toUpperCase() +
+            activeRun.triggerSource.slice(1).toLowerCase();
+          return (
+            <div className="rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 px-4 py-3 flex flex-col lg:flex-row lg:items-center justify-between gap-3 tabular-nums">
+              <div className="flex flex-wrap items-center gap-2.5 min-w-0">
+                <div className="w-8 h-8 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-center shrink-0">
+                  <Clock className="w-4 h-4 text-[var(--color-brand-text)]" />
+                </div>
+                <div className="space-y-0.5 min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[11px] font-mono font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                      Last Run:
+                    </span>
+                    <span className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                      {formatRelativeTime(activeRun.completedAt || activeRun.startedAt)}
+                    </span>
+                    <span className="text-xs font-mono font-semibold text-slate-700 dark:text-slate-300">
+                      {formatLocalDateTime(activeRun.completedAt || activeRun.startedAt)}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-mono text-slate-600 dark:text-slate-400">
+                    <StatusBadge
+                      label={activeRun.status}
+                      variant={
+                        activeRun.status === 'COMPLETED'
+                          ? 'success'
+                          : activeRun.status === 'DEGRADED'
+                          ? 'warning'
+                          : 'danger'
+                      }
+                    />
+                    <span className="px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                      {triggerLabel}
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                      {activeRun.windowHours}h lookback
+                    </span>
+                    {runDur && (
+                      <span className="px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                        Duration: {runDur}
+                      </span>
+                    )}
+                    {activeRun.escalatedToTier2 && (
+                      <span className="px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-[var(--color-accent-text)]">
+                        Tier 2: {activeRun.tier2Model || 'gemini-4-carbon'}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {runs.length > 0 && (
+                <div className="w-full lg:w-80 shrink-0">
+                  <CustomSelect
+                    value={activeRun.id}
+                    onChange={(runId) => {
+                      if (runId) void onSelectRunId(runId);
+                    }}
+                    options={runs.map((r) => ({
+                      value: r.id,
+                      label: `${formatLocalDateTime(r.completedAt || r.startedAt)} • ${r.overallSeverity}${r.escalatedToTier2 ? ' (Carbon)' : ''}`,
+                      description: `${r.triggerSource} (${r.windowHours}h) • ${r.status} — ${r.intrusionVerdict}`,
+                    }))}
+                  />
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Live Audit Progress Feedback Banner */}
         {isRunningAudit && (
@@ -1371,22 +1505,6 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
               },
             ]}
           />
-
-          {runs.length > 0 && subView === 'overview' && (
-            <div className="w-full sm:w-80">
-              <CustomSelect
-                value={activeRun?.id || ''}
-                onChange={(runId) => {
-                  if (runId) void onSelectRunId(runId);
-                }}
-                options={runs.map((r) => ({
-                  value: r.id,
-                  label: `${formatLocalDateTime(r.startedAt)} • ${r.overallSeverity}${r.escalatedToTier2 ? ' (Carbon)' : ''}`,
-                  description: `${r.triggerSource} (${r.windowHours}h) — ${r.intrusionVerdict}`,
-                }))}
-              />
-            </div>
-          )}
         </div>
       </div>
 
@@ -2222,6 +2340,9 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                                   label={camp.severity}
                                   variant={severityToBadgeVariant(camp.severity)}
                                 />
+                                {classifyCampaignSurface(camp) === 'crossover' && (
+                                  <StatusBadge label="Cross-Surface" variant="accent" />
+                                )}
                                 {campCovered && campCov.primaryRuleName && (
                                   <StatusBadge
                                     label={`WAF Covered: ${campCov.primaryRuleName}`}
@@ -2504,6 +2625,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                     onChange={setActorDispositionFilter}
                     options={[
                       { value: 'ACTIVE', label: 'Active' },
+                      { value: 'SNOOZED', label: 'Snoozed' },
                       { value: 'ALLOWLISTED', label: 'Allowlisted' },
                       { value: 'RESOLVED', label: 'Resolved' },
                       { value: 'ALL', label: 'All Actors' },
@@ -2580,6 +2702,8 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                   const actorCov = evaluateActorWafCoverage(actor, wafRules);
                   const actorCovered = actorCov.status === 'COVERED';
                   const actorPartial = actorCov.status === 'PARTIAL';
+                  const isSnoozed = actor.disposition === 'SNOOZED';
+                  const snoozeRem = isSnoozed ? formatSnoozeRemaining(actor.snoozedUntil) : null;
 
                   return (
                     <div
@@ -2608,10 +2732,19 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                           {actor.latestClassification && (
                             <StatusBadge label={actor.latestClassification} variant="accent" />
                           )}
-                          <StatusBadge
-                            label={actor.disposition}
-                            variant={actor.disposition === 'ACTIVE' ? 'warning' : 'neutral'}
-                          />
+                          {isSnoozed ? (
+                            <span title={actor.snoozedUntil ? `Snoozed until ${formatLocalDateTime(actor.snoozedUntil)}` : undefined}>
+                              <StatusBadge
+                                label={`Snoozed${snoozeRem ? ` · ${snoozeRem}` : ''}`}
+                                variant="info"
+                              />
+                            </span>
+                          ) : (
+                            <StatusBadge
+                              label={actor.disposition}
+                              variant={actor.disposition === 'ACTIVE' ? 'warning' : 'neutral'}
+                            />
+                          )}
                           {actorCovered && actorCov.primaryRuleName && (
                             <StatusBadge
                               label={`WAF Covered: ${actorCov.primaryRuleName}`}
@@ -2664,22 +2797,24 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                               type="button"
                               onClick={() => void handleAllowlistActor(actor)}
                               className="btn-tonal text-xs whitespace-nowrap flex-shrink-0"
+                              title="Permanently exempt your own trusted IP or ASN from future local PanoramaSRE alerts (never modifies Cloudflare). Use Snooze for external scanner noise."
                             >
                               Allowlist
                             </button>
                           )}
-                          <button
-                            type="button"
-                            onClick={() =>
-                              void handleSetDisposition(
-                                actor.id,
-                                actor.disposition === 'RESOLVED' ? 'ACTIVE' : 'RESOLVED'
-                              )
-                            }
-                            className="btn-secondary text-xs whitespace-nowrap flex-shrink-0"
-                          >
-                            {actor.disposition === 'RESOLVED' ? 'Reopen' : 'Mark Resolved'}
-                          </button>
+                          {isSnoozed || actor.disposition === 'RESOLVED' ? (
+                            <button
+                              type="button"
+                              onClick={() => void handleSetDisposition(actor.id, 'ACTIVE')}
+                              className="btn-secondary text-xs whitespace-nowrap flex-shrink-0"
+                            >
+                              {isSnoozed ? 'Unsnooze' : 'Reopen'}
+                            </button>
+                          ) : (
+                            <SnoozeSplitButton
+                              onSnooze={(days) => void handleSnoozeActor(actor.id, days)}
+                            />
+                          )}
                         </div>
                       </div>
 
@@ -2780,7 +2915,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                   className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
                 >
                   <ExternalLink className="w-3.5 h-3.5" />
-                  <span>UniFi Threats / IPS</span>
+                  <span>UniFi Flows / IPS</span>
                 </button>
                 <button
                   type="button"
@@ -2855,6 +2990,14 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                 <div className="text-[11px] font-mono text-slate-600 dark:text-slate-400">
                   IPS / High Firewall Alerts: {internalSummary.unifiCefSecurityAlerts}
                 </div>
+                <button
+                  type="button"
+                  onClick={onNavigateToSettings}
+                  className="btn-ghost text-[11px] px-0 py-0.5 min-h-[24px] text-[var(--color-brand-text)] flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+                >
+                  <span>Configure SIEM in Settings</span>
+                  <ArrowRight className="w-3 h-3" />
+                </button>
               </div>
             </div>
           </div>
@@ -2892,175 +3035,79 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
             </button>
           </div>
 
-          {/* Internal Deterministic Findings & Actions */}
-          {(internalFindings.length > 0 || internalActions.length > 0) && (
+          {/* Internal Security Campaigns & Deterministic Findings */}
+          {(internalCampaigns.length > 0 || internalFindings.length > 0 || internalActions.length > 0) && (
             <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
-              <div className="flex items-center gap-2">
-                <ShieldCheck className="w-5 h-5 text-[var(--color-brand-text)]" />
-                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
-                  Internal LAN &amp; Host Findings ({internalFindings.length})
-                </h3>
-              </div>
-              {internalFindings.length > 0 && (
-                <div className="space-y-3">{internalFindings.map(renderFindingRow)}</div>
-              )}
-              {internalActions.length > 0 && (
-                <div className="space-y-2.5 pt-2 border-t border-slate-200 dark:border-slate-800">
-                  <div className="text-xs font-mono font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
-                    Recommended Internal Actions ({internalActions.length})
+              {internalCampaigns.length > 0 && (
+                <div className="space-y-2.5">
+                  <div className="text-xs font-mono font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider tabular-nums">
+                    Internal Security Campaigns ({internalCampaigns.length})
                   </div>
-                  {internalActions.map((act, idx) => renderActionRow(act, idx, 'int-act'))}
+                  <div className="space-y-2.5">
+                    {internalCampaigns.map((camp, idx) => (
+                      <div
+                        key={`int-camp-${camp.name}-${idx}`}
+                        className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-2"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <StatusBadge
+                              label={camp.severity}
+                              variant={severityToBadgeVariant(camp.severity)}
+                            />
+                            {classifyCampaignSurface(camp) === 'crossover' && (
+                              <StatusBadge label="Cross-Surface" variant="accent" />
+                            )}
+                            <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                              {camp.name}
+                            </span>
+                            <span className="text-xs font-mono text-slate-500 tabular-nums">
+                              ~{camp.countEstimate} events
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {camp.targetHosts.map((h) => (
+                              <span
+                                key={h}
+                                className="px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-[11px] font-mono text-slate-700 dark:text-slate-300"
+                              >
+                                {h}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                        <p className="text-xs text-slate-700 dark:text-slate-300">{camp.pattern}</p>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
-            </div>
-          )}
 
-          {/* Optional UniFi SIEM CEF Collector Deployment Card */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="space-y-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Server className="w-4 h-4 text-[var(--color-brand-text)] shrink-0" />
-                  <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
-                    Optional UniFi SIEM Collector (unifi-siem on WSH)
-                  </h3>
-                  <StatusBadge
-                    label={
-                      siemContainer
-                        ? siemContainer.State?.toLowerCase() === 'running'
-                          ? 'Container: Running'
-                          : `Container: ${siemContainer.State || 'Stopped'}`
-                        : 'Container: Not Deployed'
-                    }
-                    variant={
-                      siemContainer?.State?.toLowerCase() === 'running'
-                        ? 'success'
-                        : siemContainer
-                        ? 'warning'
-                        : 'neutral'
-                    }
-                  />
-                  <StatusBadge
-                    label={siemEnv?.exists ? '.env.siem: Ready' : '.env.siem: Not Configured'}
-                    variant={siemEnv?.exists ? 'success' : 'warning'}
-                  />
-                </div>
-                <p className="text-xs text-slate-600 dark:text-slate-400">
-                  Receives UniFi CyberSecure IPS/IDS and firewall drop CEF syslog packets on WSH <code className="font-mono">172.25.25.5:5514/udp</code> into <code className="font-mono">/var/data/unifi-siem/unifi-siem.log</code>.
-                </p>
-              </div>
-              <span className="px-2.5 py-0.5 rounded-full text-[11px] font-mono font-semibold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 tabular-nums">
-                CEF Events: {internalSummary.unifiSiemCefEvents}
-              </span>
-            </div>
-
-            <form onSubmit={(e) => void handleSaveSiemEnv(e)} className="flex flex-col sm:flex-row sm:items-end gap-2.5">
-              <div className="flex-1 space-y-1">
-                <label className="block text-[11px] font-mono text-slate-600 dark:text-slate-400">
-                  UNIFI_SIEM_ALLOWED_IPS (Comma-separated IPv4 allowlist enforced in WSH DOCKER-USER &amp; collector)
-                </label>
-                <input
-                  type="text"
-                  value={siemAllowedIpsInput}
-                  onChange={(e) => setSiemAllowedIpsInput(e.target.value)}
-                  placeholder={siemEnv?.suggestedIps || '172.25.25.1,10.10.1.1'}
-                  className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
-                />
-              </div>
-              <button
-                type="submit"
-                disabled={isSavingSiemEnv || !siemAllowedIpsInput.trim()}
-                className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-              >
-                <Save className="w-3.5 h-3.5" />
-                <span>{isSavingSiemEnv ? 'Saving...' : 'Save .env.siem'}</span>
-              </button>
-            </form>
-
-            <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
-              {onTriggerUnifiSiemAction && (
+              {(internalFindings.length > 0 || internalActions.length > 0) && (
                 <>
-                  <button
-                    type="button"
-                    onClick={() => onTriggerUnifiSiemAction('verify_local')}
-                    className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-                    title="Run local TypeScript, Vitest, compose hardening, and ARM64 Docker BuildKit check (zero SSH)"
-                  >
-                    <Terminal className="w-3.5 h-3.5 text-[var(--color-accent-text)]" />
-                    <span>Verify Local (-VerifyLocal)</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onTriggerUnifiSiemAction('test')}
-                    className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-                    title="Run SSH dry-run preflight against WSH"
-                  >
-                    <Terminal className="w-3.5 h-3.5" />
-                    <span>Dry-Run (-Test)</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onTriggerUnifiSiemAction('status')}
-                    className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-                    title="Query unifi-siem container and recent log lines on WSH"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5" />
-                    <span>Status</span>
-                  </button>
-                </>
-              )}
-
-              {onReapplyHardening && (
-                <button
-                  type="button"
-                  onClick={onReapplyHardening}
-                  className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-                  title="Run deploy-server-setup.ps1 to synchronize panorama-firewall.sh UDP 5514 source lock"
-                >
-                  <ShieldCheck className="w-3.5 h-3.5" />
-                  <span>Re-Apply WSH Firewall</span>
-                </button>
-              )}
-
-              {onTriggerUnifiSiemAction && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => onTriggerUnifiSiemAction('deploy')}
-                    disabled={!siemEnv?.exists}
-                    className="btn-primary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 disabled:opacity-50"
-                    title={
-                      siemEnv?.exists
-                        ? 'Build ARM64 image and deploy hardened unifi-siem container to WSH'
-                        : 'Save UNIFI_SIEM_ALLOWED_IPS into .env.siem first'
-                    }
-                  >
-                    <Play className="w-3.5 h-3.5" />
-                    <span>Deploy Collector</span>
-                  </button>
-
-                  {siemContainer && (
-                    <button
-                      type="button"
-                      onClick={() => onTriggerUnifiSiemAction('stop')}
-                      className="btn-danger text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-                    >
-                      <Square className="w-3.5 h-3.5" />
-                      <span>Stop Collector</span>
-                    </button>
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className="w-5 h-5 text-[var(--color-brand-text)]" />
+                    <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
+                      Internal LAN &amp; Host Findings ({internalFindings.length})
+                    </h3>
+                  </div>
+                  {internalFindings.length > 0 && (
+                    <div className="space-y-3">{internalFindings.map(renderFindingRow)}</div>
+                  )}
+                  {internalActions.length > 0 && (
+                    <div className="space-y-2.5 pt-2 border-t border-slate-200 dark:border-slate-800">
+                      <div className="text-xs font-mono font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
+                        Recommended Internal Actions ({internalActions.length})
+                      </div>
+                      {internalActions.map((act, idx) => renderActionRow(act, idx, 'int-act'))}
+                    </div>
                   )}
                 </>
               )}
             </div>
+          )}
 
-            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-[11px] font-mono text-slate-600 dark:text-slate-400 space-y-1">
-              <div>UniFi prerequisites after Deploy + Re-Apply WSH Firewall:</div>
-              <div>1. Policy Engine → Zones: Allow Gateway/CloudKey → <span className="text-slate-800 dark:text-slate-200">172.25.25.5 UDP 5514</span> (<span className="text-slate-800 dark:text-slate-200">Auto Allow Return Traffic: OFF</span>)</div>
-              <div>2. CyberSecure → Traffic Logging → Activity Logging (Syslog): Select <span className="text-slate-800 dark:text-slate-200">SIEM Server</span> → <span className="text-slate-800 dark:text-slate-200">172.25.25.5:5514</span></div>
-            </div>
-          </div>
-
-          {/* UniFi VLAN Directory & Zone-Based Firewall Matrix */}
+          {/* UniFi Zone Flow Wire Explorer, VLAN Directory & ZBF Matrix */}
           <UnifiVlanZbfPanel
             topology={unifiTopology}
             isLoading={isLoadingTopology}
@@ -3071,6 +3118,8 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
             onOpenUnifiFirewall={() =>
               void handleOpenExternal(buildUnifiConsoleUrl(unifiBaseUrl, 'policies'))
             }
+            lanClients={lanClients}
+            onToggleLanTrust={(cli, trusted) => void handleToggleLanTrust(cli, trusted)}
           />
 
           {/* UniFi LAN Baseline Trust Table */}
@@ -3084,7 +3133,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                   UniFi LAN Device Baseline ({trustedLanCount} / {lanClients.length} Trusted)
                 </h3>
                 <p className="text-xs text-slate-600 dark:text-slate-400">
-                  Tracks known hardware MACs on your private LAN. Brand-new MACs appearing after your baseline trigger a <code className="font-mono">HIGH</code> Unknown LAN Device alert.
+                  Tracks known hardware MACs on your private LAN. Brand-new MACs trigger <code className="font-mono">HIGH</code> on trusted LANs and <code className="font-mono">MEDIUM</code> on isolated Guest/Kids/IoT VLANs until verified.
                 </p>
               </div>
               <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">

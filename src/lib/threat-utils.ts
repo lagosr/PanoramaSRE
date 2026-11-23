@@ -118,9 +118,9 @@ export function buildUnifiConsoleUrl(
     case 'clients':
       return `${root}/network/default/clients`;
     case 'threats':
-      return `${root}/network/default/security/insights`;
+      return `${root}/network/default/flows`;
     case 'policies':
-      return `${root}/network/default/settings/security/firewall`;
+      return `${root}/network/default/settings/security`;
     default:
       return `${root}/network/default/dashboard`;
   }
@@ -297,6 +297,53 @@ export function classifyAllowlistSurface(entryType: string): 'external' | 'inter
     return 'internal';
   }
   return 'external';
+}
+
+/**
+ * Classifies an AI attack campaign into External (Cloudflare/Zero Trust), Internal (UniFi/WSH/Auth), or Crossover.
+ */
+export function classifyCampaignSurface(campaign: GeminiCampaignDto): ThreatSurfaceDomain {
+  const layers = (campaign.sourceLayers || []).map((l) => (l || '').trim().toUpperCase());
+  let hasExternal = layers.some(
+    (l) => l === 'CLOUDFLARE' || l === 'ZERO_TRUST' || l.includes('CLOUDFLARE')
+  );
+  let hasInternal = layers.some(
+    (l) => l === 'UNIFI' || l === 'WSH' || l === 'PANORAMA_AUTH' || l === 'ORIGIN' || l.includes('UNIFI')
+  );
+
+  if (!hasExternal && !hasInternal) {
+    for (const rawHost of campaign.targetHosts || []) {
+      const hl = (rawHost || '').trim().toLowerCase();
+      if (hl.includes('panoramadr.com') || hl.includes('parakith.com')) {
+        hasExternal = true;
+      } else if (hl.includes('vlan') || hl.includes('unifi') || hl.includes('lan') || hl === 'wsh') {
+        hasInternal = true;
+      }
+    }
+  }
+
+  if (hasExternal && hasInternal) return 'crossover';
+  if (hasInternal) return 'internal';
+  return 'external';
+}
+
+/**
+ * Formats remaining snooze time for a snoozed ThreatActorRow (e.g. "7d left", "23h left", "<1h left").
+ */
+export function formatSnoozeRemaining(
+  snoozedUntil: string | null | undefined,
+  nowMs = Date.now()
+): string | null {
+  if (!snoozedUntil || !snoozedUntil.trim()) return null;
+  const targetMs = Date.parse(snoozedUntil.trim());
+  if (!Number.isFinite(targetMs)) return null;
+  const diffMs = targetMs - nowMs;
+  if (diffMs <= 0) return null;
+  const totalHours = Math.ceil(diffMs / 3_600_000);
+  if (totalHours <= 1 && diffMs < 3_600_000) return '<1h left';
+  if (totalHours < 24) return `${totalHours}h left`;
+  const days = Math.ceil(diffMs / 86_400_000);
+  return `${days}d left`;
 }
 
 export function filterLanClients(

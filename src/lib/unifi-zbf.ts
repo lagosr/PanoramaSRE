@@ -1,4 +1,9 @@
-import type { UnifiPolicyDto, UnifiZoneDto } from './types';
+import type {
+  UnifiClientTopologyDto,
+  UnifiNetworkDto,
+  UnifiPolicyDto,
+  UnifiZoneDto,
+} from './types';
 
 export type ZbfCellVerdict =
   | 'ALLOW'
@@ -352,4 +357,223 @@ export function computeZoneReachability(
   }
 
   return { canReach, limitedTo, blockedFrom, returnOnlyTo };
+}
+
+export interface ZoneFlowConnection {
+  id: string;
+  sourceZoneId: string;
+  destinationZoneId: string;
+  sourceZoneName: string;
+  destinationZoneName: string;
+  verdict: ZbfCellVerdict;
+  summary: string;
+  primaryRuleName: string;
+  rules: UnifiPolicyDto[];
+  customRuleCount: number;
+  hasOppositeWire: boolean;
+}
+
+export interface ZoneScopedRuleItem {
+  policy: UnifiPolicyDto;
+  direction: 'OUT' | 'IN' | 'INTRA';
+  peerZoneId: string | null;
+  peerZoneName: string;
+  connectsSelectedZone: boolean;
+  isCustom: boolean;
+}
+
+function resolvePrimaryRuleName(cell: ZbfMatrixCell): string {
+  const meaningful = cell.rules.filter(
+    (r) => !isCatchAllRule(r) && !isReturnTrafficRule(r) && !isInvalidStateHygieneRule(r)
+  );
+  const custom = meaningful.find((r) => r.origin.toUpperCase() === 'USER_DEFINED');
+  if (custom) return custom.name;
+  if (meaningful.length > 0) return meaningful[0].name;
+  if (cell.verdict === 'ALLOW') return 'Default Allow';
+  if (cell.verdict === 'RETURN_ONLY') return 'Return Traffic Only';
+  if (cell.verdict === 'BLOCKED') return 'Default Block';
+  return cell.summary;
+}
+
+/**
+ * Computes directed Zone-Based Firewall flow wires among selected zones.
+ */
+export function buildZoneFlowConnections(
+  matrix: ZbfMatrixResult,
+  selectedZoneIds: string[],
+  options?: {
+    showReturnWires?: boolean;
+    showBlockedWires?: boolean;
+    customRulesOnly?: boolean;
+  }
+): ZoneFlowConnection[] {
+  const showReturnWires = options?.showReturnWires ?? false;
+  const showBlockedWires = options?.showBlockedWires ?? false;
+  const customRulesOnly = options?.customRulesOnly ?? false;
+
+  const uniqueIds = Array.from(new Set(selectedZoneIds)).filter((id) => Boolean(matrix.cells[id]));
+  const zoneMap = new Map(matrix.zones.map((z) => [z.id, z]));
+  const rawEdges: ZoneFlowConnection[] = [];
+
+  for (const srcId of uniqueIds) {
+    const row = matrix.cells[srcId];
+    const srcZone = zoneMap.get(srcId);
+    if (!row || !srcZone) continue;
+    for (const dstId of uniqueIds) {
+      if (srcId === dstId) continue;
+      const cell = row[dstId];
+      const dstZone = zoneMap.get(dstId);
+      if (!cell || !dstZone) continue;
+
+      if (cell.verdict === 'RETURN_ONLY' && !showReturnWires) continue;
+      if (cell.verdict === 'BLOCKED' && !showBlockedWires) continue;
+      if (customRulesOnly && cell.userRuleCount === 0) continue;
+
+      rawEdges.push({
+        id: `${srcId}->${dstId}`,
+        sourceZoneId: srcId,
+        destinationZoneId: dstId,
+        sourceZoneName: srcZone.name,
+        destinationZoneName: dstZone.name,
+        verdict: cell.verdict,
+        summary: cell.summary,
+        primaryRuleName: resolvePrimaryRuleName(cell),
+        rules: cell.rules,
+        customRuleCount: cell.userRuleCount,
+        hasOppositeWire: false,
+      });
+    }
+  }
+
+  const edgeKeys = new Set(rawEdges.map((e) => `${e.sourceZoneId}::${e.destinationZoneId}`));
+  return rawEdges.map((edge) => ({
+    ...edge,
+    hasOppositeWire: edgeKeys.has(`${edge.destinationZoneId}::${edge.sourceZoneId}`),
+  }));
+}
+
+/**
+ * Lists all enabled firewall rules affecting a given zone card (outgoing, incoming, or intra-zone).
+ */
+export function getZoneScopedRules(
+  zoneId: string,
+  policies: UnifiPolicyDto[],
+  zones: UnifiZoneDto[],
+  selectedZoneIds: string[],
+  options?: { selectedPeersOnly?: boolean; customOnly?: boolean }
+): ZoneScopedRuleItem[] {
+  const selectedPeersOnly = options?.selectedPeersOnly ?? false;
+  const customOnly = options?.customOnly ?? false;
+  const zoneMap = new Map(zones.map((z) => [z.id, z]));
+  const selectedSet = new Set(selectedZoneIds);
+
+  const items: ZoneScopedRuleItem[] = [];
+  for (const pol of policies) {
+    if (!pol.enabled) continue;
+    const isSrc = pol.sourceZoneId === zoneId;
+    const isDst = pol.destinationZoneId === zoneId;
+    if (!isSrc && !isDst) continue;
+
+    const isCustom = pol.origin.toUpperCase() === 'USER_DEFINED';
+    if (!isCustom && isInvalidStateHygieneRule(pol)) continue;
+    if (customOnly && !isCustom) continue;
+
+    const direction: 'OUT' | 'IN' | 'INTRA' = isSrc && isDst ? 'INTRA' : isSrc ? 'OUT' : 'IN';
+    const peerZoneId =
+      direction === 'INTRA' ? zoneId : isSrc ? (pol.destinationZoneId ?? null) : (pol.sourceZoneId ?? null);
+    const peerZoneName = peerZoneId ? zoneMap.get(peerZoneId)?.name ?? peerZoneId : 'Any Zone';
+    const connectsSelectedZone =
+      direction === 'INTRA'
+        ? selectedSet.has(zoneId)
+        : Boolean(peerZoneId && selectedSet.has(peerZoneId));
+
+    if (selectedPeersOnly && !connectsSelectedZone) continue;
+
+    items.push({
+      policy: pol,
+      direction,
+      peerZoneId,
+      peerZoneName,
+      connectsSelectedZone,
+      isCustom,
+    });
+  }
+
+  return items.sort((a, b) => {
+    if (a.connectsSelectedZone !== b.connectsSelectedZone) {
+      return a.connectsSelectedZone ? -1 : 1;
+    }
+    if (a.isCustom !== b.isCustom) return a.isCustom ? -1 : 1;
+    const aCatch = isCatchAllRule(a.policy) ? 1 : 0;
+    const bCatch = isCatchAllRule(b.policy) ? 1 : 0;
+    if (aCatch !== bCatch) return aCatch - bCatch;
+    return a.policy.index - b.policy.index || a.policy.name.localeCompare(b.policy.name);
+  });
+}
+
+/**
+ * Matches all LAN clients belonging to a UniFi security zone via zone name, VLAN ID, or network mapping.
+ */
+export function getClientsForZone(
+  zone: UnifiZoneDto,
+  clients: UnifiClientTopologyDto[],
+  networks: UnifiNetworkDto[]
+): UnifiClientTopologyDto[] {
+  const zoneNameLower = zone.name.trim().toLowerCase();
+  const zoneVlanSet = new Set(zone.vlanIds);
+  const netNames = new Set(zone.networkNames.map((n) => n.trim().toLowerCase()));
+  for (const net of networks) {
+    if (net.zoneId === zone.id) {
+      netNames.add(net.name.trim().toLowerCase());
+      if (net.vlanId != null) {
+        zoneVlanSet.add(net.vlanId);
+        netNames.add(`${net.name.trim().toLowerCase()} (vlan ${net.vlanId})`);
+      }
+    }
+  }
+
+  return clients
+    .filter((cli) => {
+      const cliZone = (cli.zoneName || '').trim().toLowerCase();
+      if (cliZone && cliZone === zoneNameLower) return true;
+      if (cli.vlanId != null && zoneVlanSet.has(cli.vlanId)) return true;
+      const cliNet = (cli.networkName || '').trim().toLowerCase();
+      return Boolean(cliNet && netNames.has(cliNet));
+    })
+    .slice()
+    .sort((a, b) => {
+      const aLabel = (a.name || a.hostname || a.macAddress).toLowerCase();
+      const bLabel = (b.name || b.hostname || b.macAddress).toLowerCase();
+      return aLabel.localeCompare(bLabel);
+    });
+}
+
+/**
+ * Picks up to `maxZones` high-signal active zones (with cross-zone rules + clients) to seed the Zone Flow Explorer.
+ */
+export function pickDefaultFlowZoneIds(matrix: ZbfMatrixResult, maxZones = 3): string[] {
+  if (matrix.zones.length === 0 || maxZones <= 0) return [];
+  const scored = matrix.zones.map((z) => {
+    let crossScore = 0;
+    for (const other of matrix.zones) {
+      if (other.id === z.id) continue;
+      const outCell = matrix.cells[z.id]?.[other.id];
+      const inCell = matrix.cells[other.id]?.[z.id];
+      if (outCell && outCell.userRuleCount > 0) crossScore += 3;
+      if (inCell && inCell.userRuleCount > 0) crossScore += 3;
+      if (outCell && (outCell.verdict === 'ALLOW' || outCell.verdict === 'RESTRICTED_ALLOW')) crossScore += 1;
+    }
+    const isUser = z.origin.toUpperCase() !== 'SYSTEM_DEFINED';
+    const hasClients = z.clientCount > 0 || z.vlanIds.length > 0;
+    const score =
+      (isUser ? 10 : z.name.trim().toLowerCase() === 'internal' ? 8 : 0) +
+      (hasClients ? 6 : 0) +
+      crossScore;
+    return { id: z.id, score };
+  });
+
+  return scored
+    .sort((a, b) => b.score - a.score)
+    .slice(0, maxZones)
+    .map((s) => s.id);
 }

@@ -1,10 +1,19 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildZbfMatrix,
+  buildZoneFlowConnections,
   computeZoneReachability,
+  getClientsForZone,
   getVlanBadgeStyle,
+  getZoneScopedRules,
+  pickDefaultFlowZoneIds,
 } from '../unifi-zbf';
-import type { UnifiPolicyDto, UnifiZoneDto } from '../types';
+import type {
+  UnifiClientTopologyDto,
+  UnifiNetworkDto,
+  UnifiPolicyDto,
+  UnifiZoneDto,
+} from '../types';
 
 function makeZone(
   id: string,
@@ -208,5 +217,137 @@ describe('unifi-zbf', () => {
     const style300 = getVlanBadgeStyle('IoT Safe Systems (VLAN 300)');
     expect(style20.chipClass).not.toEqual(style300.chipClass);
     expect(getVlanBadgeStyle(null).dotClass).toContain('bg-slate-400');
+  });
+
+  it('builds directional zone flow wires, zone-scoped rules, client memberships, and smart default zones', () => {
+    const policies: UnifiPolicyDto[] = [
+      makePolicy({
+        id: 'p-adult-internal',
+        name: 'Allow Adult to Internal',
+        action: 'ALLOW',
+        index: 10000,
+        origin: 'USER_DEFINED',
+        sourceZoneId: 'z-adult',
+        destinationZoneId: 'z-internal',
+        allowReturnTraffic: true,
+      }),
+      makePolicy({
+        id: 'p-adult-internal-def',
+        name: 'Block All Traffic',
+        action: 'BLOCK',
+        index: 2147483647,
+        origin: 'SYSTEM_DEFINED',
+        sourceZoneId: 'z-adult',
+        destinationZoneId: 'z-internal',
+      }),
+      makePolicy({
+        id: 'p-iot-internal',
+        name: 'Allow HA to WSH',
+        action: 'ALLOW',
+        index: 10001,
+        origin: 'USER_DEFINED',
+        sourceZoneId: 'z-iot',
+        destinationZoneId: 'z-internal',
+        allowReturnTraffic: true,
+      }),
+      makePolicy({
+        id: 'p-internal-adult-ret',
+        name: 'Allow Return Traffic',
+        action: 'ALLOW',
+        index: 30000,
+        origin: 'DERIVED',
+        sourceZoneId: 'z-internal',
+        destinationZoneId: 'z-adult',
+        connectionStates: ['ESTABLISHED', 'RELATED'],
+      }),
+    ];
+
+    const richZones = zones.map((z) =>
+      z.id === 'z-adult'
+        ? { ...z, clientCount: 7 }
+        : z.id === 'z-iot'
+        ? { ...z, clientCount: 61 }
+        : z.id === 'z-internal'
+        ? { ...z, clientCount: 5 }
+        : z
+    );
+
+    const matrix = buildZbfMatrix(richZones, policies, { activeOnly: true });
+    const defaults = pickDefaultFlowZoneIds(matrix, 3);
+    expect(defaults).toHaveLength(3);
+    expect(defaults).toEqual(expect.arrayContaining(['z-adult', 'z-iot', 'z-internal']));
+
+    // Without showReturnWires / showBlockedWires, only Adult->Internal and IoT->Internal appear
+    const defaultWires = buildZoneFlowConnections(matrix, ['z-adult', 'z-internal', 'z-kids']);
+    expect(defaultWires.map((w) => w.id)).toEqual(['z-adult->z-internal']);
+    expect(defaultWires[0].primaryRuleName).toBe('Allow Adult to Internal');
+    expect(defaultWires[0].hasOppositeWire).toBe(false);
+
+    // Enabling showReturnWires adds Internal->Adult and flips hasOppositeWire on both
+    const withReturn = buildZoneFlowConnections(matrix, ['z-adult', 'z-internal', 'z-kids'], {
+      showReturnWires: true,
+    });
+    expect(withReturn.map((w) => w.id)).toEqual([
+      'z-adult->z-internal',
+      'z-internal->z-adult',
+    ]);
+    expect(withReturn.every((w) => w.hasOppositeWire)).toBe(true);
+
+    // Enabling showBlockedWires shows blocked Kids edges too
+    const withBlocked = buildZoneFlowConnections(matrix, ['z-adult', 'z-kids'], {
+      showBlockedWires: true,
+    });
+    expect(withBlocked.map((w) => `${w.id}:${w.verdict}`)).toEqual([
+      'z-adult->z-kids:BLOCKED',
+      'z-kids->z-adult:BLOCKED',
+    ]);
+
+    // Zone-scoped rules sort selected-peer custom rules first
+    const scopedAdult = getZoneScopedRules('z-adult', policies, richZones, ['z-adult', 'z-internal']);
+    expect(scopedAdult[0].policy.name).toBe('Allow Adult to Internal');
+    expect(scopedAdult[0].direction).toBe('OUT');
+    expect(scopedAdult[0].connectsSelectedZone).toBe(true);
+
+    // Client lookup maps by zoneName, vlanId, or network mapping
+    const nets: UnifiNetworkDto[] = [
+      {
+        id: 'net-20',
+        name: 'Untrusted',
+        vlanId: 20,
+        enabled: true,
+        isDefault: false,
+        zoneId: 'z-iot',
+        zoneName: 'Untrusted & IoT systems',
+        subnetCidr: '10.10.20.0/24',
+        gatewayIp: '10.10.20.1',
+        isolationEnabled: true,
+        internetAccessEnabled: true,
+        mdnsForwardingEnabled: true,
+        origin: 'USER_DEFINED',
+        clientCount: 2,
+      },
+    ];
+    const clients: UnifiClientTopologyDto[] = [
+      {
+        id: 'c1',
+        macAddress: 'AA:BB:CC:DD:EE:01',
+        ipAddress: '10.10.20.9',
+        name: 'Solar Assistant',
+        vlanId: 20,
+        networkName: 'Untrusted (VLAN 20)',
+        zoneName: 'Untrusted & IoT systems',
+      },
+      {
+        id: 'c2',
+        macAddress: 'AA:BB:CC:DD:EE:02',
+        ipAddress: '10.10.100.5',
+        name: 'Kid Tablet',
+        vlanId: 100,
+        networkName: 'Kid Safe (VLAN 100)',
+        zoneName: 'Kids isolation',
+      },
+    ];
+    const iotClients = getClientsForZone(richZones[2], clients, nets);
+    expect(iotClients.map((c) => c.id)).toEqual(['c1']);
   });
 });

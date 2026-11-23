@@ -948,6 +948,7 @@ mod tests {
             target_hosts_json: "[\"wsh.panoramadr.com\"]".into(),
             sample_paths_json: "[\"/\"]".into(),
             disposition: "ACTIVE".into(),
+            snoozed_until: None,
         };
         db.upsert_threat_actor(&actor1).expect("insert actor");
         db.set_threat_actor_disposition("43.153.74.75", "ALLOWLISTED").expect("allowlist actor");
@@ -1725,5 +1726,236 @@ mod tests {
             true,
         )];
         assert_eq!(find_active_non_us_waf_rule(&log_rule, &hosts), None);
+    }
+
+    #[test]
+    fn test_snooze_threat_actor_expiry_and_stage0_suppression() {
+        let unique = format!(
+            "panorama_sre_snooze_test_{}_{}.sqlite",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        );
+        let db_path = std::env::temp_dir().join(unique);
+
+        {
+            let db = SreDatabase::new(&db_path).expect("create temp test db");
+            let now = chrono::Utc::now();
+            let future_iso = (now + chrono::Duration::days(7))
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+            let past_iso = (now - chrono::Duration::hours(1))
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+
+            let actor = ThreatActorRow {
+                id: "188.166.230.208".into(),
+                actor_type: "IP".into(),
+                ip_address: Some("188.166.230.208".into()),
+                asn: Some("14061".into()),
+                as_org: Some("DigitalOcean".into()),
+                country: Some("SG".into()),
+                intel_tags_json: "[]".into(),
+                intel_summary: None,
+                first_seen_at: now.to_rfc3339(),
+                last_seen_at: now.to_rfc3339(),
+                runs_seen: 1,
+                total_requests: 15,
+                total_origin_200s: 0,
+                highest_severity: "LOW".into(),
+                latest_classification: Some("OPPORTUNISTIC_SCANNER".into()),
+                target_hosts_json: "[\"parakith.com\"]".into(),
+                sample_paths_json: "[\"//xmlrpc.php\"]".into(),
+                disposition: "ACTIVE".into(),
+                snoozed_until: None,
+            };
+            db.upsert_threat_actor(&actor).unwrap();
+            db.snooze_threat_actor("188.166.230.208", &future_iso).unwrap();
+
+            let snoozed_list = db.list_threat_actors(Some("SNOOZED")).unwrap();
+            assert_eq!(snoozed_list.len(), 1);
+            assert_eq!(snoozed_list[0].snoozed_until.as_deref(), Some(future_iso.as_str()));
+
+            // Subsequent upsert while snoozed must preserve SNOOZED & snoozed_until
+            db.upsert_threat_actor(&actor).unwrap();
+            let after_upsert = db.list_threat_actors(Some("SNOOZED")).unwrap();
+            assert_eq!(after_upsert.len(), 1);
+            assert_eq!(after_upsert[0].runs_seen, 2);
+
+            // Stage 0 suppresses noisy WP probes for actively snoozed actor
+            let mut cf_wp = CloudflareSecuritySnapshot {
+                account_id: "acct".into(),
+                zones: vec![],
+                http_events: (0..8)
+                    .map(|i| CfHttpEvent {
+                        datetime: now.to_rfc3339(),
+                        client_ip: "188.166.230.208".into(),
+                        client_asn: "14061".into(),
+                        client_asn_desc: "DigitalOcean".into(),
+                        client_country: "SG".into(),
+                        host: "parakith.com".into(),
+                        method: "GET".into(),
+                        path: "//xmlrpc.php".into(),
+                        query: "".into(),
+                        user_agent: "bot".into(),
+                        edge_status: 404,
+                        origin_status: 404,
+                        security_action: "".into(),
+                        security_source: "".into(),
+                        ray_name: format!("r-{}", i),
+                    })
+                    .collect(),
+                firewall_events: vec![],
+                access_app_count: 1,
+                access_logs: vec![],
+                tunnels: vec![],
+                audit_logs: vec![],
+                ip_intel: Default::default(),
+                waf_rules: vec![],
+                waf_zones_budget: vec![],
+                waf_read_status: "ok".into(),
+            };
+            let triage_quiet = evaluate_stage0_triage(
+                "run-quiet",
+                &now.to_rfc3339(),
+                Some(&cf_wp),
+                None,
+                None,
+                &[],
+                &[],
+                &after_upsert,
+            );
+            assert!(triage_quiet.findings.is_empty());
+            assert!(!triage_quiet.suspect_ips.contains(&"188.166.230.208".to_string()));
+            assert_eq!(triage_quiet.actor_candidates[0].disposition, "SNOOZED");
+
+            // Origin 200 breach on strict-private route wakes snoozed actor immediately
+            cf_wp.http_events.push(CfHttpEvent {
+                datetime: now.to_rfc3339(),
+                client_ip: "188.166.230.208".into(),
+                client_asn: "14061".into(),
+                client_asn_desc: "DigitalOcean".into(),
+                client_country: "SG".into(),
+                host: "wsh.panoramadr.com".into(),
+                method: "GET".into(),
+                path: "/spendy/api/health".into(),
+                query: "".into(),
+                user_agent: "curl".into(),
+                edge_status: 200,
+                origin_status: 200,
+                security_action: "".into(),
+                security_source: "".into(),
+                ray_name: "r-breach".into(),
+            });
+            let triage_breach = evaluate_stage0_triage(
+                "run-breach",
+                &now.to_rfc3339(),
+                Some(&cf_wp),
+                None,
+                None,
+                &[],
+                &[],
+                &after_upsert,
+            );
+            assert!(triage_breach
+                .findings
+                .iter()
+                .any(|f| f.rule_id == "ORIGIN_BREACH_THROUGH"));
+            assert!(triage_breach
+                .suspect_ips
+                .contains(&"188.166.230.208".to_string()));
+            assert_eq!(triage_breach.actor_candidates[0].disposition, "ACTIVE");
+
+            // Past expiry reverts SNOOZED -> ACTIVE cleanly
+            db.snooze_threat_actor("188.166.230.208", &past_iso).unwrap();
+            let woken = db.list_threat_actors(Some("ACTIVE")).unwrap();
+            assert_eq!(woken.len(), 1);
+            assert!(woken[0].snoozed_until.is_none());
+        }
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_file(db_path.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(db_path.with_extension("sqlite-shm"));
+    }
+
+    #[test]
+    fn test_unifi_rogue_lan_client_formatting_and_zone_severity() {
+        let now_iso = "2026-11-23T15:30:00Z";
+        let prior_lan = vec![LanClientBaselineRow {
+            mac_address: "AA:BB:CC:DD:EE:FF".into(),
+            ip_address: Some("10.10.1.10".into()),
+            hostname: Some("Trusted".into()),
+            network_vlan: Some("Default".into()),
+            oui_vendor: Some("Apple".into()),
+            first_seen_at: now_iso.into(),
+            last_seen_at: now_iso.into(),
+            is_trusted: true,
+            label: "Trusted".into(),
+        }];
+
+        let unifi_snap = UnifiSecuritySnapshot {
+            base_url: "https://ui.panoramadr.com".into(),
+            app_version: "11.0.104".into(),
+            captured_at: now_iso.into(),
+            sites: vec![],
+            devices: vec![],
+            clients: vec![
+                UnifiClientDto {
+                    id: "kid-1".into(),
+                    mac_address: "C4:EF:3D:56:9C:07".into(),
+                    ip_address: Some("172.16.1.37".into()),
+                    name: Some("Drake phone".into()),
+                    hostname: None,
+                    network_name: Some("Kid Safe (VLAN 100)".into()),
+                    vlan_id: Some(100),
+                    zone_name: Some("Kids isolation".into()),
+                    oui_vendor: None,
+                    client_type: Some("WIRELESS".into()),
+                },
+                UnifiClientDto {
+                    id: "priv-1".into(),
+                    mac_address: "00:11:22:33:44:55".into(),
+                    ip_address: None,
+                    name: Some("mystery-laptop".into()),
+                    hostname: None,
+                    network_name: Some("Adult Secure (VLAN 1620)".into()),
+                    vlan_id: Some(1620),
+                    zone_name: Some("Adult".into()),
+                    oui_vendor: Some("Realtek".into()),
+                    client_type: Some("WIRED".into()),
+                },
+            ],
+            policies: vec![],
+            networks: vec![],
+            zones: vec![],
+        };
+
+        let triage = evaluate_stage0_triage(
+            "run-lan-zone",
+            now_iso,
+            None,
+            Some(&unifi_snap),
+            None,
+            &[],
+            &prior_lan,
+            &[],
+        );
+
+        let kid_finding = triage
+            .findings
+            .iter()
+            .find(|f| f.title.contains("Drake phone"))
+            .expect("kid zone finding");
+        assert_eq!(kid_finding.severity, "MEDIUM");
+        assert!(!kid_finding.summary.contains("Some("));
+        assert!(!kid_finding.summary.contains("None"));
+        assert!(kid_finding.summary.contains("IP 172.16.1.37"));
+        assert!(kid_finding.summary.contains("Vendor Unknown / Randomized MAC"));
+        assert!(kid_finding.summary.contains("Zone Kids isolation"));
+
+        let adult_finding = triage
+            .findings
+            .iter()
+            .find(|f| f.title.contains("mystery-laptop"))
+            .expect("adult zone finding");
+        assert_eq!(adult_finding.severity, "HIGH");
+        assert!(adult_finding.summary.contains("IP unassigned"));
     }
 }

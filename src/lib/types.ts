@@ -1011,7 +1011,8 @@ export interface ThreatActorRow {
   latestClassification?: string | null;
   targetHostsJson: string;
   samplePathsJson: string;
-  disposition: 'ACTIVE' | 'ALLOWLISTED' | 'RESOLVED' | string;
+  disposition: 'ACTIVE' | 'SNOOZED' | 'ALLOWLISTED' | 'RESOLVED' | string;
+  snoozedUntil?: string | null;
 }
 
 export interface ThreatFindingRow {

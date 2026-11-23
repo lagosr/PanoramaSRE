@@ -11,6 +11,7 @@ import {
   buildWafRuleExpression,
   classifyActionSurface,
   classifyAllowlistSurface,
+  classifyCampaignSurface,
   classifyFindingSurface,
   classifyFindingVector,
   collectorStatusToBadgeVariant,
@@ -21,6 +22,7 @@ import {
   filterLanClients,
   filterThreatActors,
   formatCompactBytes,
+  formatSnoozeRemaining,
   matchesDomainFilter,
   matchesSeverityFilter,
   normalizeHostname,
@@ -116,7 +118,10 @@ describe('threat-utils', () => {
       'https://ui.panoramadr.com/network/default/clients'
     );
     expect(buildUnifiConsoleUrl(undefined, 'threats')).toBe(
-      'https://ui.panoramadr.com/network/default/security/insights'
+      'https://ui.panoramadr.com/network/default/flows'
+    );
+    expect(buildUnifiConsoleUrl('https://ui.panoramadr.com', 'policies')).toBe(
+      'https://ui.panoramadr.com/network/default/settings/security'
     );
   });
 
@@ -474,5 +479,57 @@ describe('threat-utils', () => {
         (c) => c.name
       )
     ).toEqual(['Root Probe on WSH']);
+  });
+
+  it('routes campaigns by surface and formats snooze countdowns & SNOOZED disposition filters', () => {
+    expect(
+      classifyCampaignSurface({
+        name: 'Unverified LAN Client Onboarding',
+        severity: 'MEDIUM',
+        sourceLayers: ['UNIFI'],
+        targetHosts: ['Kid Safe (VLAN 100)'],
+        pattern: 'MAC joined LAN',
+        countEstimate: 1,
+        sampleRayIds: [],
+      })
+    ).toBe('internal');
+
+    expect(
+      classifyCampaignSurface({
+        name: 'WordPress Probing',
+        severity: 'LOW',
+        sourceLayers: ['CLOUDFLARE'],
+        targetHosts: ['parakith.com'],
+        pattern: 'wp-login',
+        countEstimate: 10,
+        sampleRayIds: [],
+      })
+    ).toBe('external');
+
+    expect(
+      classifyCampaignSurface({
+        name: 'Origin Breach + SSH',
+        severity: 'HIGH',
+        sourceLayers: ['CLOUDFLARE', 'WSH'],
+        targetHosts: ['wsh.panoramadr.com'],
+        pattern: 'Origin breach',
+        countEstimate: 2,
+        sampleRayIds: [],
+      })
+    ).toBe('crossover');
+
+    const baseNow = Date.parse('2026-11-23T12:00:00Z');
+    expect(formatSnoozeRemaining('2026-11-30T12:00:00Z', baseNow)).toBe('7d left');
+    expect(formatSnoozeRemaining('2026-11-23T23:00:00Z', baseNow)).toBe('11h left');
+    expect(formatSnoozeRemaining('2026-11-23T12:20:00Z', baseNow)).toBe('<1h left');
+    expect(formatSnoozeRemaining('2026-11-23T11:00:00Z', baseNow)).toBeNull();
+    expect(formatSnoozeRemaining(null, baseNow)).toBeNull();
+
+    const actors = [
+      makeActor({ id: '1.1.1.1', disposition: 'ACTIVE' }),
+      makeActor({ id: '2.2.2.2', disposition: 'SNOOZED', snoozedUntil: '2026-11-30T12:00:00Z' }),
+    ];
+    expect(filterThreatActors(actors, '', 'SNOOZED').map((a) => a.id)).toEqual(['2.2.2.2']);
+    expect(filterThreatActors(actors, '', 'ACTIVE').map((a) => a.id)).toEqual(['1.1.1.1']);
   });
 });

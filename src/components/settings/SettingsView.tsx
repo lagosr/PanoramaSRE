@@ -27,10 +27,12 @@ import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { CustomSelect } from '../ui/CustomSelect';
 import { WorkStreamContainer } from '../ui/WorkStreamContainer';
+import { UnifiSiemSettingsCard } from './UnifiSiemSettingsCard';
 import { SegmentedControl, StatusBadge, ToggleSwitch } from '@lagosr/panorama-ui-kit';
 import { formatConsoleLine, stripAnsiCodes } from '../layout/ConsoleColorizer';
 import { useSmartAutoScroll } from '../../hooks/useSmartAutoScroll';
 import { APP_VERSION_INFO } from '../../lib/version';
+import type { UnifiSiemAction } from '../../lib/script-adapters';
 import {
   PushoverPreferences,
   PushoverSendReceipt,
@@ -39,6 +41,7 @@ import {
   TerminalTab,
   ThreatIntelPreferences,
   ThreatIntelSettingsViewDto,
+  WshSnapshot,
 } from '../../lib/types';
 import { useTheme } from '../../context/ThemeContext';
 
@@ -103,6 +106,9 @@ interface SettingsViewProps {
   onClearTab?: (tabId: string) => void;
   onEmitSettingsStream?: (title: string, lines: string[], exitCode?: number) => void;
   onThreatSettingsChanged?: (dto: ThreatIntelSettingsViewDto) => void;
+  wshSnapshot?: WshSnapshot | null;
+  onTriggerUnifiSiemAction?: (action: UnifiSiemAction) => void;
+  onReapplyHardening?: () => void;
 }
 
 interface SystemLogEntry {
@@ -131,6 +137,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onClearTab,
   onEmitSettingsStream,
   onThreatSettingsChanged,
+  wshSnapshot = null,
+  onTriggerUnifiSiemAction,
+  onReapplyHardening,
 }) => {
   const { theme, resolvedTheme, setTheme } = useTheme();
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
@@ -1360,6 +1369,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 )}
               </div>
             </div>
+
+            <UnifiSiemSettingsCard
+              containers={wshSnapshot?.containers || []}
+              onTriggerUnifiSiemAction={onTriggerUnifiSiemAction}
+              onReapplyHardening={onReapplyHardening}
+            />
 
             <WorkStreamContainer
               pageScope="settings"

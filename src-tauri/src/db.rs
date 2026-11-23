@@ -137,6 +137,8 @@ pub struct ThreatActorRow {
     pub target_hosts_json: String,
     pub sample_paths_json: String,
     pub disposition: String,
+    #[serde(default)]
+    pub snoozed_until: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -383,7 +385,8 @@ impl SreDatabase {
                 latest_classification TEXT,
                 target_hosts_json TEXT NOT NULL DEFAULT '[]',
                 sample_paths_json TEXT NOT NULL DEFAULT '[]',
-                disposition TEXT NOT NULL DEFAULT 'ACTIVE'
+                disposition TEXT NOT NULL DEFAULT 'ACTIVE',
+                snoozed_until TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_threat_actors_disp_seen
@@ -454,6 +457,12 @@ impl SreDatabase {
         }
         if !existing_cols.iter().any(|c| c == "source") {
             self.conn.execute("ALTER TABLE console_sessions ADD COLUMN source TEXT", [])?;
+        }
+
+        // Idempotent column migration for threat_actors snooze support
+        let actor_cols = self.get_table_columns("threat_actors")?;
+        if !actor_cols.iter().any(|c| c == "snoozed_until") {
+            self.conn.execute("ALTER TABLE threat_actors ADD COLUMN snoozed_until TEXT", [])?;
         }
 
         // Reconcile any stale running flags left over from prior terminated app runs
@@ -1314,13 +1323,49 @@ impl SreDatabase {
         serde_json::to_string(&merged).unwrap_or_else(|_| "[]".to_string())
     }
 
+    pub fn expire_due_snoozed_actors(&self, now_iso: &str) -> Result<usize> {
+        let now_dt = chrono::DateTime::parse_from_rfc3339(now_iso.trim())
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(|_| chrono::Utc::now());
+        let mut stmt = self.conn.prepare(
+            "SELECT id, snoozed_until FROM threat_actors WHERE disposition = 'SNOOZED'",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        })?;
+        let mut to_wake = Vec::new();
+        for r in rows {
+            let (id, until_opt) = r?;
+            let is_expired = match until_opt
+                .as_deref()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s.trim()).ok())
+            {
+                Some(until_dt) => until_dt.with_timezone(&chrono::Utc) <= now_dt,
+                None => true,
+            };
+            if is_expired {
+                to_wake.push(id);
+            }
+        }
+        drop(stmt);
+
+        let mut updated = 0usize;
+        for id in to_wake {
+            updated += self.conn.execute(
+                "UPDATE threat_actors SET disposition = 'ACTIVE', snoozed_until = NULL WHERE id = ?1",
+                params![id],
+            )?;
+        }
+        Ok(updated)
+    }
+
     pub fn upsert_threat_actor(&self, actor: &ThreatActorRow) -> Result<()> {
         let mut existing_stmt = self.conn.prepare(
             "SELECT first_seen_at, runs_seen, total_requests, total_origin_200s, highest_severity,
-                    intel_tags_json, target_hosts_json, sample_paths_json, disposition
+                    intel_tags_json, target_hosts_json, sample_paths_json, disposition, snoozed_until
              FROM threat_actors WHERE id = ?1",
         )?;
-        let existing_opt: Option<(String, i64, i64, i64, String, String, String, String, String)> =
+        let existing_opt: Option<(String, i64, i64, i64, String, String, String, String, String, Option<String>)> =
             existing_stmt
                 .query_row(params![actor.id], |row| {
                     Ok((
@@ -1333,6 +1378,7 @@ impl SreDatabase {
                         row.get(6)?,
                         row.get(7)?,
                         row.get(8)?,
+                        row.get(9)?,
                     ))
                 })
                 .ok();
@@ -1348,6 +1394,7 @@ impl SreDatabase {
             prev_hosts,
             prev_paths,
             prev_disp,
+            prev_snoozed_until,
         )) = existing_opt
         {
             let highest_severity =
@@ -1360,14 +1407,28 @@ impl SreDatabase {
             let merged_hosts = Self::merge_json_string_arrays(&prev_hosts, &actor.target_hosts_json, 24);
             let merged_paths = Self::merge_json_string_arrays(&prev_paths, &actor.sample_paths_json, 32);
 
-            let new_disp = if prev_disp == "ALLOWLISTED" {
-                "ALLOWLISTED".to_string()
+            let (new_disp, new_snoozed) = if prev_disp == "ALLOWLISTED" {
+                ("ALLOWLISTED".to_string(), None)
+            } else if prev_disp == "SNOOZED" {
+                let ref_now = chrono::DateTime::parse_from_rfc3339(actor.last_seen_at.trim())
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                    .unwrap_or_else(|_| chrono::Utc::now());
+                let still_snoozed = prev_snoozed_until
+                    .as_deref()
+                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s.trim()).ok())
+                    .map(|u| u.with_timezone(&chrono::Utc) > ref_now)
+                    .unwrap_or(false);
+                if still_snoozed {
+                    ("SNOOZED".to_string(), prev_snoozed_until)
+                } else {
+                    ("ACTIVE".to_string(), None)
+                }
             } else if prev_disp == "RESOLVED"
                 && Self::severity_rank(&actor.highest_severity) > Self::severity_rank(&prev_sev)
             {
-                "ACTIVE".to_string()
+                ("ACTIVE".to_string(), None)
             } else {
-                prev_disp
+                (prev_disp, None)
             };
 
             self.conn.execute(
@@ -1387,7 +1448,8 @@ impl SreDatabase {
                     latest_classification = COALESCE(?14, latest_classification),
                     target_hosts_json = ?15,
                     sample_paths_json = ?16,
-                    disposition = ?17
+                    disposition = ?17,
+                    snoozed_until = ?18
                  WHERE id = ?1",
                 params![
                     actor.id,
@@ -1407,6 +1469,7 @@ impl SreDatabase {
                     merged_hosts,
                     merged_paths,
                     new_disp,
+                    new_snoozed,
                 ],
             )?;
         } else {
@@ -1415,8 +1478,8 @@ impl SreDatabase {
                     id, actor_type, ip_address, asn, as_org, country,
                     intel_tags_json, intel_summary, first_seen_at, last_seen_at,
                     runs_seen, total_requests, total_origin_200s, highest_severity,
-                    latest_classification, target_hosts_json, sample_paths_json, disposition
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                    latest_classification, target_hosts_json, sample_paths_json, disposition, snoozed_until
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
                 params![
                     actor.id,
                     actor.actor_type,
@@ -1436,6 +1499,7 @@ impl SreDatabase {
                     actor.target_hosts_json,
                     actor.sample_paths_json,
                     actor.disposition,
+                    actor.snoozed_until,
                 ],
             )?;
         }
@@ -1443,11 +1507,12 @@ impl SreDatabase {
     }
 
     pub fn list_threat_actors(&self, disposition: Option<&str>) -> Result<Vec<ThreatActorRow>> {
+        let _ = self.expire_due_snoozed_actors(&chrono::Utc::now().to_rfc3339());
         let mut sql = String::from(
             "SELECT id, actor_type, ip_address, asn, as_org, country,
                     intel_tags_json, intel_summary, first_seen_at, last_seen_at,
                     runs_seen, total_requests, total_origin_200s, highest_severity,
-                    latest_classification, target_hosts_json, sample_paths_json, disposition
+                    latest_classification, target_hosts_json, sample_paths_json, disposition, snoozed_until
              FROM threat_actors",
         );
         let filter_clean = disposition
@@ -1486,6 +1551,7 @@ impl SreDatabase {
                 target_hosts_json: row.get(15)?,
                 sample_paths_json: row.get(16)?,
                 disposition: row.get(17)?,
+                snoozed_until: row.get(18)?,
             })
         };
 
@@ -1508,11 +1574,27 @@ impl SreDatabase {
         let normalized = match disposition.trim().to_ascii_uppercase().as_str() {
             "ALLOWLISTED" => "ALLOWLISTED",
             "RESOLVED" => "RESOLVED",
+            "SNOOZED" => "SNOOZED",
             _ => "ACTIVE",
         };
+        if normalized == "SNOOZED" {
+            self.conn.execute(
+                "UPDATE threat_actors SET disposition = 'SNOOZED' WHERE id = ?1",
+                params![actor_id],
+            )?;
+        } else {
+            self.conn.execute(
+                "UPDATE threat_actors SET disposition = ?2, snoozed_until = NULL WHERE id = ?1",
+                params![actor_id, normalized],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn snooze_threat_actor(&self, actor_id: &str, snoozed_until_iso: &str) -> Result<()> {
         self.conn.execute(
-            "UPDATE threat_actors SET disposition = ?2 WHERE id = ?1",
-            params![actor_id, normalized],
+            "UPDATE threat_actors SET disposition = 'SNOOZED', snoozed_until = ?2 WHERE id = ?1",
+            params![actor_id, snoozed_until_iso],
         )?;
         Ok(())
     }

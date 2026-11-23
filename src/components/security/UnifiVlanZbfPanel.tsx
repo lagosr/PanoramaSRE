@@ -13,8 +13,10 @@ import {
   Wifi,
 } from 'lucide-react';
 import { CustomSelect } from '../ui/CustomSelect';
+import { UnifiZoneFlowExplorer } from './UnifiZoneFlowExplorer';
 import { formatLocalDateTime, formatRelativeTime } from '../../lib/formatters';
 import type {
+  LanClientBaselineRow,
   UnifiNetworkDto,
   UnifiPolicyDto,
   UnifiTopologySnapshotDto,
@@ -27,7 +29,7 @@ import {
   type ZbfCellVerdict,
 } from '../../lib/unifi-zbf';
 
-type PanelTab = 'matrix' | 'vlans' | 'rules';
+type PanelTab = 'flow' | 'matrix' | 'vlans' | 'rules';
 
 interface UnifiVlanZbfPanelProps {
   topology: UnifiTopologySnapshotDto | null;
@@ -37,6 +39,8 @@ interface UnifiVlanZbfPanelProps {
   onSelectVlanFilter: (vlanName: string) => void;
   onRefresh: () => void;
   onOpenUnifiFirewall: () => void;
+  lanClients?: LanClientBaselineRow[];
+  onToggleLanTrust?: (client: LanClientBaselineRow, trusted: boolean) => void;
 }
 
 function verdictPillMeta(verdict: ZbfCellVerdict): {
@@ -97,8 +101,10 @@ export const UnifiVlanZbfPanel: React.FC<UnifiVlanZbfPanelProps> = ({
   onSelectVlanFilter,
   onRefresh,
   onOpenUnifiFirewall,
+  lanClients = [],
+  onToggleLanTrust,
 }) => {
-  const [panelTab, setPanelTab] = useState<PanelTab>('matrix');
+  const [panelTab, setPanelTab] = useState<PanelTab>('flow');
   const [activeZonesOnly, setActiveZonesOnly] = useState<boolean>(true);
   const [selectedPair, setSelectedPair] = useState<{ srcId: string; dstId: string } | null>(null);
   const [customRulesOnly, setCustomRulesOnly] = useState<boolean>(false);
@@ -370,6 +376,7 @@ export const UnifiVlanZbfPanel: React.FC<UnifiVlanZbfPanelProps> = ({
             value={panelTab}
             onChange={setPanelTab}
             options={[
+              { value: 'flow', label: 'Zone Flow Explorer' },
               { value: 'matrix', label: 'Segmentation Matrix' },
               {
                 value: 'vlans',
@@ -415,6 +422,19 @@ export const UnifiVlanZbfPanel: React.FC<UnifiVlanZbfPanelProps> = ({
           <RefreshCw className="w-4 h-4 animate-spin" />
           <span>Querying UniFi VLAN subnets, zones, and 270+ ZBF policies...</span>
         </div>
+      )}
+
+      {/* ================================================================= */}
+      {/* SUB-VIEW 0: INTERACTIVE ZONE FLOW WIRE EXPLORER                   */}
+      {/* ================================================================= */}
+      {topology && panelTab === 'flow' && (
+        <UnifiZoneFlowExplorer
+          topology={topology}
+          matrix={matrix}
+          lanClients={lanClients}
+          onToggleLanTrust={onToggleLanTrust}
+          renderPolicyRow={renderPolicyRow}
+        />
       )}
 
       {/* ================================================================= */}

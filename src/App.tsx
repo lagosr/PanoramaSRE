@@ -3695,8 +3695,6 @@ export const App: React.FC = () => {
               onNavigateToSettings={() => setActiveTab('settings')}
               wshSnapshot={wshSnapshot}
               terminalTabs={terminalTabs}
-              onTriggerUnifiSiemAction={(action) => void handleTriggerUnifiSiemAction(action)}
-              onReapplyHardening={() => handleReapplyHardening('security')}
               onOpenInBottomConsole={handleOpenInBottomConsole}
               onAbortJob={handleAbortJob}
               onClearTab={handleClearTab}
@@ -3726,6 +3724,9 @@ export const App: React.FC = () => {
               onClearTab={handleClearTab}
               onEmitSettingsStream={handleEmitSettingsStream}
               onThreatSettingsChanged={(dto) => setThreatSettings(dto)}
+              wshSnapshot={wshSnapshot}
+              onTriggerUnifiSiemAction={(action) => void handleTriggerUnifiSiemAction(action)}
+              onReapplyHardening={() => handleReapplyHardening('settings')}
             />
           )}
 

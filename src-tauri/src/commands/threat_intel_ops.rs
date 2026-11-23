@@ -248,7 +248,7 @@ fn shared_gemini_client() -> Option<&'static reqwest::Client> {
         .get_or_init(|| {
             reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(10))
-                .timeout(Duration::from_secs(120))
+                .timeout(Duration::from_secs(200))
                 .pool_idle_timeout(Duration::from_secs(60))
                 .user_agent("PanoramaSRE-Gemini/1.0")
                 .build()
@@ -1959,6 +1959,28 @@ pub fn evaluate_stage0_triage(
         .collect();
     let baseline_seeded = !prior_lan_clients.is_empty();
 
+    let now_ref_dt = chrono::DateTime::parse_from_rfc3339(now_iso.trim())
+        .map(|dt| dt.with_timezone(&Utc))
+        .unwrap_or_else(|_| Utc::now());
+    let snoozed_actor_map: HashMap<String, Option<String>> = prior_actors
+        .iter()
+        .filter(|a| a.disposition.eq_ignore_ascii_case("SNOOZED"))
+        .filter_map(|a| {
+            let valid = a
+                .snoozed_until
+                .as_deref()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s.trim()).ok())
+                .map(|dt| dt.with_timezone(&Utc) > now_ref_dt)
+                .unwrap_or(false);
+            if valid {
+                Some((a.id.clone(), a.snoozed_until.clone()))
+            } else {
+                None
+            }
+        })
+        .collect();
+    let active_snoozed_ips: HashSet<String> = snoozed_actor_map.keys().cloned().collect();
+
     let mut make_finding = |layer: &str,
                             rule_id: &str,
                             sev: &str,
@@ -2115,6 +2137,9 @@ pub fn evaluate_stage0_triage(
         }
 
         for (ip, intel) in &cf.ip_intel {
+            if active_snoozed_ips.contains(ip) {
+                continue;
+            }
             if !intel.tags.is_empty() && !is_allowlisted(allowlist, Some(ip), None, None, None) {
                 suspect_ips.insert(ip.clone());
                 let rollup = rollups.get(ip);
@@ -2182,6 +2207,10 @@ pub fn evaluate_stage0_triage(
                     r.ray_ids.iter().cloned().collect(),
                     json!({ "paths": r.paths, "origin_200s": r.origin_200s }),
                 );
+                continue;
+            }
+
+            if active_snoozed_ips.contains(ip) {
                 continue;
             }
 
@@ -2516,10 +2545,20 @@ pub fn evaluate_stage0_triage(
             if baseline_seeded && !is_known_trusted && !allowlisted {
                 suspect_macs.insert(mac.clone());
                 new_macs_detected.push(mac.clone());
+                let ip_disp = cli.ip_address.as_deref().unwrap_or("unassigned");
+                let vendor_disp = cli.oui_vendor.as_deref().unwrap_or("Unknown / Randomized MAC");
+                let net_disp = cli.network_name.as_deref().unwrap_or("Unknown VLAN");
+                let zone_disp = cli.zone_name.as_deref().unwrap_or("Unassigned Zone");
+                let zone_l = cli.zone_name.as_deref().unwrap_or("").to_ascii_lowercase();
+                let net_l = cli.network_name.as_deref().unwrap_or("").to_ascii_lowercase();
+                let is_isolated_lan = ["guest", "kid", "untrusted", "iot", "hotspot"]
+                    .iter()
+                    .any(|kw| zone_l.contains(kw) || net_l.contains(kw));
+                let rogue_sev = if is_isolated_lan { "MEDIUM" } else { "HIGH" };
                 make_finding(
                     "UNIFI",
                     "UNIFI_ROGUE_LAN_CLIENT",
-                    "HIGH",
+                    rogue_sev,
                     "ZERO_TRUST",
                     format!(
                         "Unknown LAN Device Detected: {}",
@@ -2529,8 +2568,8 @@ pub fn evaluate_stage0_triage(
                             .unwrap_or(&mac)
                     ),
                     format!(
-                        "Previously unseen MAC {} (IP {:?}, Vendor {:?}, Network {:?}) joined the LAN.",
-                        mac, cli.ip_address, cli.oui_vendor, cli.network_name
+                        "Previously unseen MAC {} (IP {}, Vendor {}, Network {}, Zone {}) joined the LAN.",
+                        mac, ip_disp, vendor_disp, net_disp, zone_disp
                     ),
                     cli.network_name.clone(),
                     cli.ip_address.clone(),
@@ -2720,11 +2759,21 @@ pub fn evaluate_stage0_triage(
         .map(|a| (a.id.clone(), a))
         .collect();
 
+    let tracked_candidate_ips: BTreeSet<String> = suspect_ips.clone();
+    suspect_ips.retain(|ip| {
+        if !active_snoozed_ips.contains(ip) {
+            return true;
+        }
+        rollups.get(ip).map(|r| r.origin_200s > 0).unwrap_or(false)
+    });
+
     let mut actor_candidates = Vec::new();
-    for ip in &suspect_ips {
+    for ip in &tracked_candidate_ips {
         let r_opt = rollups.get(ip);
         let intel_opt = cf_opt.and_then(|cf| cf.ip_intel.get(ip));
         let prev = prior_map.get(ip);
+        let has_origin_breach = r_opt.map(|r| r.origin_200s > 0).unwrap_or(false);
+        let is_actively_snoozed = !has_origin_breach && active_snoozed_ips.contains(ip);
         let hits_strict = r_opt
             .map(|r| {
                 r.hosts
@@ -2793,9 +2842,19 @@ pub fn evaluate_stage0_triage(
                     .unwrap_or_default(),
             )
             .unwrap_or_else(|_| "[]".to_string()),
-            disposition: prev
-                .map(|p| p.disposition.clone())
-                .unwrap_or_else(|| "ACTIVE".to_string()),
+            disposition: if is_actively_snoozed {
+                "SNOOZED".to_string()
+            } else if has_origin_breach {
+                "ACTIVE".to_string()
+            } else {
+                prev.map(|p| p.disposition.clone())
+                    .unwrap_or_else(|| "ACTIVE".to_string())
+            },
+            snoozed_until: if is_actively_snoozed {
+                snoozed_actor_map.get(ip).cloned().flatten()
+            } else {
+                None
+            },
         });
     }
 
@@ -2822,6 +2881,7 @@ pub fn evaluate_stage0_triage(
 
     let top_actors_for_llm: Vec<Value> = actor_candidates
         .iter()
+        .filter(|a| a.disposition != "SNOOZED")
         .take(25)
         .map(|a| {
             let rollup_opt = a.ip_address.as_ref().and_then(|ip| rollups.get(ip));
@@ -3287,7 +3347,13 @@ async fn call_gemini_structured(
         }
     });
 
-    let timeout_secs = if thinking_level == "high" { 115 } else { 55 };
+    let timeout_secs = if thinking_level == "low" {
+        60
+    } else if thinking_level == "high" {
+        180
+    } else {
+        150
+    };
     let mut last_err = String::new();
     for attempt in 0..3 {
         let resp = client
@@ -3334,8 +3400,8 @@ async fn call_gemini_structured(
                 } else {
                     format!("Gemini transport error ({}): {}", clean_model, err)
                 };
-                // Cap timeout retries to at most 1 retry so slow deep-thinking calls don't stall silently
-                let can_retry = if is_timeout { attempt < 1 } else { attempt < 2 };
+                // Never retry timed-out Gemini calls so a slow model cannot burn 2x wall-clock budget
+                let can_retry = !is_timeout && attempt < 2;
                 if can_retry {
                     tokio::time::sleep(Duration::from_secs(2)).await;
                     continue;
@@ -3594,6 +3660,7 @@ pub async fn execute_threat_audit_pipeline(
         let uni = resolve_dpapi_or_env_secret(&guard, SETTING_UNIFI_KEY_DPAPI, "UNIFI_API_KEY");
         let al = guard.list_threat_allowlist().unwrap_or_default();
         let lan = guard.list_lan_clients().unwrap_or_default();
+        let _ = guard.expire_due_snoozed_actors(&started_at.to_rfc3339());
         let actors = guard.list_threat_actors(Some("ALL")).unwrap_or_default();
         let since_24h = (started_at - ChronoDuration::hours(24)).to_rfc3339();
         let used = guard.count_carbon_escalations_since(&since_24h).unwrap_or(0);
@@ -3938,11 +4005,12 @@ pub async fn execute_threat_audit_pipeline(
                         format!("Retrieved {} 72h forensic timeline event(s).", timeline.len()),
                     );
 
+                    let bounded_timeline: Vec<&CfHttpEvent> = timeline.iter().take(40).collect();
                     let forensic_payload = json!({
                         "stage0Dossier": stage0.dossier,
                         "stage1Brief": stage1_brief,
                         "escalationReasons": escalation_reasons,
-                        "forensic72hTimeline": timeline,
+                        "forensic72hTimeline": bounded_timeline,
                         "wshRawExcerpts": {
                             "sshSample": wsh_opt.as_ref().map(|w| sanitize_bounded(&w.ssh_logs_raw, 1800)).unwrap_or_default(),
                             "lighttpdAnomaliesSample": wsh_opt.as_ref().map(|w| sanitize_bounded(&w.lighttpd_anomalous_raw, 1800)).unwrap_or_default(),
@@ -3958,7 +4026,7 @@ pub async fn execute_threat_audit_pipeline(
                         "Stage 2 Gemini Carbon Forensics",
                         "INFO",
                         format!(
-                            "Running Stage 2 Gemini Carbon deep forensics ({}, thinking=high — up to 115s)...",
+                            "Running Stage 2 Gemini Carbon deep forensics ({}, thinking=medium — up to 150s)...",
                             prefs.tier2_model
                         ),
                     );
@@ -3966,7 +4034,7 @@ pub async fn execute_threat_audit_pipeline(
                     match call_gemini_structured(
                         &gem.value,
                         &prefs.tier2_model,
-                        "high",
+                        "medium",
                         STAGE2_SYSTEM_PROMPT,
                         &forensic_payload,
                     )
@@ -4623,6 +4691,42 @@ pub async fn set_threat_actor_disposition(
     guard
         .set_threat_actor_disposition(&actor_id, &disposition)
         .map_err(|e| format!("Failed to update actor disposition: {}", e))
+}
+
+#[tauri::command]
+pub async fn snooze_threat_actor(
+    db: State<'_, Arc<Mutex<SreDatabase>>>,
+    actor_id: String,
+    days: u32,
+) -> Result<ThreatActorRow, String> {
+    if !(1..=365).contains(&days) {
+        return Err("Snooze duration must be between 1 and 365 days.".to_string());
+    }
+    let clean_id = actor_id.trim().to_string();
+    if clean_id.is_empty() {
+        return Err("Actor ID is required to snooze.".to_string());
+    }
+    let snoozed_until = (Utc::now() + ChronoDuration::days(days as i64))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let guard = db.lock().map_err(|e| format!("DB mutex poisoned: {}", e))?;
+    guard
+        .snooze_threat_actor(&clean_id, &snoozed_until)
+        .map_err(|e| format!("Failed to snooze threat actor: {}", e))?;
+    let _ = guard.log_action(
+        "SECURITY",
+        "INFO",
+        &format!(
+            "Snoozed threat actor {} for {} day(s) until {}",
+            clean_id, days, snoozed_until
+        ),
+        None,
+    );
+    let all = guard
+        .list_threat_actors(Some("ALL"))
+        .map_err(|e| format!("Failed reloading threat actor: {}", e))?;
+    all.into_iter()
+        .find(|a| a.id == clean_id)
+        .ok_or_else(|| format!("Threat actor '{}' not found", clean_id))
 }
 
 #[tauri::command]
