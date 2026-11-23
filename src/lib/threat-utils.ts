@@ -339,9 +339,11 @@ const EXPLOIT_PATH_REGEX =
 
 const FINDING_VECTOR_META: ReadonlyArray<{ key: string; label: string }> = [
   { key: 'ORIGIN_BREACH', label: 'Origin Breach (200/302)' },
-  { key: 'EXPLOIT_PROBES', label: 'Exploit / Secret Probes' },
+  { key: 'OPTIN_ABUSE', label: 'Opt-In Form (/api/opt-in)' },
+  { key: 'EXPLOIT_PROBES', label: 'Stack Exploit / Secrets' },
+  { key: 'IRRELEVANT_CMS_PROBE', label: 'WordPress / PHP Noise' },
   { key: 'INTEL_TAGGED', label: 'CF Threat Intel Tagged' },
-  { key: 'ZERO_TRUST', label: 'Zero Trust Access' },
+  { key: 'ZERO_TRUST', label: 'Zero Trust & Non-US Private' },
   { key: 'TUNNEL', label: 'Tunnel Health' },
   { key: 'AUDIT_LOG', label: 'Control-Plane Audit' },
 ];
@@ -578,11 +580,17 @@ export function classifyFindingVector(finding: ThreatFindingRow): string {
   const cat = (finding.category || '').trim().toUpperCase();
 
   if (rule === 'ORIGIN_BREACH_THROUGH' || cat === 'ORIGIN_BREACH') return 'ORIGIN_BREACH';
+  if (rule === 'PARAKITH_OPTIN_ABUSE' || cat === 'OPTIN_ABUSE') return 'OPTIN_ABUSE';
   if (rule === 'SECRET_EXPLOIT_PROBE') return 'EXPLOIT_PROBES';
+  if (rule === 'IRRELEVANT_CMS_PROBE' || cat === 'IRRELEVANT_CMS_PROBE') return 'IRRELEVANT_CMS_PROBE';
   if (rule === 'MALICIOUS_INTEL_HIT') return 'INTEL_TAGGED';
-  if (rule === 'ZT_UNEXPECTED_ACCESS' || cat === 'ZERO_TRUST') return 'ZERO_TRUST';
+  if (rule === 'ZT_UNEXPECTED_ACCESS' || rule === 'STRICT_PRIVATE_NON_US_PROBE' || cat === 'ZERO_TRUST') {
+    return 'ZERO_TRUST';
+  }
   if (rule === 'TUNNEL_DEGRADED' || cat === 'TUNNEL') return 'TUNNEL';
-  if (rule === 'CONTROL_PLANE_MUTATION' || cat === 'AUDIT_LOG') return 'AUDIT_LOG';
+  if (rule === 'CONTROL_PLANE_MUTATION' || rule === 'CONTROL_PLANE_ADMIN_CHANGE' || cat === 'AUDIT_LOG') {
+    return 'AUDIT_LOG';
+  }
   return cat || rule || 'OTHER';
 }
 

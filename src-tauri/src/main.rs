@@ -25,8 +25,9 @@ mod tests {
     use panorama_sre_lib::commands::threat_intel_ops::{
         build_waf_rule_expression, classify_host_sensitivity, evaluate_stage0_triage,
         is_allowlisted, parse_gemini_threat_brief, parse_unifi_cef_ndjson,
-        should_escalate_to_tier2, validate_ipv4_list, CfHttpEvent, CloudflareSecuritySnapshot,
-        DomainProfile, PanoramaAuthTelemetry, WshSecuritySnapshot,
+        should_escalate_to_tier2, validate_ipv4_list, CfAuditLogEntry, CfHttpEvent, CfIpIntelInfo,
+        CfWafRuleDto, CloudflareSecuritySnapshot, DomainProfile, PanoramaAuthTelemetry,
+        WshSecuritySnapshot,
     };
     use panorama_sre_lib::commands::unifi_ops::{
         enrich_unifi_topology, merge_unifi_network_detail, parse_unifi_clients_json,
@@ -995,6 +996,32 @@ mod tests {
 
         db.put_cached_cf_ip_intel("1.1.1.1", "{\"ok\":true}").unwrap();
         assert_eq!(db.get_cached_cf_ip_intel("1.1.1.1", 24).unwrap().as_deref(), Some("{\"ok\":true}"));
+
+        // WAF rule override CRUD
+        let ov = db
+            .upsert_waf_rule_override(
+                "wsh.panoramadr.com",
+                "Block Non-US WSH",
+                "block",
+                "(http.host eq \"wsh.panoramadr.com\" and ip.geoip.country ne \"US\")",
+                true,
+            )
+            .unwrap();
+        assert_eq!(db.list_waf_rule_overrides().unwrap().len(), 1);
+        db.upsert_waf_rule_override(
+            "wsh.panoramadr.com",
+            "Block Non-US WSH",
+            "managed_challenge",
+            "(http.host eq \"wsh.panoramadr.com\" and ip.geoip.country ne \"US\")",
+            false,
+        )
+        .unwrap();
+        let ovs = db.list_waf_rule_overrides().unwrap();
+        assert_eq!(ovs.len(), 1);
+        assert_eq!(ovs[0].action, "managed_challenge");
+        assert!(!ovs[0].enabled);
+        db.delete_waf_rule_override(&ov.id).unwrap();
+        assert!(db.list_waf_rule_overrides().unwrap().is_empty());
     }
 
     #[test]
@@ -1243,6 +1270,9 @@ mod tests {
             tunnels: vec![],
             audit_logs: vec![],
             ip_intel: Default::default(),
+            waf_rules: vec![],
+            waf_zones_budget: vec![],
+            waf_read_status: "ok".into(),
         };
 
         let unifi_snap = UnifiSecuritySnapshot {
@@ -1324,10 +1354,17 @@ mod tests {
         let (esc1, _) = should_escalate_to_tier2(false, false, "LOW", 0, 6, false);
         assert!(!esc1);
 
+        // Routine unflagged MEDIUM stays on Stage 1 Hydrogen without burning Carbon
+        let (esc_med, _) = should_escalate_to_tier2(false, false, "MEDIUM", 0, 6, false);
+        assert!(!esc_med);
+
+        // Stage 1 HIGH or Stage 0 hard_hit escalates when under cap
+        let (esc_high, _) = should_escalate_to_tier2(false, false, "HIGH", 0, 6, false);
+        assert!(esc_high);
         let (esc2, _) = should_escalate_to_tier2(true, false, "LOW", 0, 6, false);
         assert!(esc2);
 
-        // Cap exhausted blocks MEDIUM auto-escalation
+        // Cap exhausted blocks flagged HIGH/MEDIUM auto-escalation
         let (esc3, reasons3) = should_escalate_to_tier2(false, true, "MEDIUM", 6, 6, false);
         assert!(!esc3);
         assert!(reasons3.iter().any(|r| r.contains("daily Carbon cap reached")));
@@ -1337,6 +1374,226 @@ mod tests {
         assert!(esc4);
         let (esc5, _) = should_escalate_to_tier2(false, false, "LOW", 6, 6, true);
         assert!(esc5);
+    }
+
+    #[test]
+    fn test_stack_aware_triage_and_noise_tuning() {
+        let allowlist = vec![ThreatAllowlistRow {
+            id: "1".into(),
+            entry_type: "EMAIL".into(),
+            value: "lagosr@gmail.com".into(),
+            label: "Owner".into(),
+            created_at: "".into(),
+        }];
+
+        let mut wp_events = Vec::new();
+        for i in 0..10 {
+            wp_events.push(CfHttpEvent {
+                datetime: "2026-11-23T05:00:00Z".into(),
+                client_ip: "2a06:98c0:3600::103".into(),
+                client_asn: "13335".into(),
+                client_asn_desc: "Cloudflare".into(),
+                client_country: "RU".into(),
+                host: "parakith.com".into(),
+                method: "GET".into(),
+                path: "//wp-admin/install.php".into(),
+                query: "".into(),
+                user_agent: "bot".into(),
+                edge_status: if i < 6 { 403 } else { 404 },
+                origin_status: if i < 6 { 0 } else { 404 },
+                security_action: if i < 6 { "block".into() } else { "".into() },
+                security_source: if i < 6 { "firewallCustom".into() } else { "".into() },
+                ray_name: format!("ray-wp-{}", i),
+            });
+        }
+        // VPN-only IP hitting wp-json on parakith.com
+        for i in 0..3 {
+            wp_events.push(CfHttpEvent {
+                datetime: "2026-11-23T05:01:00Z".into(),
+                client_ip: "128.90.157.9".into(),
+                client_asn: "22363".into(),
+                client_asn_desc: "Powerhouse".into(),
+                client_country: "NL".into(),
+                host: "parakith.com".into(),
+                method: "GET".into(),
+                path: "/wp-json/".into(),
+                query: "".into(),
+                user_agent: "curl".into(),
+                edge_status: 404,
+                origin_status: 404,
+                security_action: "".into(),
+                security_source: "".into(),
+                ray_name: format!("ray-vpn-{}", i),
+            });
+        }
+        // /api/opt-in burst on parakith.com (5 POSTs -> PARAKITH_OPTIN_ABUSE MEDIUM)
+        for i in 0..5 {
+            wp_events.push(CfHttpEvent {
+                datetime: "2026-11-23T05:02:00Z".into(),
+                client_ip: "198.51.100.77".into(),
+                client_asn: "14061".into(),
+                client_asn_desc: "DigitalOcean".into(),
+                client_country: "US".into(),
+                host: "parakith.com".into(),
+                method: "POST".into(),
+                path: "/api/opt-in".into(),
+                query: "".into(),
+                user_agent: "python-requests".into(),
+                edge_status: 400,
+                origin_status: 400,
+                security_action: "".into(),
+                security_source: "".into(),
+                ray_name: format!("ray-opt-{}", i),
+            });
+        }
+        // Strict private non-US edge-blocked vs unblocked slip-through with partial geo WAF rule
+        for i in 0..3 {
+            wp_events.push(CfHttpEvent {
+                datetime: "2026-11-23T05:03:00Z".into(),
+                client_ip: "43.134.23.177".into(),
+                client_asn: "132203".into(),
+                client_asn_desc: "Tencent".into(),
+                client_country: "SG".into(),
+                host: "wsh.panoramadr.com".into(),
+                method: "GET".into(),
+                path: "/".into(),
+                query: "".into(),
+                user_agent: "scanner".into(),
+                edge_status: 403,
+                origin_status: 0,
+                security_action: "block".into(),
+                security_source: "firewallCustom".into(),
+                ray_name: format!("ray-wsh-blk-{}", i),
+            });
+        }
+        wp_events.push(CfHttpEvent {
+            datetime: "2026-11-23T05:04:00Z".into(),
+            client_ip: "43.157.175.122".into(),
+            client_asn: "132203".into(),
+            client_asn_desc: "Tencent".into(),
+            client_country: "BR".into(),
+            host: "wsh.panoramadr.com".into(),
+            method: "GET".into(),
+            path: "/".into(),
+            query: "".into(),
+            user_agent: "scanner".into(),
+            edge_status: 302,
+            origin_status: 0,
+            security_action: "".into(),
+            security_source: "".into(),
+            ray_name: "ray-wsh-unblk".into(),
+        });
+
+        let mut intel_map = std::collections::HashMap::new();
+        intel_map.insert(
+            "128.90.157.9".to_string(),
+            CfIpIntelInfo {
+                ip: "128.90.157.9".into(),
+                tags: vec!["vpn".into()],
+                summary: "Powerhouse Management [vpn]".into(),
+                ptr_domain: None,
+            },
+        );
+
+        let cf_snap = CloudflareSecuritySnapshot {
+            account_id: "acct-1".into(),
+            zones: vec![],
+            http_events: wp_events,
+            firewall_events: vec![],
+            access_app_count: 1,
+            access_logs: vec![],
+            tunnels: vec![],
+            audit_logs: vec![
+                CfAuditLogEntry {
+                    when: "2026-11-23T05:55:47Z".into(),
+                    action_type: "create".into(),
+                    actor_email: "lagosr@gmail.com".into(),
+                    resource_type: "rules".into(),
+                    resource_id: "r-1".into(),
+                },
+                CfAuditLogEntry {
+                    when: "2026-11-23T05:56:00Z".into(),
+                    action_type: "delete".into(),
+                    actor_email: "lagosr@gmail.com".into(),
+                    resource_type: "access".into(),
+                    resource_id: "app-1".into(),
+                },
+            ],
+            ip_intel: intel_map,
+            waf_rules: vec![CfWafRuleDto {
+                id: "waf-1".into(),
+                zone_id: "z-1".into(),
+                zone_name: "panoramadr.com".into(),
+                description: "Block non-US WSH".into(),
+                action: "block".into(),
+                expression: "(http.host eq \"wsh.panoramadr.com\" and ip.geoip.country ne \"US\")".into(),
+                enabled: true,
+                source: "cloudflare_live".into(),
+            }],
+            waf_zones_budget: vec![],
+            waf_read_status: "ok".into(),
+        };
+
+        let triage = evaluate_stage0_triage(
+            "run-tuned",
+            "2026-11-23T06:00:00Z",
+            Some(&cf_snap),
+            None,
+            None,
+            &allowlist,
+            &[],
+            &[],
+        );
+
+        let cms_finding = triage
+            .findings
+            .iter()
+            .find(|f| f.rule_id == "IRRELEVANT_CMS_PROBE")
+            .expect("cms noise finding");
+        assert_eq!(cms_finding.severity, "LOW");
+
+        let vpn_finding = triage
+            .findings
+            .iter()
+            .find(|f| f.rule_id == "MALICIOUS_INTEL_HIT" && f.actor_ip.as_deref() == Some("128.90.157.9"))
+            .expect("vpn finding");
+        assert_eq!(vpn_finding.severity, "LOW");
+
+        let optin_finding = triage
+            .findings
+            .iter()
+            .find(|f| f.rule_id == "PARAKITH_OPTIN_ABUSE")
+            .expect("opt-in finding");
+        assert_eq!(optin_finding.severity, "MEDIUM");
+
+        let admin_create = triage
+            .findings
+            .iter()
+            .find(|f| f.rule_id == "CONTROL_PLANE_ADMIN_CHANGE")
+            .expect("admin create finding");
+        assert_eq!(admin_create.severity, "LOW");
+
+        let admin_delete = triage
+            .findings
+            .iter()
+            .find(|f| f.rule_id == "CONTROL_PLANE_MUTATION")
+            .expect("destructive delete finding");
+        assert_eq!(admin_delete.severity, "HIGH");
+
+        let wsh_blocked = triage
+            .findings
+            .iter()
+            .find(|f| f.rule_id == "STRICT_PRIVATE_NON_US_PROBE" && f.actor_ip.as_deref() == Some("43.134.23.177"))
+            .expect("wsh edge blocked finding");
+        assert_eq!(wsh_blocked.severity, "LOW");
+
+        let wsh_unblocked = triage
+            .findings
+            .iter()
+            .find(|f| f.rule_id == "STRICT_PRIVATE_NON_US_PROBE" && f.actor_ip.as_deref() == Some("43.157.175.122"))
+            .expect("wsh unblocked finding");
+        assert_eq!(wsh_unblocked.severity, "MEDIUM");
+        assert!(wsh_unblocked.title.contains("Partial WAF Coverage"));
     }
 
     #[test]

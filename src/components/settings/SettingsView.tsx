@@ -339,6 +339,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             tunnelsOk: boolean;
             intelOk: boolean;
             auditOk: boolean;
+            wafReadOk?: boolean;
+            wafReadStatus?: string;
+            wafRulesCount?: number;
           }>('test_cloudflare_threat_connection', {
             tokenOverride: null,
             accountIdOverride: null,
@@ -350,7 +353,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         },
         (res) => {
           const zoneNames = res.zones.map((z) => `${z.name} (${z.plan})`).join(', ');
-          return `Account ${res.accountId} • Zones: ${zoneNames || 'none'} • Tunnels=${res.tunnelsOk ? 'OK' : 'WARN'} • IP Intel=${res.intelOk ? 'OK' : 'WARN'} • Audit=${res.auditOk ? 'OK' : 'WARN'}`;
+          const wafText = res.wafReadOk
+            ? `OK (${res.wafRulesCount ?? 0} rules)`
+            : 'Add Zone WAF:Read';
+          return `Account ${res.accountId} • Zones: ${zoneNames || 'none'} • Tunnels=${res.tunnelsOk ? 'OK' : 'WARN'} • IP Intel=${res.intelOk ? 'OK' : 'WARN'} • Audit=${res.auditOk ? 'OK' : 'WARN'} • WAF Rules=${wafText}`;
         }
       ),
       runOne(

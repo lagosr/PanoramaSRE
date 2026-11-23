@@ -64,8 +64,18 @@ import {
   severityToBadgeVariant,
   verdictToBadgeVariant,
 } from '../../lib/threat-utils';
+import {
+  evaluateActionWafCoverage,
+  evaluateActorWafCoverage,
+  evaluateCampaignWafCoverage,
+  evaluateFindingWafCoverage,
+  partitionExternalActions,
+  type WafActionEvaluation,
+} from '../../lib/waf-coverage';
 import type {
+  CfWafRuleDto,
   CfZoneSummary,
+  CloudflareWafSnapshotDto,
   CollectorStatuses,
   GeminiActionDto,
   GeminiBriefDto,
@@ -198,6 +208,17 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   const [campaignSeverityFilter, setCampaignSeverityFilter] = useState<string>('ALL');
   const [isLoadingActors, setIsLoadingActors] = useState<boolean>(false);
 
+  // Live Cloudflare WAF Custom Rules + Local Tracked Overrides state
+  const [wafSnapshot, setWafSnapshot] = useState<CloudflareWafSnapshotDto | null>(null);
+  const [isLoadingWaf, setIsLoadingWaf] = useState<boolean>(false);
+  const [wafFeedback, setWafFeedback] = useState<{ text: string; tone: 'ok' | 'err' } | null>(null);
+  const [showManualWafForm, setShowManualWafForm] = useState<boolean>(false);
+  const [manualWafZone, setManualWafZone] = useState<string>('parakith.com');
+  const [manualWafName, setManualWafName] = useState<string>('');
+  const [manualWafAction, setManualWafAction] = useState<string>('block');
+  const [manualWafExpr, setManualWafExpr] = useState<string>('');
+  const [isSavingWafOverride, setIsSavingWafOverride] = useState<boolean>(false);
+
   // Internal LAN Baseline, VLAN/ZBF Topology, Allowlist & UniFi SIEM .env.siem state
   const [lanClients, setLanClients] = useState<LanClientBaselineRow[]>([]);
   const [lanSearch, setLanSearch] = useState<string>('');
@@ -317,6 +338,31 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
     }
   }, []);
 
+  const loadWafRules = useCallback(async (forceRefresh = false) => {
+    setIsLoadingWaf(true);
+    try {
+      const snap = await invoke<CloudflareWafSnapshotDto>('get_cloudflare_waf_rules', {
+        forceRefresh,
+      });
+      setWafSnapshot(snap ?? null);
+      if (forceRefresh) {
+        setWafFeedback({
+          text: snap?.wafReadOk
+            ? `Synced ${snap.rules.length} Cloudflare WAF rule(s) across ${snap.zones.length} zone(s).`
+            : snap?.permissionHint || 'Live WAF sync unavailable; using tracked local rules.',
+          tone: snap?.wafReadOk ? 'ok' : 'err',
+        });
+        setTimeout(() => setWafFeedback(null), 5000);
+      }
+    } catch (err) {
+      if (forceRefresh) {
+        setWafFeedback({ text: `WAF sync error: ${String(err)}`, tone: 'err' });
+      }
+    } finally {
+      setIsLoadingWaf(false);
+    }
+  }, []);
+
   useEffect(() => {
     void loadActors();
   }, [loadActors, activeRun?.id]);
@@ -328,6 +374,10 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   useEffect(() => {
     void loadUnifiTopology(false);
   }, [loadUnifiTopology, activeRun?.id, settings?.unifiConfigured]);
+
+  useEffect(() => {
+    void loadWafRules(false);
+  }, [loadWafRules, activeRun?.id, settings?.cfConfigured]);
 
   const collectorStatuses: CollectorStatuses = useMemo(() => {
     const fallback: CollectorStatuses = {
@@ -600,6 +650,57 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
     [geminiBrief]
   );
 
+  const wafRules: CfWafRuleDto[] = useMemo(
+    () => wafSnapshot?.rules ?? [],
+    [wafSnapshot]
+  );
+
+  const observedPathsByHost = useMemo(() => {
+    const map = new Map<string, Set<string>>();
+    for (const actor of actors) {
+      const hosts = safeParseJson<string[]>(actor.targetHostsJson, []);
+      const paths = safeParseJson<string[]>(actor.samplePathsJson, []);
+      for (const h of hosts) {
+        const cleanHost = normalizeHostname(h);
+        if (!cleanHost) continue;
+        let set = map.get(cleanHost);
+        if (!set) {
+          set = new Set<string>();
+          map.set(cleanHost, set);
+        }
+        for (const p of paths) {
+          if (p && p.trim() !== '/') set.add(p);
+        }
+      }
+    }
+    return map;
+  }, [actors]);
+
+  const partitionedExternalActions = useMemo(
+    () => partitionExternalActions(externalActions, wafRules, externalCampaigns),
+    [externalActions, wafRules, externalCampaigns]
+  );
+
+  const overviewActionsState = useMemo(() => {
+    const all = geminiBrief?.recommendedActions || [];
+    const visible: Array<{ action: GeminiActionDto; coverage: WafActionEvaluation | null }> = [];
+    let suppressedCount = 0;
+
+    for (const act of all) {
+      if (classifyActionSurface(act.surface) === 'external') {
+        const cov = evaluateActionWafCoverage(act, wafRules, externalCampaigns);
+        if (cov.isWafAddAction && cov.status === 'COVERED') {
+          suppressedCount += 1;
+          continue;
+        }
+        visible.push({ action: act, coverage: cov });
+      } else {
+        visible.push({ action: act, coverage: null });
+      }
+    }
+    return { visible, suppressedCount };
+  }, [geminiBrief, wafRules, externalCampaigns]);
+
   const siemContainer = useMemo(
     () =>
       (wshSnapshot?.containers || []).find((c) =>
@@ -728,6 +829,52 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
     }
   };
 
+  const handleSaveWafOverride = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!manualWafName.trim() || !manualWafExpr.trim()) return;
+    setIsSavingWafOverride(true);
+    try {
+      const updated = await invoke<CloudflareWafSnapshotDto>('upsert_waf_rule_override', {
+        zoneName: manualWafZone,
+        ruleName: manualWafName.trim(),
+        action: manualWafAction,
+        expression: manualWafExpr.trim(),
+        enabled: true,
+      });
+      setWafSnapshot(updated);
+      setManualWafName('');
+      setManualWafExpr('');
+      setShowManualWafForm(false);
+      setWafFeedback({
+        text: `Tracked local WAF rule on ${manualWafZone}. Matching items now display 'WAF Covered'.`,
+        tone: 'ok',
+      });
+      setTimeout(() => setWafFeedback(null), 4500);
+    } catch (err) {
+      setWafFeedback({ text: `Failed saving WAF override: ${String(err)}`, tone: 'err' });
+    } finally {
+      setIsSavingWafOverride(false);
+    }
+  };
+
+  const handleDeleteWafOverride = async (id: string) => {
+    try {
+      const updated = await invoke<CloudflareWafSnapshotDto>('delete_waf_rule_override', { id });
+      setWafSnapshot(updated);
+    } catch (err) {
+      setWafFeedback({ text: `Failed removing WAF override: ${String(err)}`, tone: 'err' });
+    }
+  };
+
+  const handlePrefillMarkCovered = (zoneName: string, ruleName: string, expr: string) => {
+    const cleanZone = normalizeHostname(zoneName).includes('parakith') ? 'parakith.com' : 'panoramadr.com';
+    setManualWafZone(cleanZone);
+    setManualWafName(ruleName);
+    setManualWafExpr(expr);
+    setShowManualWafForm(true);
+    document.getElementById('cf-waf-rules-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
   const windowHrsNum = Number.parseInt(lookbackHours, 10) || 6;
   const dailyCarbonCap = settings?.preferences.dailyCarbonCap ?? 6;
   const carbonUsed24h = settings?.carbonUsedLast24h ?? 0;
@@ -757,6 +904,9 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
     const copyWafKey = `find-waf-${f.id}`;
     const zoneForLink = f.host?.includes('parakith') ? 'parakith.com' : 'panoramadr.com';
     const isExt = classifyFindingSurface(f.sourceLayer) === 'external';
+    const findWafCov = isExt ? evaluateFindingWafCoverage(f, wafRules) : null;
+    const isCovered = findWafCov?.status === 'COVERED';
+    const isPartial = findWafCov?.status === 'PARTIAL';
 
     return (
       <div
@@ -771,6 +921,12 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
               label={isExt ? 'External Perimeter' : 'Internal LAN / WSH'}
               variant={isExt ? 'info' : 'accent'}
             />
+            {isCovered && findWafCov?.primaryRuleName && (
+              <StatusBadge label={`WAF Covered: ${findWafCov.primaryRuleName}`} variant="success" />
+            )}
+            {isPartial && findWafCov?.primaryRuleName && (
+              <StatusBadge label={`Partial WAF: ${findWafCov.primaryRuleName}`} variant="warning" />
+            )}
             <span className="text-[11px] font-mono text-slate-500">{f.ruleId}</span>
             <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">
               {f.title}
@@ -778,7 +934,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
           </div>
 
           <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
-            {wafExpr && (
+            {wafExpr && !isCovered && (
               <button
                 type="button"
                 onClick={() => void handleCopyText(copyWafKey, wafExpr)}
@@ -821,6 +977,13 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
 
         <p className="text-xs text-slate-700 dark:text-slate-300">{f.summary}</p>
 
+        {isPartial && findWafCov && (
+          <div className="text-[11px] font-mono text-amber-700 dark:text-amber-400">
+            {findWafCov.reason}
+            {findWafCov.uncoveredPaths.length > 0 && ` Uncovered: ${findWafCov.uncoveredPaths.slice(0, 4).join(', ')}`}
+          </div>
+        )}
+
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] font-mono text-slate-500 dark:text-slate-400">
           {f.host && <span>Host: {f.host}</span>}
           {f.actorIp && <span>IP: {f.actorIp}</span>}
@@ -831,12 +994,19 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
     );
   };
 
-  const renderActionRow = (act: GeminiActionDto, idx: number, prefix: string) => {
+  const renderActionRow = (
+    act: GeminiActionDto,
+    idx: number,
+    prefix: string,
+    wafCoverage?: WafActionEvaluation | null
+  ) => {
     const copyKey = `${prefix}-waf-${idx}`;
     const surfaceDomain = classifyActionSurface(act.surface);
     const isUnifi = surfaceDomain === 'internal';
     const isZt = act.surface.toUpperCase().includes('ZERO_TRUST');
     const isCrossover = surfaceDomain === 'crossover';
+    const isPartialWaf = wafCoverage?.status === 'PARTIAL';
+    const isUncoveredWafAdd = Boolean(wafCoverage?.isWafAddAction && wafCoverage.status === 'UNCOVERED' && act.wafRuleSnippet);
     const deepUrl = isUnifi
       ? buildUnifiConsoleUrl(unifiBaseUrl, 'policies')
       : isZt
@@ -871,6 +1041,9 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                   : 'neutral'
               }
             />
+            {isPartialWaf && wafCoverage?.primaryRuleName && (
+              <StatusBadge label={`Tighten Rule: ${wafCoverage.primaryRuleName}`} variant="warning" />
+            )}
             <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">
               {act.action}
             </span>
@@ -888,7 +1061,30 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                 ) : (
                   <Copy className="w-3.5 h-3.5" />
                 )}
-                <span>{copiedKey === copyKey ? 'Copied!' : 'Copy WAF Rule'}</span>
+                <span>
+                  {copiedKey === copyKey
+                    ? 'Copied!'
+                    : isPartialWaf
+                    ? 'Copy Tightened Snippet'
+                    : 'Copy WAF Rule'}
+                </span>
+              </button>
+            )}
+            {isUncoveredWafAdd && act.wafRuleSnippet && (
+              <button
+                type="button"
+                onClick={() =>
+                  handlePrefillMarkCovered(
+                    deepLinkZoneForAction(`${act.action} ${act.wafRuleSnippet || ''}`),
+                    act.action.slice(0, 64),
+                    act.wafRuleSnippet || ''
+                  )
+                }
+                className="btn-ghost text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+                title="Track this rule as already deployed in Cloudflare"
+              >
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>Mark Covered</span>
               </button>
             )}
             {isCrossover ? (
@@ -920,6 +1116,13 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
         </div>
 
         <p className="text-xs text-slate-600 dark:text-slate-400">{act.rationale}</p>
+
+        {isPartialWaf && wafCoverage && (
+          <div className="text-[11px] font-mono text-amber-700 dark:text-amber-400">
+            {wafCoverage.reason}
+            {wafCoverage.uncoveredPaths.length > 0 && ` Uncovered paths: ${wafCoverage.uncoveredPaths.slice(0, 5).join(', ')}`}
+          </div>
+        )}
 
         {act.wafRuleSnippet && (
           <pre className="overflow-x-auto px-3 py-2 rounded-lg bg-white dark:bg-[#050b14] border border-slate-200/90 dark:border-slate-800 text-emerald-900 dark:text-emerald-400 font-mono text-xs">
@@ -1484,16 +1687,30 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                 </div>
               </div>
 
-              {geminiBrief.recommendedActions.length > 0 && (
+              {(overviewActionsState.visible.length > 0 || overviewActionsState.suppressedCount > 0) && (
                 <div className="space-y-3 pt-2 border-t border-slate-200 dark:border-slate-800">
-                  <div className="text-xs font-mono font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
-                    Recommended Actions by Surface ({geminiBrief.recommendedActions.length})
-                  </div>
-                  <div className="space-y-2.5">
-                    {geminiBrief.recommendedActions.map((act, idx) =>
-                      renderActionRow(act, idx, 'ov-act')
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-xs font-mono font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider tabular-nums">
+                      Recommended Actions by Surface ({overviewActionsState.visible.length})
+                    </div>
+                    {overviewActionsState.suppressedCount > 0 && (
+                      <StatusBadge
+                        label={`${overviewActionsState.suppressedCount} covered by WAF`}
+                        variant="success"
+                      />
                     )}
                   </div>
+                  {overviewActionsState.visible.length === 0 ? (
+                    <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-400">
+                      All external WAF actions for this run are already mitigated by deployed Cloudflare custom rules.
+                    </div>
+                  ) : (
+                    <div className="space-y-2.5">
+                      {overviewActionsState.visible.map((item, idx) =>
+                        renderActionRow(item.action, idx, 'ov-act', item.coverage)
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1732,6 +1949,197 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
             </button>
           </div>
 
+          {/* Active Cloudflare WAF Custom Rules & Free-Plan Slot Budget */}
+          <div
+            id="cf-waf-rules-card"
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4"
+          >
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+              <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <ShieldCheck className="w-5 h-5 text-[var(--color-brand-text)] shrink-0" />
+                  <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
+                    Cloudflare Custom WAF Rules &amp; Free-Plan Slot Budget
+                  </h3>
+                  {wafSnapshot?.wafReadOk ? (
+                    <StatusBadge label={`Live Sync OK (${wafRules.length} rules)`} variant="success" />
+                  ) : wafSnapshot?.wafReadStatus === 'forbidden' ? (
+                    <StatusBadge label="Add Zone WAF:Read Permission" variant="warning" />
+                  ) : (
+                    <StatusBadge label="Manual Tracking" variant="neutral" />
+                  )}
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-400">
+                  Deployed custom rules automatically mark matching campaigns, findings, and actors as <strong className="text-slate-800 dark:text-slate-200">WAF Covered</strong>, remove redundant add-WAF actions, and detect unblocked slip-through paths.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => void loadWafRules(true)}
+                  disabled={isLoadingWaf}
+                  className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isLoadingWaf ? 'animate-spin' : ''}`} />
+                  <span>{isLoadingWaf ? 'Syncing...' : 'Sync WAF Rules'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowManualWafForm((prev) => !prev)}
+                  className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>{showManualWafForm ? 'Close Rule Form' : 'Track Local Rule'}</span>
+                </button>
+              </div>
+            </div>
+
+            {wafSnapshot?.zones && wafSnapshot.zones.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2 tabular-nums">
+                {wafSnapshot.zones.map((zb) => (
+                  <div
+                    key={zb.zoneName}
+                    className="px-3 py-1.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs font-mono flex items-center gap-2"
+                  >
+                    <span className="font-semibold text-slate-800 dark:text-slate-200">{zb.zoneName}</span>
+                    <span
+                      className={
+                        zb.rulesUsed >= zb.freePlanLimit
+                          ? 'text-amber-600 dark:text-amber-400 font-bold'
+                          : 'text-emerald-700 dark:text-emerald-400'
+                      }
+                    >
+                      {zb.rulesUsed} / {zb.freePlanLimit} slots
+                    </span>
+                    <span className="text-[11px] text-slate-500">
+                      ({zb.readStatus === 'ok' ? 'Live' : 'Tracked'})
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {wafSnapshot?.wafReadStatus === 'forbidden' && (
+              <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-800 dark:text-amber-300 space-y-1">
+                <div className="font-semibold">
+                  Automatic Cloudflare WAF rule sync returned HTTP 403 (missing permission)
+                </div>
+                <div>
+                  {wafSnapshot.permissionHint ||
+                    "Add read-only permission 'Zone → Zone WAF → Read' to your Cloudflare API Token, or track your deployed rules manually below so PanoramaSRE stops suggesting duplicate WAF actions."}
+                </div>
+              </div>
+            )}
+
+            {wafFeedback && (
+              <div
+                className={`text-xs font-mono px-3 py-2 rounded-xl border ${
+                  wafFeedback.tone === 'ok'
+                    ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
+                    : 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border-rose-500/30'
+                }`}
+              >
+                {wafFeedback.text}
+              </div>
+            )}
+
+            {showManualWafForm && (
+              <form
+                onSubmit={(e) => void handleSaveWafOverride(e)}
+                className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-3"
+              >
+                <div className="text-xs font-mono font-semibold text-slate-700 dark:text-slate-300">
+                  Track Local Cloudflare Custom WAF Rule (Fallback / Pin)
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                  <CustomSelect
+                    value={manualWafZone}
+                    onChange={setManualWafZone}
+                    options={knownCfZones.map((z) => ({ value: z, label: z }))}
+                  />
+                  <CustomSelect
+                    value={manualWafAction}
+                    onChange={setManualWafAction}
+                    options={[
+                      { value: 'block', label: 'Block' },
+                      { value: 'managed_challenge', label: 'Managed Challenge' },
+                      { value: 'js_challenge', label: 'JS Challenge' },
+                    ]}
+                  />
+                  <input
+                    type="text"
+                    value={manualWafName}
+                    onChange={(e) => setManualWafName(e.target.value)}
+                    placeholder="Rule name (e.g. Block WP Probes)"
+                    className="sm:col-span-2 px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
+                  />
+                </div>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <input
+                    type="text"
+                    value={manualWafExpr}
+                    onChange={(e) => setManualWafExpr(e.target.value)}
+                    placeholder='Expression, e.g. (http.host eq "wsh.panoramadr.com" and ip.geoip.country ne "US")'
+                    className="flex-1 px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
+                  />
+                  <button
+                    type="submit"
+                    disabled={isSavingWafOverride || !manualWafName.trim() || !manualWafExpr.trim()}
+                    className="btn-primary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    <span>{isSavingWafOverride ? 'Saving...' : 'Save Tracked Rule'}</span>
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {wafRules.length > 0 && (
+              <div className="space-y-2">
+                {wafRules.map((rule) => (
+                  <div
+                    key={rule.id}
+                    className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
+                  >
+                    <div className="space-y-1 min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <StatusBadge
+                          label={rule.enabled ? rule.action.toUpperCase() : 'DISABLED'}
+                          variant={rule.enabled ? 'info' : 'neutral'}
+                        />
+                        <span className="px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-[11px] font-mono text-slate-700 dark:text-slate-300">
+                          {rule.zoneName}
+                        </span>
+                        <span className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+                          {rule.description}
+                        </span>
+                        <StatusBadge
+                          label={rule.source === 'cloudflare_live' ? 'Live CF' : 'Local Tracked'}
+                          variant={rule.source === 'cloudflare_live' ? 'success' : 'neutral'}
+                        />
+                      </div>
+                      <pre className="overflow-x-auto text-[11px] font-mono text-emerald-900 dark:text-emerald-400">
+                        {rule.expression}
+                      </pre>
+                    </div>
+
+                    {rule.source === 'manual_override' && (
+                      <button
+                        type="button"
+                        onClick={() => void handleDeleteWafOverride(rule.id)}
+                        className="btn-ghost text-xs text-rose-600 dark:text-rose-400 min-w-[36px] min-h-[36px] flex items-center justify-center whitespace-nowrap flex-shrink-0"
+                        title="Remove tracked local WAF rule"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* External Gemini Attack Campaigns & Mitigations */}
           {geminiBrief && (externalCampaigns.length > 0 || externalActions.length > 0) && (
             <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
@@ -1792,6 +2200,17 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                     <div className="space-y-3">
                       {filteredExternalCampaigns.map((camp, idx) => {
                         const copyId = `ext-camp-waf-${camp.name}-${idx}`;
+                        const campObservedPaths = Array.from(
+                          new Set(
+                            camp.targetHosts.flatMap((h) =>
+                              Array.from(observedPathsByHost.get(normalizeHostname(h)) ?? [])
+                            )
+                          )
+                        );
+                        const campCov = evaluateCampaignWafCoverage(camp, wafRules, campObservedPaths);
+                        const campCovered = campCov.status === 'COVERED';
+                        const campPartial = campCov.status === 'PARTIAL';
+
                         return (
                           <div
                             key={`${camp.name}-${camp.severity}-${idx}`}
@@ -1803,6 +2222,18 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                                   label={camp.severity}
                                   variant={severityToBadgeVariant(camp.severity)}
                                 />
+                                {campCovered && campCov.primaryRuleName && (
+                                  <StatusBadge
+                                    label={`WAF Covered: ${campCov.primaryRuleName}`}
+                                    variant="success"
+                                  />
+                                )}
+                                {campPartial && campCov.primaryRuleName && (
+                                  <StatusBadge
+                                    label={`Partial WAF: ${campCov.primaryRuleName}`}
+                                    variant="warning"
+                                  />
+                                )}
                                 <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">
                                   {camp.name}
                                 </span>
@@ -1811,6 +2242,23 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                                 </span>
                               </div>
                               <div className="flex flex-wrap items-center gap-1.5">
+                                {camp.suggestedWafExpression && !campCovered && !campPartial && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handlePrefillMarkCovered(
+                                        camp.targetHosts[0] || 'parakith.com',
+                                        camp.name.slice(0, 64),
+                                        camp.suggestedWafExpression || ''
+                                      )
+                                    }
+                                    className="btn-ghost text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+                                    title="Mark this campaign as covered by an active Cloudflare WAF rule"
+                                  >
+                                    <CheckCircle2 className="w-3.5 h-3.5" />
+                                    <span>Mark Covered</span>
+                                  </button>
+                                )}
                                 {camp.targetHosts.map((h) => (
                                   <span
                                     key={h}
@@ -1823,6 +2271,13 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                             </div>
 
                             <p className="text-xs text-slate-700 dark:text-slate-300">{camp.pattern}</p>
+
+                            {campPartial && campCov.uncoveredPaths.length > 0 && (
+                              <div className="text-[11px] font-mono text-amber-700 dark:text-amber-400">
+                                Unblocked slip-through paths (tighten existing rule instead of adding a new slot):{' '}
+                                {campCov.uncoveredPaths.slice(0, 6).join(', ')}
+                              </div>
+                            )}
 
                             {camp.sampleRayIds.length > 0 && (
                               <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-mono">
@@ -1846,7 +2301,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                               </div>
                             )}
 
-                            {camp.suggestedWafExpression && (
+                            {camp.suggestedWafExpression && !campCovered && (
                               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1">
                                 <pre className="flex-1 overflow-x-auto px-3 py-2 rounded-lg bg-white dark:bg-[#050b14] border border-slate-200/90 dark:border-slate-800 text-emerald-900 dark:text-emerald-400 font-mono text-xs">
                                   {camp.suggestedWafExpression}
@@ -1861,7 +2316,13 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                                   ) : (
                                     <Copy className="w-3.5 h-3.5" />
                                   )}
-                                  <span>{copiedKey === copyId ? 'Copied!' : 'Copy WAF Rule'}</span>
+                                  <span>
+                                    {copiedKey === copyId
+                                      ? 'Copied!'
+                                      : campPartial
+                                      ? 'Copy Tightened Snippet'
+                                      : 'Copy WAF Rule'}
+                                  </span>
                                 </button>
                               </div>
                             )}
@@ -1873,12 +2334,29 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                 </div>
               )}
 
-              {externalActions.length > 0 && (
+              {(partitionedExternalActions.visibleActions.length > 0 ||
+                partitionedExternalActions.suppressedCoveredCount > 0) && (
                 <div className="space-y-2.5 pt-2 border-t border-slate-200 dark:border-slate-800">
-                  <div className="text-xs font-mono font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
-                    External Cloudflare Actions ({externalActions.length})
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-xs font-mono font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider tabular-nums">
+                      External Cloudflare Actions ({partitionedExternalActions.visibleActions.length})
+                    </div>
+                    {partitionedExternalActions.suppressedCoveredCount > 0 && (
+                      <StatusBadge
+                        label={`${partitionedExternalActions.suppressedCoveredCount} covered by WAF`}
+                        variant="success"
+                      />
+                    )}
                   </div>
-                  {externalActions.map((act, idx) => renderActionRow(act, idx, 'ext-act'))}
+                  {partitionedExternalActions.visibleActions.length === 0 ? (
+                    <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-400">
+                      All suggested Cloudflare WAF additions are already covered by active rules.
+                    </div>
+                  ) : (
+                    partitionedExternalActions.visibleActions.map((item, idx) =>
+                      renderActionRow(item.action, idx, 'ext-act', item.coverage)
+                    )
+                  )}
                 </div>
               )}
             </div>
@@ -2099,6 +2577,9 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                   );
                   const copyKey = `actor-waf-${actor.id}`;
                   const cfZone = hosts.some((h) => h.includes('parakith')) ? 'parakith.com' : 'panoramadr.com';
+                  const actorCov = evaluateActorWafCoverage(actor, wafRules);
+                  const actorCovered = actorCov.status === 'COVERED';
+                  const actorPartial = actorCov.status === 'PARTIAL';
 
                   return (
                     <div
@@ -2131,6 +2612,18 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                             label={actor.disposition}
                             variant={actor.disposition === 'ACTIVE' ? 'warning' : 'neutral'}
                           />
+                          {actorCovered && actorCov.primaryRuleName && (
+                            <StatusBadge
+                              label={`WAF Covered: ${actorCov.primaryRuleName}`}
+                              variant="success"
+                            />
+                          )}
+                          {actorPartial && actorCov.primaryRuleName && (
+                            <StatusBadge
+                              label={`Partial WAF: ${actorCov.primaryRuleName}`}
+                              variant="warning"
+                            />
+                          )}
                           {actor.totalOrigin200s > 0 && (
                             <StatusBadge
                               label={`CROSS-OVER: ${actor.totalOrigin200s} Origin 200s`}
@@ -2140,7 +2633,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                         </div>
 
                         <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 shrink-0">
-                          {wafExpr && (
+                          {wafExpr && !actorCovered && (
                             <button
                               type="button"
                               onClick={() => void handleCopyText(copyKey, wafExpr)}

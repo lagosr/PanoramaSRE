@@ -1250,4 +1250,35 @@ export interface UnifiTopologySnapshotDto {
   zones: UnifiZoneDto[];
 }
 
+export interface CfWafRuleDto {
+  id: string;
+  zoneId: string;
+  zoneName: string;
+  description: string;
+  action: string;
+  expression: string;
+  enabled: boolean;
+  source: 'cloudflare_live' | 'manual_override' | string;
+}
+
+export interface CfZoneWafBudgetDto {
+  zoneId: string;
+  zoneName: string;
+  plan: string;
+  freePlanLimit: number;
+  rulesUsed: number;
+  enabledRules: number;
+  readStatus: 'ok' | 'forbidden' | 'error' | string;
+  statusMessage?: string | null;
+}
+
+export interface CloudflareWafSnapshotDto {
+  capturedAt: string;
+  wafReadOk: boolean;
+  wafReadStatus: 'ok' | 'forbidden' | 'not_configured' | 'error' | string;
+  permissionHint?: string | null;
+  zones: CfZoneWafBudgetDto[];
+  rules: CfWafRuleDto[];
+}
+
 

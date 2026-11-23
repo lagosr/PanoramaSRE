@@ -182,6 +182,18 @@ pub struct ThreatAllowlistRow {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WafRuleOverrideRow {
+    pub id: String,
+    pub zone_name: String,
+    pub rule_name: String,
+    pub action: String,
+    pub expression: String,
+    pub enabled: bool,
+    pub created_at: String,
+}
+
 pub struct SreDatabase {
     conn: Connection,
     log_file_path: PathBuf,
@@ -421,6 +433,17 @@ impl SreDatabase {
                 ip TEXT PRIMARY KEY,
                 payload_json TEXT NOT NULL,
                 fetched_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS waf_rule_overrides (
+                id TEXT PRIMARY KEY,
+                zone_name TEXT NOT NULL,
+                rule_name TEXT NOT NULL,
+                action TEXT NOT NULL DEFAULT 'block',
+                expression TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(zone_name, rule_name)
             );"
         )?;
 
@@ -1700,6 +1723,82 @@ impl SreDatabase {
              ON CONFLICT(ip) DO UPDATE SET payload_json = excluded.payload_json, fetched_at = excluded.fetched_at",
             params![ip.trim(), payload_json, now],
         )?;
+        Ok(())
+    }
+
+    pub fn list_waf_rule_overrides(&self) -> Result<Vec<WafRuleOverrideRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, zone_name, rule_name, action, expression, enabled, created_at
+             FROM waf_rule_overrides
+             ORDER BY zone_name ASC, created_at DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(WafRuleOverrideRow {
+                id: row.get(0)?,
+                zone_name: row.get(1)?,
+                rule_name: row.get(2)?,
+                action: row.get(3)?,
+                expression: row.get(4)?,
+                enabled: row.get::<_, i32>(5)? != 0,
+                created_at: row.get(6)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    pub fn upsert_waf_rule_override(
+        &self,
+        zone_name: &str,
+        rule_name: &str,
+        action: &str,
+        expression: &str,
+        enabled: bool,
+    ) -> Result<WafRuleOverrideRow> {
+        let clean_zone = zone_name.trim().to_ascii_lowercase();
+        let clean_name = rule_name.trim().to_string();
+        let clean_action = {
+            let a = action.trim().to_ascii_lowercase();
+            if a.is_empty() { "block".to_string() } else { a }
+        };
+        let clean_expr = expression.trim().to_string();
+        let id = uuid::Uuid::new_v4().to_string();
+        let enabled_int = if enabled { 1 } else { 0 };
+
+        self.conn.execute(
+            "INSERT INTO waf_rule_overrides (id, zone_name, rule_name, action, expression, enabled)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(zone_name, rule_name) DO UPDATE SET
+                action = excluded.action,
+                expression = excluded.expression,
+                enabled = excluded.enabled",
+            params![id, clean_zone, clean_name, clean_action, clean_expr, enabled_int],
+        )?;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT id, zone_name, rule_name, action, expression, enabled, created_at
+             FROM waf_rule_overrides
+             WHERE zone_name = ?1 AND rule_name = ?2",
+        )?;
+        stmt.query_row(params![clean_zone, clean_name], |row| {
+            Ok(WafRuleOverrideRow {
+                id: row.get(0)?,
+                zone_name: row.get(1)?,
+                rule_name: row.get(2)?,
+                action: row.get(3)?,
+                expression: row.get(4)?,
+                enabled: row.get::<_, i32>(5)? != 0,
+                created_at: row.get(6)?,
+            })
+        })
+    }
+
+    pub fn delete_waf_rule_override(&self, id: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM waf_rule_overrides WHERE id = ?1", params![id])?;
         Ok(())
     }
 }
