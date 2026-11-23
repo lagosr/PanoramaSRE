@@ -49,7 +49,13 @@ export function inferPageScopeFromJob(
     return 'dietpi';
   }
   if (lowerId.startsWith('ssl-')) return 'edge';
-  if (lowerId.startsWith('threat-') || lowerId.startsWith('security-')) return 'security';
+  if (
+    lowerId.startsWith('threat-') ||
+    lowerId.startsWith('security-') ||
+    lowerId.startsWith('unifi-siem-')
+  ) {
+    return 'security';
+  }
   if (
     lowerId.startsWith('gfs-backup-') ||
     lowerId.startsWith('backup-app-') ||
@@ -98,6 +104,7 @@ export function getTabCategory(title: string): string {
   if (lower.includes('deploy')) return 'Deployments';
   if (lower.includes('rollback')) return 'Rollbacks';
   if (lower.includes('tunnel') || lower.includes('cloudflare')) return 'Cloudflare Tunnel';
+  if (lower.includes('unifi siem')) return 'UniFi SIEM';
   if (lower.includes('ssl') || lower.includes('cert') || lower.includes('pki') || lower.includes('renew')) {
     return 'PKI & SSL';
   }

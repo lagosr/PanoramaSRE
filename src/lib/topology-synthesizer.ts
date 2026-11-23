@@ -540,7 +540,78 @@ export function synthesizeTopology(
     evaluatedAt: nowTimestamp,
   };
 
-  const invariants: SecurityPostureInvariant[] = [sec01, sec02, sec03, sec04, sec05, sec06, sec07, sec08];
+  // SEC-09: Optional UniFi SIEM Collector Isolation & UDP 5514 Source-IP Lock
+  const siemContainer = containers.find((c) =>
+    (c.Names || c.ID || '').toLowerCase().includes('unifi-siem')
+  );
+  const rawSockets = snapshot?.listening_sockets_raw || '';
+  const hasWildcard5514Socket = /(?:0\.0\.0\.0|\[::\]):5514\b/.test(rawSockets);
+  const siemPorts = siemContainer?.Ports || '';
+  const hasSafeLan5514Bind =
+    siemPorts.includes('172.25.25.5:5514') &&
+    !siemPorts.includes('0.0.0.0:5514') &&
+    !siemPorts.includes('[::]:5514');
+  const siemBridgeOk =
+    dockerNetworks.length === 0 ||
+    dockerNetworks.some(
+      (n) =>
+        n.Name === 'unifi-siem-net' &&
+        (n.IPAM?.Config?.[0]?.Subnet || '100.64.251.0/24').startsWith('100.64.')
+    );
+  const hasDockerUser5514Drop = fwRules
+    .split('\n')
+    .some((l) => l.includes('DOCKER-USER') && l.includes('5514') && l.includes('DROP'));
+
+  const sec09Pass = !snapshot
+    ? true
+    : siemContainer
+    ? hasSafeLan5514Bind && siemBridgeOk && hasDockerUser5514Drop && !hasWildcard5514Socket
+    : !hasWildcard5514Socket;
+
+  const sec09EvidenceLines = siemContainer
+    ? [
+        `[UNIFI SIEM COLLECTOR (unifi-siem) ISOLATION AUDIT]`,
+        `• Container State:   ${siemContainer.State || 'running'} (${siemContainer.Ports || 'no ports'})`,
+        `• WSH LAN Bind:      ${hasSafeLan5514Bind ? 'PASS (172.25.25.5:5514/udp only)' : 'FAIL (Missing 172.25.25.5 bind or wildcard exposure)'}`,
+        `• CGNAT Bridge Net:  ${siemBridgeOk ? 'PASS (unifi-siem-net 100.64.251.0/24)' : 'FAIL (Missing unifi-siem-net)'}`,
+        `• DOCKER-USER Lock:  ${hasDockerUser5514Drop ? 'PASS (UDP 5514 non-allowlisted DROP active)' : 'FAIL (Missing DOCKER-USER UDP 5514 DROP rule)'}`,
+      ].join('\n')
+    : [
+        `[UNIFI SIEM COLLECTOR (OPTIONAL) BASELINE CHECK]`,
+        `• Collector State:   Not deployed on WSH (optional CEF syslog receiver)`,
+        `• Host UDP 5514:     ${hasWildcard5514Socket ? 'FAIL (Unexpected wildcard listener on :5514)' : 'PASS (Closed; zero wildcard 0.0.0.0:5514 exposure)'}`,
+      ].join('\n');
+
+  const sec09: SecurityPostureInvariant = {
+    id: 'SEC-09',
+    title: 'UniFi SIEM Collector Isolation & UDP 5514 Source Lock',
+    category: 'CONTAINMENT',
+    status: sec09Pass ? 'PASS' : 'FAIL',
+    details: !siemContainer
+      ? sec09Pass
+        ? 'Optional unifi-siem collector is not deployed and UDP port 5514 has zero wildcard exposure.'
+        : 'Unexpected wildcard UDP/TCP listener detected on port 5514 without unifi-siem source-IP confinement.'
+      : sec09Pass
+      ? 'unifi-siem binds strictly to 172.25.25.5:5514/udp on isolated unifi-siem-net with DOCKER-USER source-IP DROP enforcement.'
+      : 'unifi-siem lacks strict 172.25.25.5 LAN bind, unifi-siem-net bridge isolation, or DOCKER-USER UDP 5514 source lock.',
+    remediation:
+      'Deploy unifi-siem via PanoramaSRE or PanoramaDrSuite/tools/unifi-siem/deploy-unifi-siem.ps1 and apply panorama-firewall.sh.',
+    commandSnippet: "(iptables -S DOCKER-USER | grep 5514 || echo 'UDP 5514 closed (no unifi-siem rule)'); docker ps -a --filter name=^unifi-siem$ --format '{{.Names}} {{.Status}} {{.Ports}}'",
+    evidence: sec09EvidenceLines,
+    evaluatedAt: nowTimestamp,
+  };
+
+  const invariants: SecurityPostureInvariant[] = [
+    sec01,
+    sec02,
+    sec03,
+    sec04,
+    sec05,
+    sec06,
+    sec07,
+    sec08,
+    sec09,
+  ];
   const securityViolationCount = !snapshot ? 0 : invariants.filter((inv) => inv.status === 'FAIL').length;
 
   const recommendations: string[] = [];
@@ -552,7 +623,7 @@ export function synthesizeTopology(
     }
   } else {
     recommendations.push(
-      'Verified: 100% of security posture invariants (SEC-01 through SEC-08) are fully validated and passing.'
+      'Verified: 100% of security posture invariants (SEC-01 through SEC-09) are fully validated and passing.'
     );
     recommendations.push(
       'Docker perimeter, kernel firewall rules, and container isolation conform to the PanoramaDrSuite Network Hardening standard.'

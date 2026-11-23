@@ -552,7 +552,7 @@ export interface NetworkRouteDetail {
 }
 
 export interface SecurityPostureInvariant {
-  id: 'SEC-01' | 'SEC-02' | 'SEC-03' | 'SEC-04' | 'SEC-05' | 'SEC-06' | 'SEC-07' | 'SEC-08';
+  id: 'SEC-01' | 'SEC-02' | 'SEC-03' | 'SEC-04' | 'SEC-05' | 'SEC-06' | 'SEC-07' | 'SEC-08' | 'SEC-09';
   title: string;
   category: 'ROUTING' | 'PORT' | 'FIREWALL' | 'CONTAINMENT';
   status: 'PASS' | 'FAIL' | 'WARN';
@@ -1141,6 +1141,13 @@ export interface GeminiBriefDto {
   attackCampaigns: GeminiCampaignDto[];
   actorAssessments: GeminiActorAssessmentDto[];
   recommendedActions: GeminiActionDto[];
+}
+
+export interface UnifiSiemEnvConfigDto {
+  envPath: string;
+  exists: boolean;
+  allowedIps: string;
+  suggestedIps: string;
 }
 
 

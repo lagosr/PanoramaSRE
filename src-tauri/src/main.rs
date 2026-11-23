@@ -25,8 +25,8 @@ mod tests {
     use panorama_sre_lib::commands::threat_intel_ops::{
         build_waf_rule_expression, classify_host_sensitivity, evaluate_stage0_triage,
         is_allowlisted, parse_gemini_threat_brief, parse_unifi_cef_ndjson,
-        should_escalate_to_tier2, CfHttpEvent, CloudflareSecuritySnapshot, DomainProfile,
-        PanoramaAuthTelemetry, WshSecuritySnapshot,
+        should_escalate_to_tier2, validate_ipv4_list, CfHttpEvent, CloudflareSecuritySnapshot,
+        DomainProfile, PanoramaAuthTelemetry, WshSecuritySnapshot,
     };
     use panorama_sre_lib::commands::unifi_ops::{
         parse_unifi_clients_json, parse_unifi_devices_json, parse_unifi_policies_json,
@@ -1250,5 +1250,22 @@ mod tests {
             waf,
             "(ip.src in {43.153.74.75 185.220.101.4} or ip.geoip.asnum in {132203})"
         );
+    }
+
+    #[test]
+    fn test_validate_unifi_siem_ipv4_list() {
+        let valid = validate_ipv4_list("172.25.25.1, 10.10.1.1; 172.25.25.1 10.10.1.5").unwrap();
+        assert_eq!(
+            valid,
+            vec![
+                "172.25.25.1".to_string(),
+                "10.10.1.1".to_string(),
+                "10.10.1.5".to_string(),
+            ]
+        );
+        assert!(validate_ipv4_list("").is_err());
+        assert!(validate_ipv4_list("   , ;  ").is_err());
+        assert!(validate_ipv4_list("172.25.25.1, not-an-ip").is_err());
+        assert!(validate_ipv4_list("172.25.25.0/24").is_err());
     }
 }

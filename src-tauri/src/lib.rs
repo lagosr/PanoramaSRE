@@ -182,6 +182,8 @@ pub fn run() {
             get_threat_allowlist,
             upsert_threat_allowlist,
             delete_threat_allowlist,
+            get_unifi_siem_env_config,
+            save_unifi_siem_env_config,
             get_windows_autostart_status,
             set_windows_autostart
         ])

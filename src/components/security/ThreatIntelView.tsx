@@ -24,9 +24,15 @@ import {
   Server,
   AlertTriangle,
   Sliders,
+  Terminal,
+  Play,
+  Square,
+  Save,
 } from 'lucide-react';
 import { CustomSelect } from '../ui/CustomSelect';
+import { WorkStreamContainer } from '../ui/WorkStreamContainer';
 import { formatLocalDateTime, formatRelativeTime } from '../../lib/formatters';
+import type { UnifiSiemAction } from '../../lib/script-adapters';
 import {
   buildCloudflareSecurityEventsUrl,
   buildCloudflareZeroTrustLogsUrl,
@@ -45,11 +51,14 @@ import type {
   GeminiBriefDto,
   InternalNetworkSummary,
   LanClientBaselineRow,
+  TerminalTab,
   ThreatActorRow,
   ThreatAllowlistRow,
   ThreatAuditRunRow,
   ThreatIntelSettingsViewDto,
   ThreatRunDetailDto,
+  UnifiSiemEnvConfigDto,
+  WshSnapshot,
   ZeroTrustSummary,
 } from '../../lib/types';
 
@@ -65,6 +74,13 @@ interface ThreatIntelViewProps {
   onSelectRunId: (runId: string) => Promise<void>;
   onRefreshAll: () => Promise<void>;
   onNavigateToSettings: () => void;
+  wshSnapshot?: WshSnapshot | null;
+  terminalTabs?: TerminalTab[];
+  onTriggerUnifiSiemAction?: (action: UnifiSiemAction) => void;
+  onReapplyHardening?: () => void;
+  onOpenInBottomConsole?: (tabId?: string) => void;
+  onAbortJob?: (tabId: string) => void;
+  onClearTab?: (tabId: string) => void;
 }
 
 const EMPTY_ZT_SUMMARY: ZeroTrustSummary = {
@@ -98,6 +114,13 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   onSelectRunId,
   onRefreshAll,
   onNavigateToSettings,
+  wshSnapshot = null,
+  terminalTabs = [],
+  onTriggerUnifiSiemAction,
+  onReapplyHardening,
+  onOpenInBottomConsole,
+  onAbortJob,
+  onClearTab,
 }) => {
   const [subView, setSubView] = useState<SubViewTab>('overview');
   const [lookbackHours, setLookbackHours] = useState<string>('6');
@@ -108,9 +131,12 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   const [actorSearch, setActorSearch] = useState<string>('');
   const [isLoadingActors, setIsLoadingActors] = useState<boolean>(false);
 
-  // LAN Baseline & Allowlist state
+  // LAN Baseline, Allowlist & UniFi SIEM .env.siem state
   const [lanClients, setLanClients] = useState<LanClientBaselineRow[]>([]);
   const [allowlist, setAllowlist] = useState<ThreatAllowlistRow[]>([]);
+  const [siemEnv, setSiemEnv] = useState<UnifiSiemEnvConfigDto | null>(null);
+  const [siemAllowedIpsInput, setSiemAllowedIpsInput] = useState<string>('');
+  const [isSavingSiemEnv, setIsSavingSiemEnv] = useState<boolean>(false);
   const [isLoadingSources, setIsLoadingSources] = useState<boolean>(false);
   const [newRuleType, setNewRuleType] = useState<string>('IP');
   const [newRuleValue, setNewRuleValue] = useState<string>('');
@@ -162,12 +188,17 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   const loadSourcesAndAllowlist = useCallback(async () => {
     setIsLoadingSources(true);
     try {
-      const [lan, rules] = await Promise.all([
+      const [lan, rules, envCfg] = await Promise.all([
         invoke<LanClientBaselineRow[]>('get_lan_clients_baseline'),
         invoke<ThreatAllowlistRow[]>('get_threat_allowlist'),
+        invoke<UnifiSiemEnvConfigDto>('get_unifi_siem_env_config').catch(() => null),
       ]);
       setLanClients(Array.isArray(lan) ? lan : []);
       setAllowlist(Array.isArray(rules) ? rules : []);
+      if (envCfg) {
+        setSiemEnv(envCfg);
+        setSiemAllowedIpsInput(envCfg.allowedIps || '');
+      }
     } catch (err) {
       console.warn('[PanoramaSRE] Failed loading LAN baseline & allowlist:', err);
     } finally {
@@ -236,6 +267,35 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
     () => lanClients.filter((c) => c.isTrusted).length,
     [lanClients]
   );
+
+  const siemContainer = useMemo(
+    () =>
+      (wshSnapshot?.containers || []).find((c) =>
+        (c.Names || c.ID || '').toLowerCase().includes('unifi-siem')
+      ),
+    [wshSnapshot?.containers]
+  );
+
+  const handleSaveSiemEnv = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSavingSiemEnv(true);
+    try {
+      const updated = await invoke<UnifiSiemEnvConfigDto>('save_unifi_siem_env_config', {
+        allowedIps: siemAllowedIpsInput,
+      });
+      setSiemEnv(updated);
+      setSiemAllowedIpsInput(updated.allowedIps);
+      setSourceFeedback({
+        text: `Saved .env.siem UNIFI_SIEM_ALLOWED_IPS=${updated.allowedIps}`,
+        tone: 'ok',
+      });
+      setTimeout(() => setSourceFeedback(null), 4000);
+    } catch (err) {
+      setSourceFeedback({ text: `Save .env.siem failed: ${String(err)}`, tone: 'err' });
+    } finally {
+      setIsSavingSiemEnv(false);
+    }
+  };
 
   const handleSetDisposition = async (actorId: string, disposition: string) => {
     try {
@@ -1218,6 +1278,151 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
             </div>
           </div>
 
+          {/* UniFi SIEM CEF Collector Deployment Card */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Server className="w-4 h-4 text-[var(--color-brand-text)] shrink-0" />
+                  <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
+                    Optional UniFi SIEM Collector (unifi-siem on WSH)
+                  </h3>
+                  <StatusBadge
+                    label={
+                      siemContainer
+                        ? siemContainer.State?.toLowerCase() === 'running'
+                          ? 'Container: Running'
+                          : `Container: ${siemContainer.State || 'Stopped'}`
+                        : 'Container: Not Deployed'
+                    }
+                    variant={
+                      siemContainer?.State?.toLowerCase() === 'running'
+                        ? 'success'
+                        : siemContainer
+                        ? 'warning'
+                        : 'neutral'
+                    }
+                  />
+                  <StatusBadge
+                    label={siemEnv?.exists ? '.env.siem: Ready' : '.env.siem: Not Configured'}
+                    variant={siemEnv?.exists ? 'success' : 'warning'}
+                  />
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-400">
+                  Receives UniFi CyberSecure IPS/IDS and firewall drop CEF syslog packets on WSH <code className="font-mono">172.25.25.5:5514/udp</code> into <code className="font-mono">/var/data/unifi-siem/unifi-siem.log</code>.
+                </p>
+              </div>
+              <span className="px-2.5 py-0.5 rounded-full text-[11px] font-mono font-semibold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 tabular-nums">
+                CEF Events: {internalSummary.unifiSiemCefEvents}
+              </span>
+            </div>
+
+            <form onSubmit={(e) => void handleSaveSiemEnv(e)} className="flex flex-col sm:flex-row sm:items-end gap-2.5">
+              <div className="flex-1 space-y-1">
+                <label className="block text-[11px] font-mono text-slate-600 dark:text-slate-400">
+                  UNIFI_SIEM_ALLOWED_IPS (Comma-separated IPv4 allowlist enforced in WSH DOCKER-USER &amp; collector)
+                </label>
+                <input
+                  type="text"
+                  value={siemAllowedIpsInput}
+                  onChange={(e) => setSiemAllowedIpsInput(e.target.value)}
+                  placeholder={siemEnv?.suggestedIps || '172.25.25.1,10.10.1.1'}
+                  className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={isSavingSiemEnv || !siemAllowedIpsInput.trim()}
+                className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+              >
+                <Save className="w-3.5 h-3.5" />
+                <span>{isSavingSiemEnv ? 'Saving...' : 'Save .env.siem'}</span>
+              </button>
+            </form>
+
+            <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
+              {onTriggerUnifiSiemAction && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => onTriggerUnifiSiemAction('verify_local')}
+                    className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                    title="Run local TypeScript, Vitest, compose hardening, and ARM64 Docker BuildKit check (zero SSH)"
+                  >
+                    <Terminal className="w-3.5 h-3.5 text-[var(--color-accent-text)]" />
+                    <span>Verify Local (-VerifyLocal)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onTriggerUnifiSiemAction('test')}
+                    className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                    title="Run SSH dry-run preflight against WSH"
+                  >
+                    <Terminal className="w-3.5 h-3.5" />
+                    <span>Dry-Run (-Test)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onTriggerUnifiSiemAction('status')}
+                    className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                    title="Query unifi-siem container and recent log lines on WSH"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Status</span>
+                  </button>
+                </>
+              )}
+
+              {onReapplyHardening && (
+                <button
+                  type="button"
+                  onClick={onReapplyHardening}
+                  className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                  title="Run deploy-server-setup.ps1 to synchronize panorama-firewall.sh UDP 5514 source lock"
+                >
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  <span>Re-Apply WSH Firewall</span>
+                </button>
+              )}
+
+              {onTriggerUnifiSiemAction && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => onTriggerUnifiSiemAction('deploy')}
+                    disabled={!siemEnv?.exists}
+                    className="btn-primary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 disabled:opacity-50"
+                    title={
+                      siemEnv?.exists
+                        ? 'Build ARM64 image and deploy hardened unifi-siem container to WSH'
+                        : 'Save UNIFI_SIEM_ALLOWED_IPS into .env.siem first'
+                    }
+                  >
+                    <Play className="w-3.5 h-3.5" />
+                    <span>Deploy Collector</span>
+                  </button>
+
+                  {siemContainer && (
+                    <button
+                      type="button"
+                      onClick={() => onTriggerUnifiSiemAction('stop')}
+                      className="btn-danger text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                    >
+                      <Square className="w-3.5 h-3.5" />
+                      <span>Stop Collector</span>
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+
+            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-[11px] font-mono text-slate-600 dark:text-slate-400 space-y-1">
+              <div>UniFi prerequisites after Deploy + Re-Apply WSH Firewall:</div>
+              <div>1. Policy Engine → Zones: Allow Gateway/CloudKey → <span className="text-slate-800 dark:text-slate-200">172.25.25.5 UDP 5514</span> (<span className="text-slate-800 dark:text-slate-200">Auto Allow Return Traffic: OFF</span>)</div>
+              <div>2. CyberSecure → Traffic Logging → Activity Logging (Syslog): Select <span className="text-slate-800 dark:text-slate-200">SIEM Server</span> → <span className="text-slate-800 dark:text-slate-200">172.25.25.5:5514</span></div>
+            </div>
+          </div>
+
           {/* UniFi LAN Baseline Trust Table */}
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1391,6 +1596,18 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* Security, Threat Intel & UniFi SIEM Execution Stream */}
+      <WorkStreamContainer
+        pageScope="security"
+        tabs={terminalTabs}
+        title="Security, Threat Intel &amp; UniFi SIEM Execution Stream"
+        description="Streams unifi-siem local verification, dry-runs, WSH deployments, container status probes, and host firewall hardening runs."
+        emptyHint="Use the UniFi SIEM Collector actions under 360° Sources & Allowlist to stream build and deployment output here."
+        onOpenInBottomConsole={onOpenInBottomConsole}
+        onAbortJob={onAbortJob}
+        onClearTab={onClearTab}
+      />
     </div>
   );
 };

@@ -62,6 +62,8 @@ import { buildSyncAlertEvaluationInput } from './lib/pushover-payload';
 import {
   buildSslCertCommand,
   buildCloudflareTunnelCommand,
+  buildUnifiSiemCommand,
+  type UnifiSiemAction,
   buildRemoteSshCommand,
   buildCloudflarePagesDeployCommand,
   buildCronSyncCommand,
@@ -2552,6 +2554,96 @@ export const App: React.FC = () => {
     return 'c:\\Users\\rodrigo\\Documents\\AG Projects';
   }, [apps]);
 
+  const handleTriggerUnifiSiemAction = useCallback(
+    async (action: UnifiSiemAction) => {
+      if (action === 'deploy' || action === 'stop') {
+        const confirmed = await ask(
+          action === 'deploy'
+            ? 'Build and deploy the hardened unifi-siem CEF Syslog collector container (172.25.25.5:5514/udp) onto wsh.panoramadr.com?\n\nEnsure you have also applied Re-Apply WSH Firewall and configured the UniFi ZBF UDP 5514 allow rule.'
+            : 'Stop and remove the unifi-siem container on wsh.panoramadr.com?',
+          {
+            title:
+              action === 'deploy'
+                ? 'Confirm UniFi SIEM Collector Deployment'
+                : 'Confirm Stop UniFi SIEM Collector',
+            kind: action === 'stop' ? 'warning' : 'info',
+            okLabel: action === 'deploy' ? 'Deploy Collector' : 'Stop Collector',
+            cancelLabel: 'Cancel',
+          }
+        );
+        if (!confirmed) return;
+      }
+
+      const suiteToolsPath = `${getWorkspaceRoot()}\\PanoramaDrSuite\\tools`;
+      const cmdSpec = buildUnifiSiemCommand(suiteToolsPath, action);
+      const jobId = `unifi-siem-${action}-${Date.now()}`;
+      const labelMap: Record<UnifiSiemAction, string> = {
+        verify_local: 'UniFi SIEM: Verify Local (-VerifyLocal)',
+        test: 'UniFi SIEM: Dry-Run Preflight (-Test)',
+        status: 'UniFi SIEM: Collector Status (-Status)',
+        deploy: 'UniFi SIEM: Deploy Collector to WSH',
+        stop: 'UniFi SIEM: Stop Collector on WSH',
+      };
+      const title = labelMap[action];
+
+      const newTab: TerminalTab = {
+        id: jobId,
+        title,
+        lines: [`[PanoramaSRE] Invoking ${cmdSpec.scriptPath}...`],
+        isRunning: true,
+        createdAt: new Date().toISOString(),
+        pageScope: 'security',
+        source: 'ui',
+        abortable: true,
+      };
+      setTerminalTabs((prev) => [...prev, newTab]);
+      setActiveTerminalTabId(jobId);
+      saveTabToDb(newTab);
+
+      try {
+        await runStreamJob({
+          jobId,
+          label: title,
+          command: cmdSpec.command,
+          args: cmdSpec.args,
+          workingDir: cmdSpec.workingDir,
+          lockType: cmdSpec.lockType,
+          onLine: (line) => {
+            appendTerminalLine(jobId, line);
+          },
+          onComplete: async (exitCode) => {
+            finalizeTerminalJob(jobId, exitCode);
+            if (action !== 'verify_local') {
+              await refreshWshTelemetry(true);
+            }
+            await refreshThreatIntelState(selectedThreatDetail?.run?.id);
+            showActionFeedback(
+              exitCode === 0 ? `${title} completed cleanly.` : `${title} exited with code ${exitCode}.`,
+              exitCode === 0 ? 'success' : 'error',
+              6000
+            );
+          },
+          onError: (err) => {
+            failTerminalJob(jobId, `UniFi SIEM command failed: ${err}`);
+          },
+        });
+      } catch (err) {
+        failTerminalJob(jobId, `UniFi SIEM command failed: ${String(err)}`);
+      }
+    },
+    [
+      appendTerminalLine,
+      failTerminalJob,
+      finalizeTerminalJob,
+      getWorkspaceRoot,
+      refreshThreatIntelState,
+      refreshWshTelemetry,
+      saveTabToDb,
+      selectedThreatDetail?.run?.id,
+      showActionFeedback,
+    ]
+  );
+
   const refreshSmokeHistory = useCallback(async (): Promise<SmokeTestRun[]> => {
     try {
       const history = await invoke<SmokeTestRun[]>('get_smoke_test_history', {
@@ -3432,6 +3524,13 @@ export const App: React.FC = () => {
               onSelectRunId={handleSelectThreatRunId}
               onRefreshAll={() => refreshThreatIntelState(selectedThreatDetail?.run?.id)}
               onNavigateToSettings={() => setActiveTab('settings')}
+              wshSnapshot={wshSnapshot}
+              terminalTabs={terminalTabs}
+              onTriggerUnifiSiemAction={(action) => void handleTriggerUnifiSiemAction(action)}
+              onReapplyHardening={() => handleReapplyHardening('security')}
+              onOpenInBottomConsole={handleOpenInBottomConsole}
+              onAbortJob={handleAbortJob}
+              onClearTab={handleClearTab}
             />
           )}
 

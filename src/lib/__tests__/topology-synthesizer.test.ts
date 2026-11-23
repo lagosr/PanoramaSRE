@@ -131,7 +131,7 @@ describe('synthesizeTopology', () => {
     // Security audit
     expect(result.securityAudit.score).toBe(100);
     expect(result.securityAudit.zeroBindViolations).toHaveLength(0);
-    expect(result.securityAudit.invariants).toHaveLength(8);
+    expect(result.securityAudit.invariants).toHaveLength(9);
     expect(result.securityAudit.securityViolationCount).toBe(0);
 
     // Ingress trace
@@ -524,5 +524,79 @@ describe('synthesizeTopology', () => {
 
     const sec08 = topo.securityAudit.invariants.find((i) => i.id === 'SEC-08');
     expect(sec08?.evidence).toContain('FutureSolar');
+  });
+
+  it('validates SEC-09 UniFi SIEM collector isolation when absent, hardened, and misconfigured', () => {
+    const baseSnapshot: WshSnapshot = {
+      mode: '--fast',
+      hostname: 'wsh',
+      kernel: '6.6.20',
+      uptime_secs: 1000,
+      dietpi_version: '9.9.0',
+      dietpi_update_available: '',
+      reboot_required: false,
+      rpi_throttled: '0x0',
+      services: { lighttpd: 'active', docker: 'active', ssh: 'active' },
+      listening_ports: [80, 443, 3000],
+      listening_sockets_raw: 'tcp LISTEN 127.0.0.1:3000',
+      lighttpd_routes_raw: 'auth:3000',
+      containers: [],
+      container_stats: [],
+      docker_networks: [],
+      images: [],
+      cloudflared: { version_raw: '2026.10.7', recent_logs: '' },
+      apt_upgradable_raw: '',
+      data_volumes_raw: '',
+      docker_df: [],
+      release_ledgers: {},
+      firewall_rules_raw:
+        '-N DOCKER-USER\n-A DOCKER-USER -d 10.0.0.0/8 -o eth0 -j DROP\n-A DOCKER-USER -d 172.16.0.0/12 -o eth0 -j DROP\n-A DOCKER-USER -d 192.168.0.0/16 -o eth0 -j DROP\n-N PANORAMA-INPUT\n',
+    };
+
+    // 1. Optional collector absent -> SEC-09 PASS
+    const absentTopo = synthesizeTopology(mockApps, baseSnapshot);
+    expect(absentTopo.securityAudit.invariants.find((i) => i.id === 'SEC-09')?.status).toBe('PASS');
+
+    // 2. Deployed and hardened -> SEC-09 PASS
+    const hardenedSnapshot: WshSnapshot = {
+      ...baseSnapshot,
+      containers: [
+        {
+          Names: 'unifi-siem',
+          State: 'running',
+          Status: 'Up 1 hour',
+          Ports: '172.25.25.5:5514->5514/udp',
+        },
+      ],
+      docker_networks: [
+        {
+          Id: 'net-unifi-siem',
+          Name: 'unifi-siem-net',
+          Scope: 'local',
+          Driver: 'bridge',
+          IPAM: { Config: [{ Subnet: '100.64.251.0/24' }] },
+        },
+      ],
+      firewall_rules_raw:
+        baseSnapshot.firewall_rules_raw +
+        '-A DOCKER-USER -i eth0 -p udp -m udp --dport 5514 -j DROP\n',
+    };
+    const hardenedTopo = synthesizeTopology(mockApps, hardenedSnapshot);
+    expect(hardenedTopo.securityAudit.invariants.find((i) => i.id === 'SEC-09')?.status).toBe('PASS');
+
+    // 3. Misconfigured wildcard bind (0.0.0.0:5514) -> SEC-09 FAIL
+    const insecureSnapshot: WshSnapshot = {
+      ...hardenedSnapshot,
+      containers: [
+        {
+          Names: 'unifi-siem',
+          State: 'running',
+          Status: 'Up 1 hour',
+          Ports: '0.0.0.0:5514->5514/udp',
+        },
+      ],
+    };
+    const insecureTopo = synthesizeTopology(mockApps, insecureSnapshot);
+    expect(insecureTopo.securityAudit.invariants.find((i) => i.id === 'SEC-09')?.status).toBe('FAIL');
   });
 });

@@ -5,6 +5,7 @@ import {
   buildDbManagerCommand,
   buildSslCertCommand,
   buildCloudflareTunnelCommand,
+  buildUnifiSiemCommand,
   buildRemoteSshCommand,
 } from '../script-adapters';
 
@@ -113,5 +114,32 @@ describe('script-adapters CLI builders', () => {
     expect(rollbackCmd.args).toContain('-RollbackDeploymentId');
     expect(rollbackCmd.args).toContain('cf-dep-987654');
     expect(rollbackCmd.args).not.toContain('-Mode');
+  });
+
+  it('correctly constructs deploy-unifi-siem arguments across all lifecycle actions', () => {
+    const tools = 'C:\\AG Projects\\PanoramaDrSuite\\tools';
+
+    const verifyCmd = buildUnifiSiemCommand(tools, 'verify_local');
+    expect(verifyCmd.command).toBe('pwsh.exe');
+    expect(verifyCmd.workingDir).toBe(`${tools}\\unifi-siem`);
+    expect(verifyCmd.args).toContain('-VerifyLocal');
+    expect(verifyCmd.lockType).toBe('None');
+
+    const statusCmd = buildUnifiSiemCommand(tools, 'status');
+    expect(statusCmd.args).toContain('-Status');
+    expect(statusCmd.lockType).toBe('None');
+
+    const testCmd = buildUnifiSiemCommand(tools, 'test');
+    expect(testCmd.args).toContain('-Test');
+    expect(testCmd.lockType).toBe('None');
+
+    const deployCmd = buildUnifiSiemCommand(tools, 'deploy');
+    expect(deployCmd.args).not.toContain('-VerifyLocal');
+    expect(deployCmd.args).not.toContain('-Stop');
+    expect(deployCmd.lockType).toBe('WshRemoteMutation');
+
+    const stopCmd = buildUnifiSiemCommand(tools, 'stop');
+    expect(stopCmd.args).toContain('-Stop');
+    expect(stopCmd.lockType).toBe('WshRemoteMutation');
   });
 });

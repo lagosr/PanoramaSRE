@@ -166,6 +166,30 @@ export function buildCloudflareTunnelCommand(
   };
 }
 
+export type UnifiSiemAction = 'verify_local' | 'status' | 'deploy' | 'test' | 'stop';
+
+export function buildUnifiSiemCommand(
+  toolsPath: string,
+  action: UnifiSiemAction
+): ScriptActionExecution {
+  const scriptPath = `${toolsPath}\\unifi-siem\\deploy-unifi-siem.ps1`;
+  const args: string[] = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath];
+
+  if (action === 'verify_local') args.push('-VerifyLocal');
+  if (action === 'status') args.push('-Status');
+  if (action === 'test') args.push('-Test');
+  if (action === 'stop') args.push('-Stop');
+
+  return {
+    scriptPath,
+    command: 'pwsh.exe',
+    args,
+    lockType: action === 'deploy' || action === 'stop' ? 'WshRemoteMutation' : 'None',
+    elevated: false,
+    workingDir: `${toolsPath}\\unifi-siem`,
+  };
+}
+
 export function buildRemoteSshCommand(remoteBashCommand: string): {
   command: string;
   args: string[];

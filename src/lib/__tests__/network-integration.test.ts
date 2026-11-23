@@ -339,7 +339,7 @@ describe('Live Network & Topology Integration Suite', () => {
     expect(topology.securityAudit.securityViolationCount).toBe(0);
     expect(topology.securityAudit.zeroBindViolations).toHaveLength(0);
 
-    // Assert all 8 security invariants strictly pass
+    // Assert all 9 security invariants strictly pass
     const invMap = new Map(topology.securityAudit.invariants.map((i) => [i.id, i.status]));
     expect(invMap.get('SEC-01')).toBe('PASS');
     expect(invMap.get('SEC-02')).toBe('PASS');
@@ -349,12 +349,13 @@ describe('Live Network & Topology Integration Suite', () => {
     expect(invMap.get('SEC-06')).toBe('PASS');
     expect(invMap.get('SEC-07')).toBe('PASS');
     expect(invMap.get('SEC-08')).toBe('PASS');
+    expect(invMap.get('SEC-09')).toBe('PASS');
 
     // Verify cloudflared network mode reflects cf-egress-net bridge
     expect(topology.cloudflared.networkMode).toBe('cf-egress-net (100.64.250.0/24)');
   });
 
-  it('verifies that all 8 invariant commandSnippets execute cleanly over SSH without timeouts or errors', () => {
+  it('verifies that all 9 invariant commandSnippets execute cleanly over SSH without timeouts or errors', () => {
     if (!hostOnline || !liveSnapshot) {
       console.warn('Skipping live snippet execution: Host unreachable');
       return;
