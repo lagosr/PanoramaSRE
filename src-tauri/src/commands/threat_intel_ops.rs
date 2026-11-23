@@ -79,7 +79,7 @@ fn default_daily_carbon_cap() -> u32 {
     6
 }
 fn default_pushover_threshold() -> String {
-    "MEDIUM".to_string()
+    "HIGH".to_string()
 }
 fn default_unifi_base_url() -> String {
     "https://ui.panoramadr.com".to_string()
@@ -1889,6 +1889,14 @@ pub struct CollectorStatuses {
     pub wsh_auth: String,
 }
 
+pub fn is_isolated_lan_zone(zone_name: Option<&str>, network_name: Option<&str>) -> bool {
+    let z = zone_name.unwrap_or("").to_ascii_lowercase();
+    let n = network_name.unwrap_or("").to_ascii_lowercase();
+    ["guest", "kid", "untrusted", "iot", "hotspot"]
+        .iter()
+        .any(|kw| z.contains(kw) || n.contains(kw))
+}
+
 #[derive(Debug, Clone)]
 pub struct Stage0TriageResult {
     pub overall_severity: String,
@@ -2011,6 +2019,10 @@ pub fn evaluate_stage0_triage(
             ray_ids_json: serde_json::to_string(&rays).unwrap_or_else(|_| "[]".to_string()),
             evidence_json: serde_json::to_string(&ev).unwrap_or_else(|_| "{}".to_string()),
             created_at: now_iso.to_string(),
+            disposition: "ACTIVE".to_string(),
+            snoozed_until: None,
+            resolved_at: None,
+            resolution_note: None,
         });
     };
 
@@ -2543,18 +2555,17 @@ pub fn evaluate_stage0_triage(
             );
             let is_known_trusted = trusted_macs.contains(&mac) || known_macs.contains(&mac);
             if baseline_seeded && !is_known_trusted && !allowlisted {
-                suspect_macs.insert(mac.clone());
                 new_macs_detected.push(mac.clone());
                 let ip_disp = cli.ip_address.as_deref().unwrap_or("unassigned");
                 let vendor_disp = cli.oui_vendor.as_deref().unwrap_or("Unknown / Randomized MAC");
                 let net_disp = cli.network_name.as_deref().unwrap_or("Unknown VLAN");
                 let zone_disp = cli.zone_name.as_deref().unwrap_or("Unassigned Zone");
-                let zone_l = cli.zone_name.as_deref().unwrap_or("").to_ascii_lowercase();
-                let net_l = cli.network_name.as_deref().unwrap_or("").to_ascii_lowercase();
-                let is_isolated_lan = ["guest", "kid", "untrusted", "iot", "hotspot"]
-                    .iter()
-                    .any(|kw| zone_l.contains(kw) || net_l.contains(kw));
-                let rogue_sev = if is_isolated_lan { "MEDIUM" } else { "HIGH" };
+                let is_isolated_lan =
+                    is_isolated_lan_zone(cli.zone_name.as_deref(), cli.network_name.as_deref());
+                let rogue_sev = if is_isolated_lan { "LOW" } else { "HIGH" };
+                if !is_isolated_lan {
+                    suspect_macs.insert(mac.clone());
+                }
                 make_finding(
                     "UNIFI",
                     "UNIFI_ROGUE_LAN_CLIENT",
@@ -3090,13 +3101,13 @@ pub fn should_escalate_to_tier2(
     }
 
     if stage0_hard_hit {
-        reasons.push("Stage 0 deterministic intrusion/anomaly rule triggered".to_string());
-    }
-    if stage1_flag {
-        reasons.push("Stage 1 screening flagged run for deeper investigation".to_string());
+        reasons.push("Stage 0 deterministic HIGH/CRITICAL intrusion rule triggered".to_string());
     }
     if sev_high_plus {
         reasons.push(format!("Stage 1 assessed severity as {}", sev_upper));
+    }
+    if stage1_flag && (stage0_hard_hit || sev_high_plus) {
+        reasons.push("Stage 1 screening flagged HIGH/CRITICAL run for deeper investigation".to_string());
     }
 
     if reasons.is_empty() {
@@ -3438,6 +3449,52 @@ fn severity_threshold_met(severity: &str, threshold: &str) -> bool {
     rank(severity) >= rank(threshold)
 }
 
+pub fn should_dispatch_threat_pushover(
+    run: &ThreatAuditRunRow,
+    findings: &[ThreatFindingRow],
+    threshold: &str,
+) -> (bool, Vec<String>) {
+    if threshold.trim().eq_ignore_ascii_case("OFF") {
+        return (false, Vec::new());
+    }
+
+    let mut reasons = Vec::new();
+    let sev_met = severity_threshold_met(&run.overall_severity, threshold);
+    if sev_met {
+        reasons.push(format!("Severity {} meets threshold {}", run.overall_severity, threshold));
+    }
+
+    let infra_outage_count = findings
+        .iter()
+        .filter(|f| {
+            f.disposition.trim().eq_ignore_ascii_case("ACTIVE")
+                && matches!(
+                    f.rule_id.trim().to_ascii_uppercase().as_str(),
+                    "TUNNEL_DEGRADED" | "UNIFI_DEVICE_OFFLINE"
+                )
+        })
+        .count();
+    if infra_outage_count > 0 {
+        reasons.push(format!(
+            "{} infrastructure outage(s) detected (Tunnel/UniFi device)",
+            infra_outage_count
+        ));
+    }
+
+    if let Some(ref raw_collectors) = run.collector_statuses_json {
+        if let Ok(map) = serde_json::from_str::<HashMap<String, String>>(raw_collectors) {
+            for (name, status) in map {
+                let s_low = status.trim().to_ascii_lowercase();
+                if s_low.starts_with("error") || s_low.starts_with("offline") {
+                    reasons.push(format!("Collector {} {}", name, status.trim()));
+                }
+            }
+        }
+    }
+
+    (!reasons.is_empty(), reasons)
+}
+
 async fn notify_threat_audit(
     app: &AppHandle,
     db: &Arc<Mutex<SreDatabase>>,
@@ -3446,7 +3503,9 @@ async fn notify_threat_audit(
     brief_opt: Option<&GeminiBriefDto>,
     prefs: &ThreatIntelPreferences,
 ) {
-    if !severity_threshold_met(&run.overall_severity, &prefs.pushover_threshold) {
+    let (should_notify, notify_reasons) =
+        should_dispatch_threat_pushover(run, findings, &prefs.pushover_threshold);
+    if !should_notify {
         if let Ok(guard) = db.lock() {
             let _ = guard.upsert_pushover_alert_state(
                 THREAT_DEDUP_KEY,
@@ -3461,15 +3520,19 @@ async fn notify_threat_audit(
 
     let is_high_crit = matches!(run.overall_severity.as_str(), "HIGH" | "CRITICAL");
 
-    if is_high_crit {
+    if is_high_crit || !notify_reasons.is_empty() {
         let toast_body = brief_opt
             .map(|b| b.executive_summary.clone())
             .unwrap_or_else(|| {
-                format!(
-                    "{} security finding(s) flagged — Verdict: {}",
-                    findings.len(),
-                    run.intrusion_verdict
-                )
+                if !notify_reasons.is_empty() {
+                    notify_reasons.join("; ")
+                } else {
+                    format!(
+                        "{} security finding(s) flagged — Verdict: {}",
+                        findings.len(),
+                        run.intrusion_verdict
+                    )
+                }
             });
         let _ = app
             .notification()
@@ -3500,10 +3563,25 @@ async fn notify_threat_audit(
         return;
     };
 
-    let mut rule_keys: Vec<String> = findings
+    let actionable_findings: Vec<&ThreatFindingRow> = findings
+        .iter()
+        .filter(|f| {
+            f.disposition.trim().eq_ignore_ascii_case("ACTIVE")
+                && (matches!(f.severity.trim().to_ascii_uppercase().as_str(), "HIGH" | "CRITICAL")
+                    || matches!(
+                        f.rule_id.trim().to_ascii_uppercase().as_str(),
+                        "TUNNEL_DEGRADED" | "UNIFI_DEVICE_OFFLINE"
+                    ))
+        })
+        .collect();
+
+    let mut rule_keys: Vec<String> = actionable_findings
         .iter()
         .map(|f| format!("{}:{}", f.rule_id, f.actor_ip.as_deref().unwrap_or("-")))
         .collect();
+    for r in &notify_reasons {
+        rule_keys.push(r.clone());
+    }
     rule_keys.sort();
     rule_keys.dedup();
     let fingerprint = format!(
@@ -3526,13 +3604,19 @@ async fn notify_threat_audit(
         label: "Posture / Verdict".to_string(),
         detail: format!("{} ({})", run.overall_severity, run.intrusion_verdict),
     });
+    if !notify_reasons.is_empty() {
+        bullets.push(FormattedBulletItem {
+            label: "Trigger Reasons".to_string(),
+            detail: sanitize_bounded(&notify_reasons.join("; "), 240),
+        });
+    }
     if let Some(b) = brief_opt {
         bullets.push(FormattedBulletItem {
             label: "Summary".to_string(),
             detail: sanitize_bounded(&b.executive_summary, 320),
         });
     }
-    for f in findings.iter().take(4) {
+    for f in actionable_findings.iter().take(4) {
         bullets.push(FormattedBulletItem {
             label: format!("[{}] {}", f.severity, f.source_layer),
             detail: sanitize_bounded(&f.title, 140),
@@ -3907,6 +3991,7 @@ pub async fn execute_threat_audit_pipeline(
         wsh.panoramadr.com, PanoramaAuth, WSH host, and UniFi LAN are STRICT PRIVATE (US-only expected, protected by Access + PanoramaAuth). \
         Severity rules: WordPress/PHP/wlwmanifest/xmlrpc 404 or 403 scans on parakith.com and VPN-only Intel tags on public traffic are background noise (LOW / NO_EVIDENCE, never MEDIUM). \
         Ignore routine WAF/DNS rule creations by allowlistedAdminEmails (LOW audit only). Inspect edgeBlockedHits vs unblockedHits and freePlanSlotBudget (5 custom rules max per Free zone). \
+        Escalation rule: Set escalate_to_tier2=true ONLY for HIGH/CRITICAL suspected intrusions, private Origin 200 breaches, Zero Trust bypasses, or privileged-zone unknown LAN devices — NEVER for LOW/MEDIUM scanners, WAF-covered probes, or isolated Kids/Guest/IoT/Hotspot VLAN devices. \
         Do NOT recommend adding a WAF rule for threats already covered by an enabled rule in deployedWafRules; if requests bypassed a rule (e.g. // double-slash), recommend tightening that specific existing rule. Never spend Free-plan slots on single disposable scanner IPs; focus on /api/opt-in abuse, stack exploits (/.env, /.git, 200/5xx), uncovered strict-private probes, and internal UniFi/WSH/Auth anomalies.";
 
     const STAGE2_SYSTEM_PROMPT: &str = "You are a principal incident-response cybersecurity investigator using Gemini 4 Carbon. \
@@ -4157,7 +4242,7 @@ pub async fn execute_threat_audit_pipeline(
         error_message: err_msg,
     };
 
-    // Merge Gemini actor classifications before upserting threat_actors
+    // Merge Gemini actor classifications and drop BENIGN_CRAWLER rows with zero origin breaches
     let mut actors_to_upsert = stage0.actor_candidates;
     if let Some(ref brief) = brief_final {
         let assess_map: HashMap<String, &GeminiActorAssessmentDto> = brief
@@ -4176,6 +4261,14 @@ pub async fn execute_threat_audit_pipeline(
             }
         }
     }
+    actors_to_upsert.retain(|actor| {
+        let is_benign = actor
+            .latest_classification
+            .as_deref()
+            .map(|c| c.trim().eq_ignore_ascii_case("BENIGN_CRAWLER"))
+            .unwrap_or(false);
+        !(is_benign && actor.total_origin_200s == 0)
+    });
 
     {
         let guard = db.lock().map_err(|e| format!("DB mutex poisoned: {}", e))?;
@@ -4188,6 +4281,8 @@ pub async fn execute_threat_audit_pipeline(
         for actor in &actors_to_upsert {
             let _ = guard.upsert_threat_actor(actor);
         }
+        let _ = guard.delete_benign_crawler_actors();
+        let _ = guard.expire_stale_noise_actors(&now_iso, 7);
         let _ = guard.log_action(
             "SECURITY",
             if final_sev == "HIGH" || final_sev == "CRITICAL" {
@@ -4730,6 +4825,81 @@ pub async fn snooze_threat_actor(
 }
 
 #[tauri::command]
+pub async fn set_threat_finding_disposition(
+    db: State<'_, Arc<Mutex<SreDatabase>>>,
+    finding_id: String,
+    disposition: String,
+    snooze_days: Option<u32>,
+    note: Option<String>,
+) -> Result<ThreatFindingRow, String> {
+    let clean_id = finding_id.trim().to_string();
+    if clean_id.is_empty() {
+        return Err("Finding ID is required.".to_string());
+    }
+    let norm_disp = disposition.trim().to_ascii_uppercase();
+    let snoozed_until = if norm_disp == "SNOOZED" {
+        let days = snooze_days.unwrap_or(7);
+        if !(1..=365).contains(&days) {
+            return Err("Snooze duration must be between 1 and 365 days.".to_string());
+        }
+        Some(
+            (Utc::now() + ChronoDuration::days(days as i64))
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        )
+    } else {
+        None
+    };
+
+    let guard = db.lock().map_err(|e| format!("DB mutex poisoned: {}", e))?;
+    let updated = guard
+        .set_threat_finding_disposition(
+            &clean_id,
+            &norm_disp,
+            snoozed_until.as_deref(),
+            note.as_deref(),
+        )
+        .map_err(|e| format!("Failed updating finding disposition: {}", e))?
+        .ok_or_else(|| format!("Threat finding '{}' not found", clean_id))?;
+
+    let _ = guard.log_action(
+        "SECURITY",
+        "INFO",
+        &format!("Updated finding {} disposition to {}", clean_id, updated.disposition),
+        updated.resolution_note.as_deref(),
+    );
+    Ok(updated)
+}
+
+#[tauri::command]
+pub async fn resolve_threat_findings_batch(
+    db: State<'_, Arc<Mutex<SreDatabase>>>,
+    finding_ids: Vec<String>,
+    note: Option<String>,
+) -> Result<usize, String> {
+    if finding_ids.is_empty() {
+        return Ok(0);
+    }
+    let clean_note = note
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Mitigated by active Cloudflare WAF rule");
+    let guard = db.lock().map_err(|e| format!("DB mutex poisoned: {}", e))?;
+    let resolved = guard
+        .resolve_findings_by_ids(&finding_ids, clean_note)
+        .map_err(|e| format!("Failed batch-resolving findings: {}", e))?;
+    if resolved > 0 {
+        let _ = guard.log_action(
+            "SECURITY",
+            "INFO",
+            &format!("Auto-resolved {} WAF-covered threat finding(s)", resolved),
+            Some(clean_note),
+        );
+    }
+    Ok(resolved)
+}
+
+#[tauri::command]
 pub async fn get_lan_clients_baseline(
     db: State<'_, Arc<Mutex<SreDatabase>>>,
 ) -> Result<Vec<LanClientBaselineRow>, String> {
@@ -4749,7 +4919,11 @@ pub async fn set_lan_client_trusted(
     let guard = db.lock().map_err(|e| format!("DB mutex poisoned: {}", e))?;
     guard
         .set_lan_client_trusted(&mac_address, trusted, label.as_deref())
-        .map_err(|e| format!("Failed to update LAN client trust: {}", e))
+        .map_err(|e| format!("Failed to update LAN client trust: {}", e))?;
+    if trusted {
+        let _ = guard.resolve_findings_for_mac(&mac_address, "Owner marked LAN device as trusted");
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -4757,9 +4931,11 @@ pub async fn trust_all_lan_clients(
     db: State<'_, Arc<Mutex<SreDatabase>>>,
 ) -> Result<usize, String> {
     let guard = db.lock().map_err(|e| format!("DB mutex poisoned: {}", e))?;
-    guard
+    let updated = guard
         .trust_all_lan_clients()
-        .map_err(|e| format!("Failed to trust LAN baseline clients: {}", e))
+        .map_err(|e| format!("Failed to trust LAN baseline clients: {}", e))?;
+    let _ = guard.resolve_all_rogue_lan_findings("Owner trusted all baseline LAN devices");
+    Ok(updated)
 }
 
 #[tauri::command]
@@ -4844,7 +5020,10 @@ pub async fn upsert_threat_allowlist(
         .map_err(|e| format!("Failed to save allowlist rule: {}", e))?;
     if entry_type.eq_ignore_ascii_case("IP") || entry_type.eq_ignore_ascii_case("LAN_MAC") {
         let _ = guard.set_threat_actor_disposition(value.trim(), "ALLOWLISTED");
+    } else if entry_type.eq_ignore_ascii_case("ASN") {
+        let _ = guard.allowlist_actors_by_asn(value.trim());
     }
+    let _ = guard.resolve_findings_for_allowlist(&entry_type, &value, "Resolved via Threat Allowlist");
     Ok(row)
 }
 

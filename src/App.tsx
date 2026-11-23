@@ -56,8 +56,10 @@ import {
   ThreatRunDetailDto,
   ThreatActorRow,
   ThreatAuditProgressEvent,
+  CfWafRuleDto,
+  CloudflareWafSnapshotDto,
 } from './lib/types';
-import { computeThreatSidebarBadge } from './lib/threat-utils';
+import { computeActionableSecuritySummary } from './lib/threat-actionability';
 import { inferPageScopeFromJob } from './lib/stream-utils';
 import { buildSyncAlertEvaluationInput } from './lib/pushover-payload';
 import {
@@ -136,7 +138,9 @@ export const App: React.FC = () => {
   const [threatSettings, setThreatSettings] = useState<ThreatIntelSettingsViewDto | null>(null);
   const [threatRuns, setThreatRuns] = useState<ThreatAuditRunRow[]>([]);
   const [selectedThreatDetail, setSelectedThreatDetail] = useState<ThreatRunDetailDto | null>(null);
-  const [activeThreatActorsCount, setActiveThreatActorsCount] = useState<number>(0);
+  const [latestThreatDetail, setLatestThreatDetail] = useState<ThreatRunDetailDto | null>(null);
+  const [activeThreatActors, setActiveThreatActors] = useState<ThreatActorRow[]>([]);
+  const [threatWafRules, setThreatWafRules] = useState<CfWafRuleDto[]>([]);
   const [isRunningThreatAudit, setIsRunningThreatAudit] = useState<boolean>(false);
   const [threatAuditProgress, setThreatAuditProgress] = useState<{
     runId: string;
@@ -853,23 +857,37 @@ export const App: React.FC = () => {
   // Initial sync on mount (all tiers once on startup + cached opt-ins hydration)
   const refreshThreatIntelState = useCallback(async (preferredRunId?: string) => {
     try {
-      const [settingsDto, runsList, activeActors] = await Promise.all([
+      const [settingsDto, runsList, activeActorsList, wafSnap] = await Promise.all([
         invoke<ThreatIntelSettingsViewDto>('get_threat_intel_settings'),
         invoke<ThreatAuditRunRow[]>('get_threat_audit_runs', { limit: 30 }),
         invoke<ThreatActorRow[]>('get_threat_actors', { disposition: 'ACTIVE' }),
+        invoke<CloudflareWafSnapshotDto>('get_cloudflare_waf_rules', { forceRefresh: false }).catch(
+          () => null
+        ),
       ]);
       setThreatSettings(settingsDto);
       const safeRuns = Array.isArray(runsList) ? runsList : [];
       setThreatRuns(safeRuns);
-      setActiveThreatActorsCount(Array.isArray(activeActors) ? activeActors.length : 0);
+      setActiveThreatActors(Array.isArray(activeActorsList) ? activeActorsList : []);
+      setThreatWafRules(Array.isArray(wafSnap?.rules) ? wafSnap.rules : []);
 
-      const targetRunId = preferredRunId || safeRuns[0]?.id;
-      if (targetRunId) {
-        const detail = await invoke<ThreatRunDetailDto>('get_threat_run_detail', {
-          runId: targetRunId,
+      const latestRunId = safeRuns[0]?.id;
+      if (latestRunId) {
+        const latestDetail = await invoke<ThreatRunDetailDto>('get_threat_run_detail', {
+          runId: latestRunId,
         });
-        setSelectedThreatDetail(detail);
+        setLatestThreatDetail(latestDetail);
+
+        if (preferredRunId && preferredRunId !== latestRunId) {
+          const selectedDetail = await invoke<ThreatRunDetailDto>('get_threat_run_detail', {
+            runId: preferredRunId,
+          });
+          setSelectedThreatDetail(selectedDetail);
+        } else {
+          setSelectedThreatDetail(latestDetail);
+        }
       } else {
+        setLatestThreatDetail(null);
         setSelectedThreatDetail(null);
       }
     } catch (err) {
@@ -898,6 +916,7 @@ export const App: React.FC = () => {
     listen<ThreatRunDetailDto>('sre://threat-audit-updated', (event) => {
       const detail = event.payload;
       if (detail?.run?.id) {
+        setLatestThreatDetail(detail);
         setSelectedThreatDetail(detail);
         void refreshThreatIntelState(detail.run.id);
       } else {
@@ -2491,11 +2510,13 @@ export const App: React.FC = () => {
   const dietpiPackagesCount = dietpiBadges.tabs.host.count;
   const threatBadge = useMemo(
     () =>
-      computeThreatSidebarBadge(
-        threatRuns[0] ?? selectedThreatDetail?.run ?? null,
-        activeThreatActorsCount
-      ),
-    [threatRuns, selectedThreatDetail, activeThreatActorsCount]
+      computeActionableSecuritySummary({
+        latestRun: latestThreatDetail?.run ?? threatRuns[0] ?? null,
+        findings: latestThreatDetail?.findings ?? [],
+        actors: activeThreatActors,
+        wafRules: threatWafRules,
+      }).sidebarBadge,
+    [latestThreatDetail, threatRuns, activeThreatActors, threatWafRules]
   );
 
   const getWorkspaceRoot = useCallback(() => {
@@ -2555,6 +2576,7 @@ export const App: React.FC = () => {
           appendTerminalLine(tabId, `[WARN] ${detail.run.errorMessage}`);
         }
         finalizeTerminalJob(tabId, detail.run.status === 'FAILED' ? 1 : 0);
+        setLatestThreatDetail(detail);
         setSelectedThreatDetail(detail);
         await refreshThreatIntelState(detail.run.id);
         showActionFeedback(
@@ -2628,6 +2650,7 @@ export const App: React.FC = () => {
           appendTerminalLine(tabId, `[WARN] ${detail.run.errorMessage}`);
         }
         finalizeTerminalJob(tabId, detail.run.status === 'FAILED' ? 1 : 0);
+        setLatestThreatDetail(detail);
         setSelectedThreatDetail(detail);
         await refreshThreatIntelState(detail.run.id);
         showActionFeedback(

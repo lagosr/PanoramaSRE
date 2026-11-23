@@ -66,6 +66,11 @@ import {
   verdictToBadgeVariant,
 } from '../../lib/threat-utils';
 import {
+  computeActionableSecuritySummary,
+  getFindingDisposition,
+  isFindingActionable,
+} from '../../lib/threat-actionability';
+import {
   evaluateActionWafCoverage,
   evaluateActorWafCoverage,
   evaluateCampaignWafCoverage,
@@ -201,7 +206,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
 
   // External Threat Actors, Findings & Campaigns filter state
   const [actors, setActors] = useState<ThreatActorRow[]>([]);
-  const [actorDispositionFilter, setActorDispositionFilter] = useState<string>('ACTIVE');
+  const [actorDispositionFilter, setActorDispositionFilter] = useState<string>('ACTIONABLE');
   const [actorSearch, setActorSearch] = useState<string>('');
   const [actorDomainFilter, setActorDomainFilter] = useState<string>('ALL');
   const [actorSeverityFilter, setActorSeverityFilter] = useState<string>('ALL');
@@ -213,6 +218,10 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   const [findingVectorFilter, setFindingVectorFilter] = useState<string>('ALL');
   const [campaignDomainFilter, setCampaignDomainFilter] = useState<string>('ALL');
   const [campaignSeverityFilter, setCampaignSeverityFilter] = useState<string>('ALL');
+  const [showExternalInformationalFindings, setShowExternalInformationalFindings] =
+    useState<boolean>(false);
+  const [showInternalInformationalFindings, setShowInternalInformationalFindings] =
+    useState<boolean>(false);
   const [isLoadingActors, setIsLoadingActors] = useState<boolean>(false);
 
   // Live Cloudflare WAF Custom Rules + Local Tracked Overrides state
@@ -283,11 +292,40 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
     }
   }, []);
 
+  const activeFindingsRef = React.useRef<ThreatFindingRow[]>(activeFindings);
+  activeFindingsRef.current = activeFindings;
+  const onRefreshAllRef = React.useRef(onRefreshAll);
+  onRefreshAllRef.current = onRefreshAll;
+
+  const autoResolveWafCoveredFindings = useCallback(async (rules: CfWafRuleDto[]): Promise<number> => {
+    if (!rules || rules.length === 0) return 0;
+    const idsToResolve = activeFindingsRef.current
+      .filter((f) => {
+        if (classifyFindingSurface(f.sourceLayer) !== 'external') return false;
+        if (getFindingDisposition(f) !== 'ACTIVE') return false;
+        const ruleUpper = (f.ruleId || '').trim().toUpperCase();
+        if (ruleUpper === 'ORIGIN_BREACH_THROUGH' || ruleUpper === 'ZT_UNEXPECTED_ACCESS') {
+          return false;
+        }
+        return evaluateFindingWafCoverage(f, rules).status === 'COVERED';
+      })
+      .map((f) => f.id);
+    if (idsToResolve.length === 0) return 0;
+    try {
+      return await invoke<number>('resolve_threat_findings_batch', {
+        findingIds: idsToResolve,
+        note: 'Covered by active Cloudflare WAF rule',
+      });
+    } catch {
+      return 0;
+    }
+  }, []);
+
   const loadActors = useCallback(async () => {
     setIsLoadingActors(true);
     try {
       const list = await invoke<ThreatActorRow[]>('get_threat_actors', {
-        disposition: actorDispositionFilter,
+        disposition: 'ALL',
       });
       setActors(Array.isArray(list) ? list : []);
     } catch (err) {
@@ -295,7 +333,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
     } finally {
       setIsLoadingActors(false);
     }
-  }, [actorDispositionFilter]);
+  }, []);
 
   const loadSourcesAndAllowlist = useCallback(async () => {
     setIsLoadingSources(true);
@@ -345,13 +383,17 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
       });
       setWafSnapshot(snap ?? null);
       if (forceRefresh) {
+        const autoResolved = snap?.rules ? await autoResolveWafCoveredFindings(snap.rules) : 0;
         setWafFeedback({
           text: snap?.wafReadOk
-            ? `Synced ${snap.rules.length} Cloudflare WAF rule(s) across ${snap.zones.length} zone(s).`
+            ? `Synced ${snap.rules.length} Cloudflare WAF rule(s) across ${snap.zones.length} zone(s)${
+                autoResolved > 0 ? ` — auto-resolved ${autoResolved} covered finding(s)` : ''
+              }.`
             : snap?.permissionHint || 'Live WAF sync unavailable; using tracked local rules.',
           tone: snap?.wafReadOk ? 'ok' : 'err',
         });
         setTimeout(() => setWafFeedback(null), 5000);
+        await onRefreshAllRef.current();
       }
     } catch (err) {
       if (forceRefresh) {
@@ -360,7 +402,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
     } finally {
       setIsLoadingWaf(false);
     }
-  }, []);
+  }, [autoResolveWafCoveredFindings]);
 
   useEffect(() => {
     void loadActors();
@@ -561,42 +603,88 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
     setFindingVectorFilter('ALL');
   }, []);
 
+  const wafRules: CfWafRuleDto[] = useMemo(
+    () => wafSnapshot?.rules ?? [],
+    [wafSnapshot]
+  );
+
+  const actionableSummary = useMemo(
+    () =>
+      computeActionableSecuritySummary({
+        latestRun: activeRun,
+        findings: activeFindings,
+        actors,
+        wafRules,
+      }),
+    [activeRun, activeFindings, actors, wafRules]
+  );
+
+  const actorCounts = useMemo(() => {
+    let snoozed = 0;
+    let allowlisted = 0;
+    let resolved = 0;
+    let expired = 0;
+    for (const a of actors) {
+      const disp = (a.disposition || '').trim().toUpperCase();
+      if (disp === 'SNOOZED') snoozed += 1;
+      else if (disp === 'ALLOWLISTED') allowlisted += 1;
+      else if (disp === 'RESOLVED') resolved += 1;
+      else if (disp === 'EXPIRED') expired += 1;
+    }
+    return { snoozed, allowlisted, resolved, expired };
+  }, [actors]);
+
+  const actorBucket = useMemo(() => {
+    const filterUpper = actorDispositionFilter.trim().toUpperCase();
+    if (filterUpper === 'ACTIONABLE') {
+      return actionableSummary.actionableActors;
+    }
+    if (filterUpper === 'NOISE') {
+      return actionableSummary.backgroundNoiseActors;
+    }
+    if (filterUpper === 'ALL') {
+      return actors;
+    }
+    return actors.filter(
+      (a) => (a.disposition || '').trim().toUpperCase() === filterUpper
+    );
+  }, [actorDispositionFilter, actors, actionableSummary]);
+
   const actorDomainOptions = useMemo(
     () =>
       buildDomainFilterOptions(
-        actors.map((a) => safeParseJson<string[]>(a.targetHostsJson, [])),
+        actorBucket.map((a) => safeParseJson<string[]>(a.targetHostsJson, [])),
         knownCfZones
       ),
-    [actors, knownCfZones]
+    [actorBucket, knownCfZones]
   );
 
   const actorSeverityOptions = useMemo(
-    () => buildSeverityFilterOptions(actors.map((a) => a.highestSeverity)),
-    [actors]
+    () => buildSeverityFilterOptions(actorBucket.map((a) => a.highestSeverity)),
+    [actorBucket]
   );
 
   const actorVectorOptions = useMemo(
-    () => buildActorVectorOptions(actors),
-    [actors]
+    () => buildActorVectorOptions(actorBucket),
+    [actorBucket]
   );
 
   const actorCountryOptions = useMemo(
-    () => buildActorCountryOptions(actors),
-    [actors]
+    () => buildActorCountryOptions(actorBucket),
+    [actorBucket]
   );
 
   const filteredActors = useMemo(
     () =>
-      filterThreatActors(actors, actorSearch, actorDispositionFilter, {
+      filterThreatActors(actorBucket, actorSearch, 'ALL', {
         domain: actorDomainFilter,
         severity: actorSeverityFilter,
         vector: actorVectorFilter,
         country: actorCountryFilter,
       }),
     [
-      actors,
+      actorBucket,
       actorSearch,
-      actorDispositionFilter,
       actorDomainFilter,
       actorSeverityFilter,
       actorVectorFilter,
@@ -660,11 +748,6 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   const internalActions = useMemo(
     () => (geminiBrief?.recommendedActions || []).filter((a) => classifyActionSurface(a.surface) === 'internal'),
     [geminiBrief]
-  );
-
-  const wafRules: CfWafRuleDto[] = useMemo(
-    () => wafSnapshot?.rules ?? [],
-    [wafSnapshot]
   );
 
   const observedPathsByHost = useMemo(() => {
@@ -775,6 +858,53 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
     }
   };
 
+  const handleSetFindingDisposition = async (
+    findingId: string,
+    disposition: 'ACTIVE' | 'RESOLVED' | 'SNOOZED' | 'DISMISSED',
+    snoozeDays?: number,
+    note?: string
+  ) => {
+    try {
+      await invoke('set_threat_finding_disposition', {
+        findingId,
+        disposition,
+        snoozeDays: snoozeDays ?? null,
+        note: note ?? null,
+      });
+      const label =
+        disposition === 'SNOOZED'
+          ? `Snoozed finding for ${snoozeDays ?? 7} day(s).`
+          : disposition === 'ACTIVE'
+          ? 'Reopened finding.'
+          : `Marked finding as ${disposition.toLowerCase()}.`;
+      setSourceFeedback({ text: label, tone: 'ok' });
+      setTimeout(() => setSourceFeedback(null), 3500);
+      await onRefreshAllRef.current();
+    } catch (err) {
+      setSourceFeedback({ text: `Finding update failed: ${String(err)}`, tone: 'err' });
+    }
+  };
+
+  const handleAllowlistFindingTarget = async (
+    entryType: 'IP' | 'EMAIL',
+    value: string,
+    label: string
+  ) => {
+    const clean = value.trim();
+    if (!clean) return;
+    try {
+      await invoke('upsert_threat_allowlist', { entryType, value: clean, label });
+      await Promise.all([loadActors(), loadSourcesAndAllowlist(), onRefreshAllRef.current()]);
+      setSourceFeedback({
+        text: `Allowlisted ${clean} and resolved matching findings.`,
+        tone: 'ok',
+      });
+      setTimeout(() => setSourceFeedback(null), 3500);
+    } catch (err) {
+      setSourceFeedback({ text: `Allowlist failed: ${String(err)}`, tone: 'err' });
+    }
+  };
+
   const handleToggleLanTrust = async (client: LanClientBaselineRow, trusted: boolean) => {
     try {
       await invoke('set_lan_client_trusted', {
@@ -782,7 +912,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
         trusted,
         label: client.label || client.hostname || null,
       });
-      await loadSourcesAndAllowlist();
+      await Promise.all([loadSourcesAndAllowlist(), onRefreshAllRef.current()]);
     } catch (err) {
       setSourceFeedback({ text: `Failed updating device trust: ${String(err)}`, tone: 'err' });
     }
@@ -791,7 +921,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   const handleTrustAllBaseline = async () => {
     try {
       const updated = await invoke<number>('trust_all_lan_clients');
-      await loadSourcesAndAllowlist();
+      await Promise.all([loadSourcesAndAllowlist(), onRefreshAllRef.current()]);
       setSourceFeedback({
         text: `Marked ${updated} LAN baseline device(s) as owner-verified trusted.`,
         tone: 'ok',
@@ -814,7 +944,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
       });
       setNewRuleValue('');
       setNewRuleLabel('');
-      await Promise.all([loadSourcesAndAllowlist(), loadActors()]);
+      await Promise.all([loadSourcesAndAllowlist(), loadActors(), onRefreshAllRef.current()]);
       setSourceFeedback({ text: `Added ${newRuleType} allowlist rule: ${val}`, tone: 'ok' });
       setTimeout(() => setSourceFeedback(null), 3500);
     } catch (err) {
@@ -825,7 +955,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   const handleDeleteAllowlistRule = async (id: string) => {
     try {
       await invoke('delete_threat_allowlist', { id });
-      await loadSourcesAndAllowlist();
+      await Promise.all([loadSourcesAndAllowlist(), onRefreshAllRef.current()]);
     } catch (err) {
       setSourceFeedback({ text: `Failed removing rule: ${String(err)}`, tone: 'err' });
     }
@@ -844,14 +974,18 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
         enabled: true,
       });
       setWafSnapshot(updated);
+      const autoResolved = updated?.rules ? await autoResolveWafCoveredFindings(updated.rules) : 0;
       setManualWafName('');
       setManualWafExpr('');
       setShowManualWafForm(false);
       setWafFeedback({
-        text: `Tracked local WAF rule on ${manualWafZone}. Matching items now display 'WAF Covered'.`,
+        text: `Tracked local WAF rule on ${manualWafZone}.${
+          autoResolved > 0 ? ` Auto-resolved ${autoResolved} covered finding(s).` : " Matching items now display 'WAF Covered'."
+        }`,
         tone: 'ok',
       });
       setTimeout(() => setWafFeedback(null), 4500);
+      await onRefreshAllRef.current();
     } catch (err) {
       setWafFeedback({ text: `Failed saving WAF override: ${String(err)}`, tone: 'err' });
     } finally {
@@ -863,6 +997,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
     try {
       const updated = await invoke<CloudflareWafSnapshotDto>('delete_waf_rule_override', { id });
       setWafSnapshot(updated);
+      await onRefreshAllRef.current();
     } catch (err) {
       setWafFeedback({ text: `Failed removing WAF override: ${String(err)}`, tone: 'err' });
     }
@@ -911,6 +1046,20 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
     const findWafCov = isExt ? evaluateFindingWafCoverage(f, wafRules) : null;
     const isCovered = findWafCov?.status === 'COVERED';
     const isPartial = findWafCov?.status === 'PARTIAL';
+    const findingDisp = getFindingDisposition(f);
+    const isFindingSnoozed = findingDisp === 'SNOOZED';
+    const findingSnoozeRem = isFindingSnoozed ? formatSnoozeRemaining(f.snoozedUntil) : null;
+
+    const auditEvidence = f.ruleId.startsWith('CONTROL_PLANE')
+      ? safeParseJson<{ actorEmail?: string; actor_email?: string }>(f.evidenceJson, {})
+      : null;
+    const adminEmail = (auditEvidence?.actorEmail || auditEvidence?.actor_email || '').trim();
+    const isAdminAlreadyAllowlisted = Boolean(
+      adminEmail &&
+        allowlist.some(
+          (r) => r.entryType === 'EMAIL' && r.value.trim().toLowerCase() === adminEmail.toLowerCase()
+        )
+    );
 
     const rogueEvidence =
       f.ruleId === 'UNIFI_ROGUE_LAN_CLIENT'
@@ -943,7 +1092,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
           tone: 'ok',
         });
         setTimeout(() => setSourceFeedback(null), 4000);
-        await Promise.all([loadSourcesAndAllowlist(), onRefreshAll()]);
+        await Promise.all([loadSourcesAndAllowlist(), onRefreshAllRef.current()]);
       } catch (err) {
         setSourceFeedback({ text: `Failed trusting LAN MAC ${rogueMac}: ${String(err)}`, tone: 'err' });
       }
@@ -952,7 +1101,11 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
     return (
       <div
         key={f.id}
-        className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-2"
+        className={`p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border space-y-2 ${
+          findingDisp !== 'ACTIVE'
+            ? 'border-slate-200/70 dark:border-slate-800/70 opacity-85'
+            : 'border-slate-200 dark:border-slate-800'
+        }`}
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-2">
@@ -962,6 +1115,16 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
               label={isExt ? 'External Perimeter' : 'Internal LAN / WSH'}
               variant={isExt ? 'info' : 'accent'}
             />
+            {findingDisp === 'RESOLVED' && <StatusBadge label="Resolved" variant="success" />}
+            {findingDisp === 'DISMISSED' && <StatusBadge label="Dismissed" variant="neutral" />}
+            {isFindingSnoozed && (
+              <span title={f.snoozedUntil ? `Snoozed until ${formatLocalDateTime(f.snoozedUntil)}` : undefined}>
+                <StatusBadge
+                  label={`Snoozed${findingSnoozeRem ? ` · ${findingSnoozeRem}` : ''}`}
+                  variant="info"
+                />
+              </span>
+            )}
             {isCovered && findWafCov?.primaryRuleName && (
               <StatusBadge label={`WAF Covered: ${findWafCov.primaryRuleName}`} variant="success" />
             )}
@@ -974,8 +1137,8 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
             </span>
           </div>
 
-          <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
-            {wafExpr && !isCovered && (
+          <div className="flex flex-wrap items-center gap-2">
+            {findingDisp === 'ACTIVE' && wafExpr && !isCovered && (
               <button
                 type="button"
                 onClick={() => void handleCopyText(copyWafKey, wafExpr)}
@@ -1003,6 +1166,37 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                 <span>Cloudflare Events</span>
               </button>
             )}
+            {findingDisp === 'ACTIVE' && isExt && f.actorIp && (
+              <button
+                type="button"
+                onClick={() =>
+                  void handleAllowlistFindingTarget(
+                    'IP',
+                    f.actorIp || '',
+                    `${f.ruleId} (${f.host || 'Perimeter'})`
+                  )
+                }
+                className="btn-tonal text-xs whitespace-nowrap flex-shrink-0"
+                title="Add IP to local allowlist and resolve matching findings"
+              >
+                Allowlist IP
+              </button>
+            )}
+            {findingDisp === 'ACTIVE' &&
+              adminEmail &&
+              !isAdminAlreadyAllowlisted &&
+              f.ruleId === 'CONTROL_PLANE_MUTATION' && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    void handleAllowlistFindingTarget('EMAIL', adminEmail, 'Trusted Cloudflare Admin')
+                  }
+                  className="btn-tonal text-xs whitespace-nowrap flex-shrink-0"
+                  title={`Trust Cloudflare admin email ${adminEmail} in PanoramaSRE allowlist`}
+                >
+                  Trust Admin Email
+                </button>
+              )}
             {f.sourceLayer === 'UNIFI' && (
               <>
                 {f.ruleId === 'UNIFI_ROGUE_LAN_CLIENT' && rogueMac && (
@@ -1037,10 +1231,63 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                 </button>
               </>
             )}
+            {findingDisp === 'ACTIVE' ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() =>
+                    void handleSetFindingDisposition(
+                      f.id,
+                      'RESOLVED',
+                      undefined,
+                      'Operator verified & resolved'
+                    )
+                  }
+                  className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                  <span>Mark Resolved</span>
+                </button>
+                <SnoozeSplitButton
+                  onSnooze={(days) =>
+                    void handleSetFindingDisposition(
+                      f.id,
+                      'SNOOZED',
+                      days,
+                      `Snoozed for ${days} days`
+                    )
+                  }
+                />
+                <button
+                  type="button"
+                  onClick={() =>
+                    void handleSetFindingDisposition(f.id, 'DISMISSED', undefined, 'Operator dismissed')
+                  }
+                  className="btn-ghost text-xs whitespace-nowrap flex-shrink-0"
+                >
+                  Dismiss
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void handleSetFindingDisposition(f.id, 'ACTIVE')}
+                className="btn-secondary text-xs whitespace-nowrap flex-shrink-0"
+              >
+                Reopen
+              </button>
+            )}
           </div>
         </div>
 
         <p className="text-xs text-slate-700 dark:text-slate-300">{f.summary}</p>
+
+        {f.resolutionNote && findingDisp !== 'ACTIVE' && (
+          <div className="text-[11px] font-mono text-emerald-700 dark:text-emerald-400">
+            Note: {f.resolutionNote}
+            {f.resolvedAt ? ` • ${formatLocalDateTime(f.resolvedAt)}` : ''}
+          </div>
+        )}
 
         {isPartial && findWafCov && (
           <div className="text-[11px] font-mono text-amber-700 dark:text-amber-400">
@@ -1216,7 +1463,19 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                   <StatusBadge
                     label={`Posture: ${activeRun.overallSeverity}`}
                     variant={severityToBadgeVariant(activeRun.overallSeverity)}
-                    pulse={activeRun.overallSeverity === 'HIGH' || activeRun.overallSeverity === 'CRITICAL'}
+                    pulse={
+                      actionableSummary.totalActionable > 0 &&
+                      (activeRun.overallSeverity === 'HIGH' ||
+                        activeRun.overallSeverity === 'CRITICAL')
+                    }
+                  />
+                  <StatusBadge
+                    label={
+                      actionableSummary.totalActionable > 0
+                        ? `Action Required: ${actionableSummary.totalActionable}`
+                        : '0 Actionable Threats'
+                    }
+                    variant={actionableSummary.totalActionable > 0 ? 'danger' : 'success'}
                   />
                   <StatusBadge
                     label={activeRun.intrusionVerdict.replace(/_/g, ' ')}
@@ -1438,14 +1697,29 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
 
         {/* Degraded / Missing Keys Notice */}
         {activeRun?.errorMessage && (
-          <div className="flex items-start gap-2.5 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-800 dark:text-amber-300">
-            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-            <div className="space-y-0.5">
-              <div className="font-semibold">
-                Degraded Mode ({activeRun.status}) — Deterministic Stage 0 Findings Preserved
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-800 dark:text-amber-300">
+            <div className="flex items-start gap-2.5 min-w-0">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+              <div className="space-y-0.5 min-w-0">
+                <div className="font-semibold">
+                  {actionableSummary.isAiOnlyDegraded
+                    ? 'Stage 2 AI Timed Out — Deterministic Stage 0 & Collectors Intact (No Red Alert Raised)'
+                    : `Degraded Mode (${activeRun.status}) — Deterministic Stage 0 Findings Preserved`}
+                </div>
+                <div className="font-mono text-[11px] break-words">{activeRun.errorMessage}</div>
               </div>
-              <div className="font-mono text-[11px]">{activeRun.errorMessage}</div>
             </div>
+            {actionableSummary.isAiOnlyDegraded && (
+              <button
+                type="button"
+                onClick={() => void onEscalateRunToCarbon(activeRun.id)}
+                disabled={isRunningAudit}
+                className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isRunningAudit ? 'animate-spin' : ''}`} />
+                <span>Retry Carbon</span>
+              </button>
+            )}
           </div>
         )}
 
@@ -1479,20 +1753,16 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                 value: 'external',
                 label: 'External (Cloudflare)',
                 badge:
-                  actors.length + externalFindings.length > 0 ? (
-                    <span className="tabular-nums font-mono">
-                      {actors.length + externalFindings.length}
-                    </span>
+                  actionableSummary.externalCount > 0 ? (
+                    <span className="tabular-nums font-mono">{actionableSummary.externalCount}</span>
                   ) : undefined,
               },
               {
                 value: 'internal',
                 label: 'Internal (UniFi & WSH)',
                 badge:
-                  internalFindings.length + internalSummary.newUnknownLanMacs.length > 0 ? (
-                    <span className="tabular-nums font-mono">
-                      {internalFindings.length + internalSummary.newUnknownLanMacs.length}
-                    </span>
+                  actionableSummary.internalCount > 0 ? (
+                    <span className="tabular-nums font-mono">{actionableSummary.internalCount}</span>
                   ) : undefined,
               },
               {
@@ -1513,6 +1783,142 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
       {/* =================================================================== */}
       {subView === 'overview' && (
         <div className="space-y-6">
+          {/* Actionable Triage Status Card */}
+          {actionableSummary.totalActionable === 0 ? (
+            <div className="bg-white dark:bg-slate-900 border border-emerald-500/40 rounded-2xl p-4 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                <div className="space-y-0.5">
+                  <div className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                    All Clear — Zero Actionable Security Threats or Infrastructure Outages
+                  </div>
+                  <p className="text-xs text-slate-600 dark:text-slate-400 tabular-nums">
+                    Edge scanner noise, WAF-covered traffic, and isolated-zone mobile devices are suppressed from alerts ({actionableSummary.backgroundNoiseActors.length} background noise actor(s), {actionableSummary.informationalOrResolvedFindings.length} informational/resolved finding(s)).
+                  </p>
+                </div>
+              </div>
+              {actionableSummary.backgroundNoiseActors.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActorDispositionFilter('NOISE');
+                    setSubView('external');
+                  }}
+                  className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                >
+                  <span>Inspect Noise ({actionableSummary.backgroundNoiseActors.length})</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="bg-white dark:bg-slate-900 border border-rose-500/50 rounded-2xl p-5 shadow-sm space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <ShieldAlert className="w-5 h-5 text-rose-500 shrink-0" />
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 tabular-nums">
+                    Action Required ({actionableSummary.totalActionable} Active Critical/High Issue{actionableSummary.totalActionable === 1 ? '' : 's'})
+                  </h3>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {actionableSummary.externalCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setSubView('external')}
+                      className="btn-tonal text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+                    >
+                      <span>Resolve External ({actionableSummary.externalCount})</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                  {actionableSummary.internalCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setSubView('internal')}
+                      className="btn-tonal text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+                    >
+                      <span>Resolve Internal ({actionableSummary.internalCount})</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="space-y-1.5 text-xs">
+                {actionableSummary.collectorOutages.map((o) => (
+                  <div
+                    key={o.collector}
+                    className="px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2"
+                  >
+                    <div className="flex items-center gap-2">
+                      <StatusBadge label="OUTAGE" variant="danger" />
+                      <span className="font-semibold text-slate-900 dark:text-slate-100">{o.label}</span>
+                    </div>
+                    <span className="font-mono text-rose-600 dark:text-rose-400">{o.status}</span>
+                  </div>
+                ))}
+                {actionableSummary.actionableFindings.map((f) => (
+                  <div
+                    key={`ov-act-${f.id}`}
+                    className="px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2"
+                  >
+                    <div className="flex flex-wrap items-center gap-2 min-w-0">
+                      <StatusBadge label={f.severity} variant={severityToBadgeVariant(f.severity)} />
+                      <StatusBadge label={f.sourceLayer} variant="neutral" />
+                      <span className="font-semibold text-slate-900 dark:text-slate-100 truncate">
+                        {f.title}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSubView(
+                          classifyFindingSurface(f.sourceLayer) === 'external' ? 'external' : 'internal'
+                        )
+                      }
+                      className="btn-ghost text-xs whitespace-nowrap flex-shrink-0"
+                    >
+                      Review →
+                    </button>
+                  </div>
+                ))}
+                {actionableSummary.deduplicatedActionableActors.map((a) => (
+                  <div
+                    key={`ov-actor-${a.id}`}
+                    className="px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2"
+                  >
+                    <div className="flex flex-wrap items-center gap-2 min-w-0">
+                      <StatusBadge
+                        label={a.highestSeverity}
+                        variant={severityToBadgeVariant(a.highestSeverity)}
+                      />
+                      <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">
+                        {a.ipAddress || a.id}
+                      </span>
+                      {a.totalOrigin200s > 0 && (
+                        <StatusBadge label={`${a.totalOrigin200s} Origin 200s`} variant="danger" />
+                      )}
+                      {a.latestClassification && (
+                        <span className="font-mono text-slate-600 dark:text-slate-400">
+                          {a.latestClassification}
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActorDispositionFilter('ACTIONABLE');
+                        setSubView('external');
+                      }}
+                      className="btn-ghost text-xs whitespace-nowrap flex-shrink-0"
+                    >
+                      Inspect Actor →
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Separated External vs Internal Surface Overview Cards */}
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 tabular-nums">
             {/* External Surface Card */}
@@ -1635,7 +2041,9 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                     <StatusBadge
                       label={`${trustedLanCount}/${lanClients.length} Trusted`}
                       variant={
-                        internalSummary.newUnknownLanMacs.length > 0
+                        actionableSummary.actionableInternalFindings.some(
+                          (f) => f.ruleId === 'UNIFI_ROGUE_LAN_CLIENT'
+                        )
                           ? 'danger'
                           : trustedLanCount > 0
                           ? 'success'
@@ -1649,7 +2057,15 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                   </div>
                   <div className="text-[11px] font-mono text-slate-600 dark:text-slate-400 space-y-0.5">
                     <div>Infra Devices: {internalSummary.unifiDevicesTotal} ({internalSummary.unifiOfflineDevices.length} offline)</div>
-                    <div className={internalSummary.newUnknownLanMacs.length > 0 ? 'text-rose-600 dark:text-rose-400 font-bold' : ''}>
+                    <div
+                      className={
+                        actionableSummary.actionableInternalFindings.some(
+                          (f) => f.ruleId === 'UNIFI_ROGUE_LAN_CLIENT'
+                        )
+                          ? 'text-rose-600 dark:text-rose-400 font-bold'
+                          : ''
+                      }
+                    >
                       Unknown MACs: {internalSummary.newUnknownLanMacs.length} • Policies: {internalSummary.unifiPoliciesTotal}
                     </div>
                   </div>
@@ -1840,7 +2256,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
               <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
               <span className="text-slate-700 dark:text-slate-300">
                 {activeRun
-                  ? `Deterministic Stage 0 evaluated ${activeFindings.length} finding(s): ${externalFindings.length} External (Cloudflare), ${internalFindings.length} Internal (UniFi & WSH).`
+                  ? `Deterministic Stage 0 evaluated ${activeFindings.length} finding(s): ${actionableSummary.externalCount} actionable External, ${actionableSummary.internalCount} actionable Internal.`
                   : 'Run your first 360° audit to populate External and Internal findings.'}
               </span>
             </div>
@@ -1850,7 +2266,9 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                 onClick={() => setSubView('external')}
                 className="btn-secondary text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
               >
-                <span>External ({externalFindings.length} findings • {actors.length} actors)</span>
+                <span>
+                  External ({actionableSummary.externalCount} actionable • {actors.length} tracked)
+                </span>
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
               <button
@@ -1858,7 +2276,9 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                 onClick={() => setSubView('internal')}
                 className="btn-secondary text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
               >
-                <span>Internal ({internalFindings.length} findings • {lanClients.length} LAN)</span>
+                <span>
+                  Internal ({actionableSummary.internalCount} actionable • {lanClients.length} LAN)
+                </span>
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
             </div>
@@ -2565,9 +2985,55 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                   <span>Clear Finding Filters</span>
                 </button>
               </div>
-            ) : (
-              <div className="space-y-3">{filteredExternalFindings.map(renderFindingRow)}</div>
-            )}
+            ) : (() => {
+              const actionableExtList = filteredExternalFindings.filter((f) =>
+                isFindingActionable(f, wafRules)
+              );
+              const infoExtList = filteredExternalFindings.filter(
+                (f) => !isFindingActionable(f, wafRules)
+              );
+              return (
+                <div className="space-y-4">
+                  {actionableExtList.length > 0 ? (
+                    <div className="space-y-3">{actionableExtList.map(renderFindingRow)}</div>
+                  ) : (
+                    !hasActiveFindingFilters && (
+                      <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-emerald-500/30 flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <div className="flex items-center gap-2 text-slate-700 dark:text-slate-300">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                          <span className="font-semibold text-slate-900 dark:text-slate-100">
+                            0 Actionable External Incidents
+                          </span>
+                          <span className="text-slate-500 dark:text-slate-400">
+                            ({infoExtList.length} WAF-covered, low-severity, or resolved item{infoExtList.length === 1 ? '' : 's'})
+                          </span>
+                        </div>
+                      </div>
+                    )
+                  )}
+                  {infoExtList.length > 0 && (
+                    <div className="space-y-2.5">
+                      {!hasActiveFindingFilters && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setShowExternalInformationalFindings((prev) => !prev)
+                          }
+                          className="btn-secondary text-xs inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                        >
+                          <span>
+                            {showExternalInformationalFindings ? 'Hide' : 'Show'} Informational, WAF-Covered &amp; Resolved ({infoExtList.length})
+                          </span>
+                        </button>
+                      )}
+                      {(hasActiveFindingFilters || showExternalInformationalFindings) && (
+                        <div className="space-y-3">{infoExtList.map(renderFindingRow)}</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
 
           {/* Recurring External Threat Actors Ledger */}
@@ -2577,12 +3043,12 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                 <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 tabular-nums">
                   Recurring External Threat Actors (
                   {hasActiveActorFilters
-                    ? `${filteredActors.length} / ${actors.length}`
+                    ? `${filteredActors.length} / ${actorBucket.length}`
                     : filteredActors.length}
                   )
                 </h3>
                 <p className="text-xs text-slate-600 dark:text-slate-400">
-                  Cross-run external IP/ASN tracking with origin-reach cross-over alerts and 1-click Cloudflare WAF rules.
+                  Defaults to actionable HIGH/CRITICAL &amp; Origin-200 actors. Background scanners and WAF-covered probes live under Background / Mitigated Noise (auto-expires after 7d unseen).
                 </p>
               </div>
 
@@ -2624,11 +3090,19 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                     value={actorDispositionFilter}
                     onChange={setActorDispositionFilter}
                     options={[
-                      { value: 'ACTIVE', label: 'Active' },
-                      { value: 'SNOOZED', label: 'Snoozed' },
-                      { value: 'ALLOWLISTED', label: 'Allowlisted' },
-                      { value: 'RESOLVED', label: 'Resolved' },
-                      { value: 'ALL', label: 'All Actors' },
+                      {
+                        value: 'ACTIONABLE',
+                        label: `Actionable Only (${actionableSummary.actionableActors.length})`,
+                      },
+                      {
+                        value: 'NOISE',
+                        label: `Background / Mitigated Noise (${actionableSummary.backgroundNoiseActors.length})`,
+                      },
+                      { value: 'SNOOZED', label: `Snoozed (${actorCounts.snoozed})` },
+                      { value: 'ALLOWLISTED', label: `Allowlisted (${actorCounts.allowlisted})` },
+                      { value: 'RESOLVED', label: `Resolved (${actorCounts.resolved})` },
+                      { value: 'EXPIRED', label: `Expired Noise (${actorCounts.expired})` },
+                      { value: 'ALL', label: `All Actors (${actors.length})` },
                     ]}
                   />
                 </div>
@@ -2671,20 +3145,46 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
               <div className="p-8 text-center text-xs font-mono text-slate-500">Loading threat actors...</div>
             ) : filteredActors.length === 0 ? (
               <div className="p-8 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-center space-y-2.5 text-xs text-slate-500">
-                <div>
-                  {actors.length > 0 && hasActiveActorFilters
-                    ? 'No threat actors match the active domain, vector, severity, country, or search filters.'
-                    : 'No threat actors match the selected disposition filter.'}
-                </div>
-                {actors.length > 0 && hasActiveActorFilters && (
-                  <button
-                    type="button"
-                    onClick={clearActorFilters}
-                    className="btn-secondary text-xs inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                    <span>Clear Actor Filters</span>
-                  </button>
+                {actorDispositionFilter === 'ACTIONABLE' && !hasActiveActorFilters ? (
+                  <>
+                    <CheckCircle2 className="w-6 h-6 text-emerald-500 mx-auto" />
+                    <div className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+                      Zero Actionable External Threat Actors
+                    </div>
+                    <div className="text-xs text-slate-600 dark:text-slate-400">
+                      All recurring IPs are either low/medium scanner noise, WAF-covered, snoozed, or allowlisted.
+                    </div>
+                    {actionableSummary.backgroundNoiseActors.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setActorDispositionFilter('NOISE')}
+                        className="btn-secondary text-xs inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                      >
+                        <span>
+                          Inspect Background / Mitigated Noise (
+                          {actionableSummary.backgroundNoiseActors.length})
+                        </span>
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div>
+                      {actorBucket.length > 0 && hasActiveActorFilters
+                        ? 'No threat actors match the active domain, vector, severity, country, or search filters.'
+                        : 'No threat actors match the selected view.'}
+                    </div>
+                    {actorBucket.length > 0 && hasActiveActorFilters && (
+                      <button
+                        type="button"
+                        onClick={clearActorFilters}
+                        className="btn-secondary text-xs inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                        <span>Clear Actor Filters</span>
+                      </button>
+                    )}
+                  </>
                 )}
               </div>
             ) : (
@@ -3083,27 +3583,61 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                 </div>
               )}
 
-              {(internalFindings.length > 0 || internalActions.length > 0) && (
-                <>
-                  <div className="flex items-center gap-2">
-                    <ShieldCheck className="w-5 h-5 text-[var(--color-brand-text)]" />
-                    <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
-                      Internal LAN &amp; Host Findings ({internalFindings.length})
-                    </h3>
-                  </div>
-                  {internalFindings.length > 0 && (
-                    <div className="space-y-3">{internalFindings.map(renderFindingRow)}</div>
-                  )}
-                  {internalActions.length > 0 && (
-                    <div className="space-y-2.5 pt-2 border-t border-slate-200 dark:border-slate-800">
-                      <div className="text-xs font-mono font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
-                        Recommended Internal Actions ({internalActions.length})
-                      </div>
-                      {internalActions.map((act, idx) => renderActionRow(act, idx, 'int-act'))}
+              {(internalFindings.length > 0 || internalActions.length > 0) && (() => {
+                const actionableIntList = internalFindings.filter((f) =>
+                  isFindingActionable(f, wafRules)
+                );
+                const infoIntList = internalFindings.filter(
+                  (f) => !isFindingActionable(f, wafRules)
+                );
+                return (
+                  <>
+                    <div className="flex items-center gap-2">
+                      <ShieldCheck className="w-5 h-5 text-[var(--color-brand-text)]" />
+                      <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 tabular-nums">
+                        Internal LAN &amp; Host Findings ({actionableIntList.length} actionable
+                        {infoIntList.length > 0 ? ` • ${infoIntList.length} informational/resolved` : ''})
+                      </h3>
                     </div>
-                  )}
-                </>
-              )}
+                    {actionableIntList.length > 0 ? (
+                      <div className="space-y-3">{actionableIntList.map(renderFindingRow)}</div>
+                    ) : (
+                      <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-emerald-500/30 flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                        <span className="font-semibold text-slate-900 dark:text-slate-100">
+                          0 Actionable Internal Security Incidents
+                        </span>
+                      </div>
+                    )}
+                    {infoIntList.length > 0 && (
+                      <div className="space-y-2.5">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setShowInternalInformationalFindings((prev) => !prev)
+                          }
+                          className="btn-secondary text-xs inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                        >
+                          <span>
+                            {showInternalInformationalFindings ? 'Hide' : 'Show'} Informational &amp; Resolved Internal Telemetry ({infoIntList.length})
+                          </span>
+                        </button>
+                        {showInternalInformationalFindings && (
+                          <div className="space-y-3">{infoIntList.map(renderFindingRow)}</div>
+                        )}
+                      </div>
+                    )}
+                    {internalActions.length > 0 && (
+                      <div className="space-y-2.5 pt-2 border-t border-slate-200 dark:border-slate-800">
+                        <div className="text-xs font-mono font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
+                          Recommended Internal Actions ({internalActions.length})
+                        </div>
+                        {internalActions.map((act, idx) => renderActionRow(act, idx, 'int-act'))}
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
             </div>
           )}
 
@@ -3133,7 +3667,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                   UniFi LAN Device Baseline ({trustedLanCount} / {lanClients.length} Trusted)
                 </h3>
                 <p className="text-xs text-slate-600 dark:text-slate-400">
-                  Tracks known hardware MACs on your private LAN. Brand-new MACs trigger <code className="font-mono">HIGH</code> on trusted LANs and <code className="font-mono">MEDIUM</code> on isolated Guest/Kids/IoT VLANs until verified.
+                  Tracks known hardware MACs on your private LAN. Brand-new MACs trigger <code className="font-mono">HIGH</code> on privileged LANs and quiet <code className="font-mono">LOW</code> informational telemetry on isolated Guest/Kids/IoT/Hotspot VLANs.
                 </p>
               </div>
               <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">

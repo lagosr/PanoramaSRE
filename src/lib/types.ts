@@ -1011,7 +1011,7 @@ export interface ThreatActorRow {
   latestClassification?: string | null;
   targetHostsJson: string;
   samplePathsJson: string;
-  disposition: 'ACTIVE' | 'SNOOZED' | 'ALLOWLISTED' | 'RESOLVED' | string;
+  disposition: 'ACTIVE' | 'SNOOZED' | 'ALLOWLISTED' | 'RESOLVED' | 'EXPIRED' | string;
   snoozedUntil?: string | null;
 }
 
@@ -1030,6 +1030,10 @@ export interface ThreatFindingRow {
   rayIdsJson: string;
   evidenceJson: string;
   createdAt: string;
+  disposition?: 'ACTIVE' | 'RESOLVED' | 'SNOOZED' | 'DISMISSED' | string;
+  snoozedUntil?: string | null;
+  resolvedAt?: string | null;
+  resolutionNote?: string | null;
 }
 
 export interface ThreatRunDetailDto {

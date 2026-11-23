@@ -177,6 +177,8 @@ pub fn run() {
             get_threat_actors,
             set_threat_actor_disposition,
             snooze_threat_actor,
+            set_threat_finding_disposition,
+            resolve_threat_findings_batch,
             get_lan_clients_baseline,
             set_lan_client_trusted,
             trust_all_lan_clients,

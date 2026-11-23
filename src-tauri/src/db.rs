@@ -141,6 +141,10 @@ pub struct ThreatActorRow {
     pub snoozed_until: Option<String>,
 }
 
+fn default_active_disposition() -> String {
+    "ACTIVE".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreatFindingRow {
@@ -158,6 +162,14 @@ pub struct ThreatFindingRow {
     pub ray_ids_json: String,
     pub evidence_json: String,
     pub created_at: String,
+    #[serde(default = "default_active_disposition")]
+    pub disposition: String,
+    #[serde(default)]
+    pub snoozed_until: Option<String>,
+    #[serde(default)]
+    pub resolved_at: Option<String>,
+    #[serde(default)]
+    pub resolution_note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -406,7 +418,11 @@ impl SreDatabase {
                 actor_asn TEXT,
                 ray_ids_json TEXT NOT NULL DEFAULT '[]',
                 evidence_json TEXT NOT NULL DEFAULT '{}',
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                disposition TEXT NOT NULL DEFAULT 'ACTIVE',
+                snoozed_until TEXT,
+                resolved_at TEXT,
+                resolution_note TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_threat_findings_run
@@ -465,6 +481,24 @@ impl SreDatabase {
             self.conn.execute("ALTER TABLE threat_actors ADD COLUMN snoozed_until TEXT", [])?;
         }
 
+        // Idempotent column migration for threat_findings disposition & resolution tracking
+        let finding_cols = self.get_table_columns("threat_findings")?;
+        if !finding_cols.iter().any(|c| c == "disposition") {
+            self.conn.execute(
+                "ALTER TABLE threat_findings ADD COLUMN disposition TEXT NOT NULL DEFAULT 'ACTIVE'",
+                [],
+            )?;
+        }
+        if !finding_cols.iter().any(|c| c == "snoozed_until") {
+            self.conn.execute("ALTER TABLE threat_findings ADD COLUMN snoozed_until TEXT", [])?;
+        }
+        if !finding_cols.iter().any(|c| c == "resolved_at") {
+            self.conn.execute("ALTER TABLE threat_findings ADD COLUMN resolved_at TEXT", [])?;
+        }
+        if !finding_cols.iter().any(|c| c == "resolution_note") {
+            self.conn.execute("ALTER TABLE threat_findings ADD COLUMN resolution_note TEXT", [])?;
+        }
+
         // Reconcile any stale running flags left over from prior terminated app runs
         self.conn.execute("UPDATE console_sessions SET is_running = 0 WHERE is_running = 1", [])?;
 
@@ -472,6 +506,8 @@ impl SreDatabase {
         self.purge_old_entries(28).ok();
         // Auto-purge detailed threat runs & findings older than 90 days (keeps actor & LAN baseline history)
         self.purge_old_threat_runs(90).ok();
+        // Run startup threat hygiene (clean benign crawlers, expire 7d stale noise, align isolated LAN severity)
+        self.run_threat_hygiene_pass(&chrono::Utc::now().to_rfc3339()).ok();
 
         Ok(())
     }
@@ -1214,6 +1250,13 @@ impl SreDatabase {
         Ok(count)
     }
 
+    pub fn is_isolated_lan_text(text: &str) -> bool {
+        let lower = text.to_ascii_lowercase();
+        ["guest", "kid", "untrusted", "iot", "hotspot"]
+            .iter()
+            .any(|kw| lower.contains(kw))
+    }
+
     pub fn replace_threat_findings_for_run(
         &self,
         run_id: &str,
@@ -1226,10 +1269,16 @@ impl SreDatabase {
             let mut stmt = self.conn.prepare(
                 "INSERT INTO threat_findings (
                     id, run_id, source_layer, rule_id, severity, category,
-                    title, summary, host, actor_ip, actor_asn, ray_ids_json, evidence_json
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                    title, summary, host, actor_ip, actor_asn, ray_ids_json, evidence_json,
+                    disposition, snoozed_until, resolved_at, resolution_note
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             )?;
             for f in findings {
+                let disp = if f.disposition.trim().is_empty() {
+                    "ACTIVE".to_string()
+                } else {
+                    f.disposition.trim().to_ascii_uppercase()
+                };
                 stmt.execute(params![
                     f.id,
                     run_id,
@@ -1244,6 +1293,10 @@ impl SreDatabase {
                     f.actor_asn,
                     f.ray_ids_json,
                     f.evidence_json,
+                    disp,
+                    f.snoozed_until,
+                    f.resolved_at,
+                    f.resolution_note,
                 ])?;
             }
             Ok(())
@@ -1260,10 +1313,48 @@ impl SreDatabase {
         }
     }
 
+    pub fn expire_due_snoozed_findings(&self, now_iso: &str) -> Result<usize> {
+        let now_dt = chrono::DateTime::parse_from_rfc3339(now_iso.trim())
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(|_| chrono::Utc::now());
+        let mut stmt = self.conn.prepare(
+            "SELECT id, snoozed_until FROM threat_findings WHERE UPPER(COALESCE(disposition, 'ACTIVE')) = 'SNOOZED'",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        })?;
+        let mut to_wake = Vec::new();
+        for r in rows {
+            let (id, until_opt) = r?;
+            let is_expired = match until_opt
+                .as_deref()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s.trim()).ok())
+            {
+                Some(until_dt) => until_dt.with_timezone(&chrono::Utc) <= now_dt,
+                None => true,
+            };
+            if is_expired {
+                to_wake.push(id);
+            }
+        }
+        drop(stmt);
+
+        let mut updated = 0usize;
+        for id in to_wake {
+            updated += self.conn.execute(
+                "UPDATE threat_findings SET disposition = 'ACTIVE', snoozed_until = NULL WHERE id = ?1",
+                params![id],
+            )?;
+        }
+        Ok(updated)
+    }
+
     pub fn list_threat_findings_for_run(&self, run_id: &str) -> Result<Vec<ThreatFindingRow>> {
+        let _ = self.expire_due_snoozed_findings(&chrono::Utc::now().to_rfc3339());
         let mut stmt = self.conn.prepare(
             "SELECT id, run_id, source_layer, rule_id, severity, category,
-                    title, summary, host, actor_ip, actor_asn, ray_ids_json, evidence_json, created_at
+                    title, summary, host, actor_ip, actor_asn, ray_ids_json, evidence_json, created_at,
+                    COALESCE(disposition, 'ACTIVE'), snoozed_until, resolved_at, resolution_note
              FROM threat_findings
              WHERE run_id = ?1
              ORDER BY CASE severity
@@ -1289,6 +1380,10 @@ impl SreDatabase {
                 ray_ids_json: row.get(11)?,
                 evidence_json: row.get(12)?,
                 created_at: row.get(13)?,
+                disposition: row.get(14)?,
+                snoozed_until: row.get(15)?,
+                resolved_at: row.get(16)?,
+                resolution_note: row.get(17)?,
             })
         })?;
         let mut out = Vec::new();
@@ -1296,6 +1391,378 @@ impl SreDatabase {
             out.push(r?);
         }
         Ok(out)
+    }
+
+    pub fn get_threat_finding_by_id(&self, finding_id: &str) -> Result<Option<ThreatFindingRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, run_id, source_layer, rule_id, severity, category,
+                    title, summary, host, actor_ip, actor_asn, ray_ids_json, evidence_json, created_at,
+                    COALESCE(disposition, 'ACTIVE'), snoozed_until, resolved_at, resolution_note
+             FROM threat_findings
+             WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query(params![finding_id])?;
+        if let Some(row) = rows.next()? {
+            return Ok(Some(ThreatFindingRow {
+                id: row.get(0)?,
+                run_id: row.get(1)?,
+                source_layer: row.get(2)?,
+                rule_id: row.get(3)?,
+                severity: row.get(4)?,
+                category: row.get(5)?,
+                title: row.get(6)?,
+                summary: row.get(7)?,
+                host: row.get(8)?,
+                actor_ip: row.get(9)?,
+                actor_asn: row.get(10)?,
+                ray_ids_json: row.get(11)?,
+                evidence_json: row.get(12)?,
+                created_at: row.get(13)?,
+                disposition: row.get(14)?,
+                snoozed_until: row.get(15)?,
+                resolved_at: row.get(16)?,
+                resolution_note: row.get(17)?,
+            }));
+        }
+        Ok(None)
+    }
+
+    pub fn set_threat_finding_disposition(
+        &self,
+        finding_id: &str,
+        disposition: &str,
+        snoozed_until: Option<&str>,
+        note: Option<&str>,
+    ) -> Result<Option<ThreatFindingRow>> {
+        let norm = match disposition.trim().to_ascii_uppercase().as_str() {
+            "RESOLVED" => "RESOLVED",
+            "SNOOZED" => "SNOOZED",
+            "DISMISSED" => "DISMISSED",
+            _ => "ACTIVE",
+        };
+        let clean_note = note
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        if norm == "SNOOZED" {
+            self.conn.execute(
+                "UPDATE threat_findings
+                 SET disposition = 'SNOOZED',
+                     snoozed_until = ?2,
+                     resolved_at = NULL,
+                     resolution_note = COALESCE(?3, resolution_note)
+                 WHERE id = ?1",
+                params![finding_id, snoozed_until, clean_note],
+            )?;
+        } else if norm == "RESOLVED" || norm == "DISMISSED" {
+            let resolved_ts = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+            self.conn.execute(
+                "UPDATE threat_findings
+                 SET disposition = ?2,
+                     snoozed_until = NULL,
+                     resolved_at = ?3,
+                     resolution_note = COALESCE(?4, resolution_note)
+                 WHERE id = ?1",
+                params![finding_id, norm, resolved_ts, clean_note],
+            )?;
+        } else {
+            self.conn.execute(
+                "UPDATE threat_findings
+                 SET disposition = 'ACTIVE',
+                     snoozed_until = NULL,
+                     resolved_at = NULL,
+                     resolution_note = NULL
+                 WHERE id = ?1",
+                params![finding_id],
+            )?;
+        }
+
+        self.get_threat_finding_by_id(finding_id)
+    }
+
+    pub fn resolve_findings_by_ids(&self, finding_ids: &[String], note: &str) -> Result<usize> {
+        if finding_ids.is_empty() {
+            return Ok(0);
+        }
+        let resolved_ts = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let clean_note = note.trim();
+        let mut updated = 0usize;
+        for id in finding_ids {
+            let trimmed = id.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            updated += self.conn.execute(
+                "UPDATE threat_findings
+                 SET disposition = 'RESOLVED',
+                     snoozed_until = NULL,
+                     resolved_at = ?2,
+                     resolution_note = CASE WHEN length(?3) > 0 THEN ?3 ELSE resolution_note END
+                 WHERE id = ?1 AND UPPER(COALESCE(disposition, 'ACTIVE')) = 'ACTIVE'",
+                params![trimmed, resolved_ts, clean_note],
+            )?;
+        }
+        Ok(updated)
+    }
+
+    pub fn resolve_findings_for_mac(&self, mac: &str, note: &str) -> Result<usize> {
+        let mac_norm = mac.trim().to_ascii_uppercase();
+        if mac_norm.is_empty() {
+            return Ok(0);
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT id, summary, evidence_json
+             FROM threat_findings
+             WHERE rule_id = 'UNIFI_ROGUE_LAN_CLIENT'
+               AND UPPER(COALESCE(disposition, 'ACTIVE')) = 'ACTIVE'",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        let mut ids = Vec::new();
+        for r in rows {
+            let (id, summary, ev) = r?;
+            if ev.to_ascii_uppercase().contains(&mac_norm)
+                || summary.to_ascii_uppercase().contains(&mac_norm)
+            {
+                ids.push(id);
+            }
+        }
+        drop(stmt);
+        self.resolve_findings_by_ids(&ids, note)
+    }
+
+    pub fn resolve_all_rogue_lan_findings(&self, note: &str) -> Result<usize> {
+        let resolved_ts = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let updated = self.conn.execute(
+            "UPDATE threat_findings
+             SET disposition = 'RESOLVED',
+                 snoozed_until = NULL,
+                 resolved_at = ?1,
+                 resolution_note = ?2
+             WHERE rule_id = 'UNIFI_ROGUE_LAN_CLIENT'
+               AND UPPER(COALESCE(disposition, 'ACTIVE')) = 'ACTIVE'",
+            params![resolved_ts, note.trim()],
+        )?;
+        Ok(updated)
+    }
+
+    pub fn resolve_findings_for_allowlist(
+        &self,
+        entry_type: &str,
+        value: &str,
+        note: &str,
+    ) -> Result<usize> {
+        let norm_type = entry_type.trim().to_ascii_uppercase();
+        let clean_val = value.trim();
+        if clean_val.is_empty() {
+            return Ok(0);
+        }
+        let resolved_ts = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        match norm_type.as_str() {
+            "LAN_MAC" => self.resolve_findings_for_mac(clean_val, note),
+            "IP" => {
+                let updated = self.conn.execute(
+                    "UPDATE threat_findings
+                     SET disposition = 'RESOLVED',
+                         snoozed_until = NULL,
+                         resolved_at = ?2,
+                         resolution_note = ?3
+                     WHERE LOWER(COALESCE(actor_ip, '')) = LOWER(?1)
+                       AND UPPER(COALESCE(disposition, 'ACTIVE')) = 'ACTIVE'",
+                    params![clean_val, resolved_ts, note.trim()],
+                )?;
+                Ok(updated)
+            }
+            "ASN" => {
+                let digits = clean_val
+                    .to_ascii_uppercase()
+                    .trim_start_matches("AS")
+                    .trim()
+                    .to_string();
+                if digits.is_empty() {
+                    return Ok(0);
+                }
+                let with_as = format!("AS{}", digits);
+                let updated = self.conn.execute(
+                    "UPDATE threat_findings
+                     SET disposition = 'RESOLVED',
+                         snoozed_until = NULL,
+                         resolved_at = ?3,
+                         resolution_note = ?4
+                     WHERE (UPPER(COALESCE(actor_asn, '')) = ?1 OR UPPER(COALESCE(actor_asn, '')) = ?2)
+                       AND UPPER(COALESCE(disposition, 'ACTIVE')) = 'ACTIVE'",
+                    params![digits, with_as, resolved_ts, note.trim()],
+                )?;
+                Ok(updated)
+            }
+            "EMAIL" => {
+                let email_lower = clean_val.to_ascii_lowercase();
+                let mut stmt = self.conn.prepare(
+                    "SELECT id, summary, evidence_json
+                     FROM threat_findings
+                     WHERE rule_id IN ('CONTROL_PLANE_MUTATION', 'CONTROL_PLANE_ADMIN_CHANGE', 'ZT_UNEXPECTED_ACCESS')
+                       AND UPPER(COALESCE(disposition, 'ACTIVE')) = 'ACTIVE'",
+                )?;
+                let rows = stmt.query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })?;
+                let mut ids = Vec::new();
+                for r in rows {
+                    let (id, summary, ev) = r?;
+                    if ev.to_ascii_lowercase().contains(&email_lower)
+                        || summary.to_ascii_lowercase().contains(&email_lower)
+                    {
+                        ids.push(id);
+                    }
+                }
+                drop(stmt);
+                self.resolve_findings_by_ids(&ids, note)
+            }
+            _ => Ok(0),
+        }
+    }
+
+    pub fn allowlist_actors_by_asn(&self, asn: &str) -> Result<usize> {
+        let digits = asn
+            .trim()
+            .to_ascii_uppercase()
+            .trim_start_matches("AS")
+            .trim()
+            .to_string();
+        if digits.is_empty() {
+            return Ok(0);
+        }
+        let with_as = format!("AS{}", digits);
+        let updated = self.conn.execute(
+            "UPDATE threat_actors
+             SET disposition = 'ALLOWLISTED', snoozed_until = NULL
+             WHERE UPPER(COALESCE(asn, '')) = ?1 OR UPPER(COALESCE(asn, '')) = ?2",
+            params![digits, with_as],
+        )?;
+        Ok(updated)
+    }
+
+    pub fn delete_benign_crawler_actors(&self) -> Result<usize> {
+        let deleted = self.conn.execute(
+            "DELETE FROM threat_actors
+             WHERE UPPER(COALESCE(latest_classification, '')) = 'BENIGN_CRAWLER'
+               AND total_origin_200s = 0",
+            [],
+        )?;
+        Ok(deleted)
+    }
+
+    pub fn expire_stale_noise_actors(&self, now_iso: &str, max_age_days: i64) -> Result<usize> {
+        let now_dt = chrono::DateTime::parse_from_rfc3339(now_iso.trim())
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(|_| chrono::Utc::now());
+        let cutoff = now_dt - chrono::Duration::days(max_age_days.max(1));
+
+        let mut stmt = self.conn.prepare(
+            "SELECT id, last_seen_at
+             FROM threat_actors
+             WHERE UPPER(COALESCE(disposition, 'ACTIVE')) = 'ACTIVE'
+               AND UPPER(COALESCE(highest_severity, 'LOW')) IN ('LOW', 'MEDIUM')
+               AND total_origin_200s = 0",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut to_expire = Vec::new();
+        for r in rows {
+            let (id, seen) = r?;
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(seen.trim()) {
+                if dt.with_timezone(&chrono::Utc) <= cutoff {
+                    to_expire.push(id);
+                }
+            }
+        }
+        drop(stmt);
+
+        let mut updated = 0usize;
+        for id in to_expire {
+            updated += self.conn.execute(
+                "UPDATE threat_actors
+                 SET disposition = 'EXPIRED', snoozed_until = NULL
+                 WHERE id = ?1",
+                params![id],
+            )?;
+        }
+        Ok(updated)
+    }
+
+    pub fn downgrade_isolated_zone_rogue_findings(&self) -> Result<usize> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, host, summary, evidence_json
+             FROM threat_findings
+             WHERE rule_id = 'UNIFI_ROGUE_LAN_CLIENT'
+               AND UPPER(severity) != 'LOW'",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })?;
+        let mut to_downgrade = Vec::new();
+        for r in rows {
+            let (id, host_opt, summary, ev) = r?;
+            let host_str = host_opt.unwrap_or_default();
+            if Self::is_isolated_lan_text(&host_str)
+                || Self::is_isolated_lan_text(&summary)
+                || Self::is_isolated_lan_text(&ev)
+            {
+                to_downgrade.push(id);
+            }
+        }
+        drop(stmt);
+
+        let mut updated = 0usize;
+        for id in to_downgrade {
+            updated += self.conn.execute(
+                "UPDATE threat_findings SET severity = 'LOW' WHERE id = ?1",
+                params![id],
+            )?;
+        }
+        Ok(updated)
+    }
+
+    pub fn auto_resolve_already_trusted_rogue_findings(&self) -> Result<usize> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT mac_address FROM lan_clients_baseline WHERE is_trusted = 1")?;
+        let macs: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        drop(stmt);
+
+        let mut resolved = 0usize;
+        for mac in macs {
+            resolved += self.resolve_findings_for_mac(&mac, "Owner marked LAN device as trusted")?;
+        }
+        Ok(resolved)
+    }
+
+    pub fn run_threat_hygiene_pass(&self, now_iso: &str) -> Result<(usize, usize, usize)> {
+        let benign_deleted = self.delete_benign_crawler_actors().unwrap_or(0);
+        let expired_actors = self.expire_stale_noise_actors(now_iso, 7).unwrap_or(0);
+        let downgraded = self.downgrade_isolated_zone_rogue_findings().unwrap_or(0);
+        let _ = self.auto_resolve_already_trusted_rogue_findings();
+        let _ = self.expire_due_snoozed_actors(now_iso);
+        let _ = self.expire_due_snoozed_findings(now_iso);
+        Ok((benign_deleted, expired_actors, downgraded))
     }
 
     fn severity_rank(sev: &str) -> u8 {
@@ -1423,6 +1890,8 @@ impl SreDatabase {
                 } else {
                     ("ACTIVE".to_string(), None)
                 }
+            } else if prev_disp == "EXPIRED" {
+                ("ACTIVE".to_string(), None)
             } else if prev_disp == "RESOLVED"
                 && Self::severity_rank(&actor.highest_severity) > Self::severity_rank(&prev_sev)
             {
@@ -1575,6 +2044,7 @@ impl SreDatabase {
             "ALLOWLISTED" => "ALLOWLISTED",
             "RESOLVED" => "RESOLVED",
             "SNOOZED" => "SNOOZED",
+            "EXPIRED" => "EXPIRED",
             _ => "ACTIVE",
         };
         if normalized == "SNOOZED" {

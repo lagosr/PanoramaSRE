@@ -25,9 +25,9 @@ mod tests {
     use panorama_sre_lib::commands::threat_intel_ops::{
         build_waf_rule_expression, classify_host_sensitivity, evaluate_stage0_triage,
         find_active_non_us_waf_rule, is_allowlisted, parse_gemini_threat_brief,
-        parse_unifi_cef_ndjson, should_escalate_to_tier2, validate_ipv4_list, CfAuditLogEntry,
-        CfHttpEvent, CfIpIntelInfo, CfWafRuleDto, CloudflareSecuritySnapshot, DomainProfile,
-        PanoramaAuthTelemetry, WshSecuritySnapshot,
+        parse_unifi_cef_ndjson, should_dispatch_threat_pushover, should_escalate_to_tier2,
+        validate_ipv4_list, CfAuditLogEntry, CfHttpEvent, CfIpIntelInfo, CfWafRuleDto,
+        CloudflareSecuritySnapshot, DomainProfile, PanoramaAuthTelemetry, WshSecuritySnapshot,
     };
     use panorama_sre_lib::commands::unifi_ops::{
         enrich_unifi_topology, merge_unifi_network_detail, parse_unifi_clients_json,
@@ -924,6 +924,10 @@ mod tests {
             ray_ids_json: "[\"ray123\"]".into(),
             evidence_json: "{}".into(),
             created_at: now_iso.clone(),
+            disposition: "ACTIVE".into(),
+            snoozed_until: None,
+            resolved_at: None,
+            resolution_note: None,
         };
         db.replace_threat_findings_for_run("run-sched-1", &[finding]).expect("save findings");
         assert_eq!(db.list_threat_findings_for_run("run-sched-1").unwrap().len(), 1);
@@ -1355,9 +1359,11 @@ mod tests {
         let (esc1, _) = should_escalate_to_tier2(false, false, "LOW", 0, 6, false);
         assert!(!esc1);
 
-        // Routine unflagged MEDIUM stays on Stage 1 Hydrogen without burning Carbon
+        // Routine LOW/MEDIUM noise does not burn Carbon even if stage1_flag was set
         let (esc_med, _) = should_escalate_to_tier2(false, false, "MEDIUM", 0, 6, false);
         assert!(!esc_med);
+        let (esc_med_flag, _) = should_escalate_to_tier2(false, true, "MEDIUM", 0, 6, false);
+        assert!(!esc_med_flag);
 
         // Stage 1 HIGH or Stage 0 hard_hit escalates when under cap
         let (esc_high, _) = should_escalate_to_tier2(false, false, "HIGH", 0, 6, false);
@@ -1365,8 +1371,8 @@ mod tests {
         let (esc2, _) = should_escalate_to_tier2(true, false, "LOW", 0, 6, false);
         assert!(esc2);
 
-        // Cap exhausted blocks flagged HIGH/MEDIUM auto-escalation
-        let (esc3, reasons3) = should_escalate_to_tier2(false, true, "MEDIUM", 6, 6, false);
+        // Cap exhausted blocks non-CRITICAL HIGH auto-escalation
+        let (esc3, reasons3) = should_escalate_to_tier2(false, true, "HIGH", 6, 6, false);
         assert!(!esc3);
         assert!(reasons3.iter().any(|r| r.contains("daily Carbon cap reached")));
 
@@ -1943,7 +1949,8 @@ mod tests {
             .iter()
             .find(|f| f.title.contains("Drake phone"))
             .expect("kid zone finding");
-        assert_eq!(kid_finding.severity, "MEDIUM");
+        assert_eq!(kid_finding.severity, "LOW");
+        assert!(!triage.suspect_macs.contains(&"C4:EF:3D:56:9C:07".to_string()));
         assert!(!kid_finding.summary.contains("Some("));
         assert!(!kid_finding.summary.contains("None"));
         assert!(kid_finding.summary.contains("IP 172.16.1.37"));
@@ -1956,6 +1963,260 @@ mod tests {
             .find(|f| f.title.contains("mystery-laptop"))
             .expect("adult zone finding");
         assert_eq!(adult_finding.severity, "HIGH");
+        assert!(triage.suspect_macs.contains(&"00:11:22:33:44:55".to_string()));
+        assert!(triage.hard_hit);
         assert!(adult_finding.summary.contains("IP unassigned"));
+    }
+
+    #[test]
+    fn test_threat_finding_disposition_auto_resolve_and_hygiene() {
+        let now = chrono::Utc::now();
+        let now_iso = now.to_rfc3339();
+        let stale_iso = (now - chrono::Duration::days(10)).to_rfc3339();
+        let past_snooze_iso = (now - chrono::Duration::hours(2)).to_rfc3339();
+        let db = SreDatabase::new(":memory:").expect("init in-memory db");
+
+        let run = ThreatAuditRunRow {
+            id: "run-hygiene-1".into(),
+            started_at: now_iso.clone(),
+            completed_at: Some(now_iso.clone()),
+            window_start: stale_iso.clone(),
+            window_end: now_iso.clone(),
+            window_hours: 6,
+            trigger_source: "scheduled".into(),
+            status: "COMPLETED".into(),
+            overall_severity: "HIGH".into(),
+            intrusion_verdict: "NO_EVIDENCE".into(),
+            tier1_model: None,
+            tier2_model: None,
+            escalated_to_tier2: false,
+            escalation_reasons_json: None,
+            collector_statuses_json: None,
+            zones_summary_json: None,
+            zero_trust_summary_json: None,
+            internal_summary_json: None,
+            gemini_brief_json: None,
+            token_usage_json: None,
+            error_message: None,
+        };
+        db.save_threat_audit_run(&run).expect("save run");
+
+        let make_finding = |id: &str, layer: &str, rule: &str, sev: &str, title: &str, summary: &str, ip: Option<&str>, ev: &str| {
+            ThreatFindingRow {
+                id: id.into(),
+                run_id: "run-hygiene-1".into(),
+                source_layer: layer.into(),
+                rule_id: rule.into(),
+                severity: sev.into(),
+                category: "ZERO_TRUST".into(),
+                title: title.into(),
+                summary: summary.into(),
+                host: Some("Kid Safe (VLAN 100)".into()),
+                actor_ip: ip.map(str::to_string),
+                actor_asn: None,
+                ray_ids_json: "[]".into(),
+                evidence_json: ev.into(),
+                created_at: now_iso.clone(),
+                disposition: "ACTIVE".into(),
+                snoozed_until: None,
+                resolved_at: None,
+                resolution_note: None,
+            }
+        };
+
+        let kid_finding = make_finding(
+            "f-kid",
+            "UNIFI",
+            "UNIFI_ROGUE_LAN_CLIENT",
+            "HIGH",
+            "Unknown LAN Device Detected: Drake phone",
+            "MAC C4:EF:3D:56:9C:07 on Kid Safe (VLAN 100)",
+            Some("172.16.1.37"),
+            "{\"macAddress\":\"C4:EF:3D:56:9C:07\",\"networkName\":\"Kid Safe (VLAN 100)\"}",
+        );
+        let adult_finding = ThreatFindingRow {
+            host: Some("Adult Secure".into()),
+            ..make_finding(
+                "f-adult",
+                "UNIFI",
+                "UNIFI_ROGUE_LAN_CLIENT",
+                "HIGH",
+                "Unknown LAN Device Detected: Mystery PC",
+                "MAC 00:11:22:33:44:55 on Adult Secure",
+                Some("172.16.200.55"),
+                "{\"macAddress\":\"00:11:22:33:44:55\",\"networkName\":\"Adult Secure\"}",
+            )
+        };
+        let cf_mutation = ThreatFindingRow {
+            host: None,
+            ..make_finding(
+                "f-cf-mut",
+                "CLOUDFLARE",
+                "CONTROL_PLANE_MUTATION",
+                "HIGH",
+                "Cloudflare Control-Plane Change",
+                "Actor 'lagosr@gmail.com' created rules",
+                None,
+                "{\"actorEmail\":\"lagosr@gmail.com\"}",
+            )
+        };
+        db.replace_threat_findings_for_run(
+            "run-hygiene-1",
+            &[kid_finding, adult_finding, cf_mutation],
+        )
+        .expect("insert findings");
+
+        // Benign crawler + stale MEDIUM actor + Origin-200 breach actor
+        let base_actor = ThreatActorRow {
+            id: "3.87.76.163".into(),
+            actor_type: "IP".into(),
+            ip_address: Some("3.87.76.163".into()),
+            asn: Some("14618".into()),
+            as_org: Some("Amazon".into()),
+            country: Some("US".into()),
+            intel_tags_json: "[]".into(),
+            intel_summary: None,
+            first_seen_at: stale_iso.clone(),
+            last_seen_at: stale_iso.clone(),
+            runs_seen: 1,
+            total_requests: 3,
+            total_origin_200s: 0,
+            highest_severity: "LOW".into(),
+            latest_classification: Some("BENIGN_CRAWLER".into()),
+            target_hosts_json: "[\"parakith.com\"]".into(),
+            sample_paths_json: "[\"/\"]".into(),
+            disposition: "ACTIVE".into(),
+            snoozed_until: None,
+        };
+        db.upsert_threat_actor(&base_actor).unwrap();
+        db.upsert_threat_actor(&ThreatActorRow {
+            id: "185.220.101.4".into(),
+            ip_address: Some("185.220.101.4".into()),
+            highest_severity: "MEDIUM".into(),
+            latest_classification: Some("OPPORTUNISTIC_SCANNER".into()),
+            ..base_actor.clone()
+        })
+        .unwrap();
+        db.upsert_threat_actor(&ThreatActorRow {
+            id: "43.153.74.75".into(),
+            ip_address: Some("43.153.74.75".into()),
+            total_origin_200s: 2,
+            highest_severity: "HIGH".into(),
+            latest_classification: Some("EXPLOIT_ATTEMPT".into()),
+            ..base_actor
+        })
+        .unwrap();
+
+        let (benign_deleted, expired_actors, downgraded) =
+            db.run_threat_hygiene_pass(&now_iso).expect("hygiene pass");
+        assert_eq!(benign_deleted, 1);
+        assert_eq!(expired_actors, 1);
+        assert_eq!(downgraded, 1);
+
+        let all_actors = db.list_threat_actors(Some("ALL")).unwrap();
+        assert!(!all_actors.iter().any(|a| a.id == "3.87.76.163"));
+        assert_eq!(
+            all_actors.iter().find(|a| a.id == "185.220.101.4").unwrap().disposition,
+            "EXPIRED"
+        );
+        assert_eq!(
+            all_actors.iter().find(|a| a.id == "43.153.74.75").unwrap().disposition,
+            "ACTIVE"
+        );
+
+        let findings_after_hygiene = db.list_threat_findings_for_run("run-hygiene-1").unwrap();
+        assert_eq!(
+            findings_after_hygiene.iter().find(|f| f.id == "f-kid").unwrap().severity,
+            "LOW"
+        );
+        assert_eq!(
+            findings_after_hygiene.iter().find(|f| f.id == "f-adult").unwrap().severity,
+            "HIGH"
+        );
+
+        // Trust MAC resolves matching rogue finding; Allowlist EMAIL resolves CF mutation finding
+        let mac_resolved = db.resolve_findings_for_mac("00:11:22:33:44:55", "Trusted").unwrap();
+        assert_eq!(mac_resolved, 1);
+        let email_resolved = db
+            .resolve_findings_for_allowlist("EMAIL", "lagosr@gmail.com", "Admin")
+            .unwrap();
+        assert_eq!(email_resolved, 1);
+
+        // Expired snooze on a finding re-activates cleanly
+        db.set_threat_finding_disposition("f-kid", "SNOOZED", Some(&past_snooze_iso), Some("test"))
+            .unwrap();
+        let woke = db.list_threat_findings_for_run("run-hygiene-1").unwrap();
+        assert_eq!(woke.iter().find(|f| f.id == "f-kid").unwrap().disposition, "ACTIVE");
+        assert_eq!(woke.iter().find(|f| f.id == "f-adult").unwrap().disposition, "RESOLVED");
+        assert_eq!(woke.iter().find(|f| f.id == "f-cf-mut").unwrap().disposition, "RESOLVED");
+    }
+
+    #[test]
+    fn test_pushover_outage_and_threshold_gating() {
+        let base_run = ThreatAuditRunRow {
+            id: "run-push-1".into(),
+            started_at: "2026-11-23T12:00:00Z".into(),
+            completed_at: Some("2026-11-23T12:01:00Z".into()),
+            window_start: "2026-11-23T06:00:00Z".into(),
+            window_end: "2026-11-23T12:00:00Z".into(),
+            window_hours: 6,
+            trigger_source: "scheduled".into(),
+            status: "DEGRADED".into(),
+            overall_severity: "MEDIUM".into(),
+            intrusion_verdict: "NO_EVIDENCE".into(),
+            tier1_model: Some("gemini-4-hydrogen".into()),
+            tier2_model: Some("gemini-4-carbon".into()),
+            escalated_to_tier2: false,
+            escalation_reasons_json: None,
+            collector_statuses_json: Some("{\"cloudflare\":\"Connected\",\"unifi\":\"Connected\",\"wshAuth\":\"Connected\"}".into()),
+            zones_summary_json: None,
+            zero_trust_summary_json: None,
+            internal_summary_json: None,
+            gemini_brief_json: None,
+            token_usage_json: None,
+            error_message: Some("Stage 2 Carbon failed: timed out after 115s".into()),
+        };
+
+        // MEDIUM + AI-only DEGRADED timeout stays silent under HIGH default threshold
+        let (send_med, _) = should_dispatch_threat_pushover(&base_run, &[], "HIGH");
+        assert!(!send_med);
+
+        // Collector outage dispatches even on LOW/MEDIUM severity
+        let mut outage_run = base_run.clone();
+        outage_run.overall_severity = "LOW".into();
+        outage_run.collector_statuses_json = Some(
+            "{\"cloudflare\":\"Connected\",\"unifi\":\"Offline: timeout\",\"wshAuth\":\"Connected\"}"
+                .into(),
+        );
+        let (send_col, reasons_col) = should_dispatch_threat_pushover(&outage_run, &[], "HIGH");
+        assert!(send_col);
+        assert!(reasons_col.iter().any(|r| r.contains("Collector unifi")));
+
+        // Real TUNNEL_DEGRADED finding dispatches Pushover unless OFF
+        let tunnel_finding = ThreatFindingRow {
+            id: "f-tun".into(),
+            run_id: "run-push-1".into(),
+            source_layer: "CLOUDFLARE".into(),
+            rule_id: "TUNNEL_DEGRADED".into(),
+            severity: "MEDIUM".into(),
+            category: "TUNNEL".into(),
+            title: "Tunnel degraded".into(),
+            summary: "0 connectors".into(),
+            host: Some("wsh.panoramadr.com".into()),
+            actor_ip: None,
+            actor_asn: None,
+            ray_ids_json: "[]".into(),
+            evidence_json: "{}".into(),
+            created_at: "2026-11-23T12:00:00Z".into(),
+            disposition: "ACTIVE".into(),
+            snoozed_until: None,
+            resolved_at: None,
+            resolution_note: None,
+        };
+        let (send_tun, _) = should_dispatch_threat_pushover(&base_run, &[tunnel_finding.clone()], "HIGH");
+        assert!(send_tun);
+
+        let (send_off, _) = should_dispatch_threat_pushover(&base_run, &[tunnel_finding], "OFF");
+        assert!(!send_off);
     }
 }

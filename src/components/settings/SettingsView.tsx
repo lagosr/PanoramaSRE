@@ -204,7 +204,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     tier1Model: 'gemini-4-hydrogen',
     tier2Model: 'gemini-4-carbon',
     dailyCarbonCap: 6,
-    pushoverThreshold: 'MEDIUM',
+    pushoverThreshold: 'HIGH',
     unifiBaseUrl: 'https://ui.panoramadr.com',
   });
   const [windowsAutostart, setWindowsAutostart] = useState<boolean>(false);
@@ -1225,9 +1225,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       setThreatPrefs((prev) => ({ ...prev, pushoverThreshold: val }))
                     }
                     options={[
-                      { value: 'MEDIUM', label: 'MEDIUM+ (Recommended)' },
-                      { value: 'HIGH', label: 'HIGH & CRITICAL Only' },
+                      { value: 'HIGH', label: 'HIGH & CRITICAL Only (Recommended)' },
                       { value: 'CRITICAL', label: 'CRITICAL Only' },
+                      { value: 'MEDIUM', label: 'MEDIUM+ (Verbose)' },
                       { value: 'OFF', label: 'Disabled' },
                     ]}
                   />
