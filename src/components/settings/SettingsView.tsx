@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Sliders,
-  Shield,
   Terminal,
   Database,
   Check,
@@ -22,6 +21,7 @@ import {
   ShieldAlert,
   AlertTriangle,
   RotateCcw,
+  Server,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
@@ -92,6 +92,8 @@ const INITIAL_CONNECTOR_DIAGNOSTICS: ConnectorDiagnosticRow[] = [
 ];
 
 interface SettingsViewProps {
+  initialTab?: SettingsTab;
+  initialTabNonce?: number;
   terminalTabs?: TerminalTab[];
   onWorkspaceChanged?: () => void;
   pollInterval?: string;
@@ -120,9 +122,11 @@ interface SystemLogEntry {
   created_at: string;
 }
 
-type SettingsTab = 'general' | 'ssh' | 'logs' | 'database';
+export type SettingsTab = 'general' | 'security' | 'notifications' | 'sync' | 'logs';
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
+  initialTab,
+  initialTabNonce,
   terminalTabs = [],
   onWorkspaceChanged,
   pollInterval: propPollInterval,
@@ -142,7 +146,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onReapplyHardening,
 }) => {
   const { theme, resolvedTheme, setTheme } = useTheme();
-  const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab ?? 'general');
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab, initialTabNonce]);
   const [minimizeToTray, setMinimizeToTray] = useState(true);
   const [toastAlerts, setToastAlerts] = useState(true);
   const [pollInterval, setPollInterval] = useState<string>(() => {
@@ -453,7 +463,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   }, [loadPushoverSettings]);
 
   useEffect(() => {
-    if (activeTab === 'ssh') {
+    if (activeTab === 'notifications') {
       loadPushoverSettings();
     }
   }, [activeTab, loadPushoverSettings]);
@@ -711,437 +721,351 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setTimeout(() => setIsSaved(false), 2000);
   };
 
+  const hasSettingsStreamTabs = terminalTabs.some((t) => t.pageScope === 'settings');
+
+  const handleHeaderSave = () => {
+    if (activeTab === 'security') {
+      void handleSaveThreatSettings();
+      return;
+    }
+    if (activeTab === 'notifications') {
+      void handleSavePushover();
+      return;
+    }
+    handleSave();
+  };
+
   return (
     <div className="flex-1 flex flex-col h-full bg-slate-50 dark:bg-slate-950 overflow-hidden">
       {/* View Header */}
-      <div className="h-14 border-b border-slate-200 dark:border-slate-800 px-6 flex items-center justify-between bg-white dark:bg-slate-900">
-        <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">Settings & SRE Governance</h2>
-        <button
-          onClick={handleSave}
-          className="btn-primary text-xs flex items-center space-x-1.5"
-        >
-          {isSaved ? <Check className="w-3.5 h-3.5" /> : <RefreshCw className="w-3.5 h-3.5" />}
-          <span>{isSaved ? 'Saved!' : 'Save Changes'}</span>
-        </button>
+      <div className="h-14 border-b border-slate-200 dark:border-slate-800 px-6 flex items-center justify-between gap-3 bg-white dark:bg-slate-900 shrink-0">
+        <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+          Settings &amp; SRE Governance
+        </h2>
+        {activeTab !== 'logs' && (
+          <button
+            type="button"
+            onClick={handleHeaderSave}
+            disabled={
+              (activeTab === 'security' && isSavingThreat) ||
+              (activeTab === 'notifications' && isSavingPushover)
+            }
+            className="btn-primary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+          >
+            {(activeTab === 'general' || activeTab === 'sync') && isSaved ? (
+              <Check className="w-3.5 h-3.5" />
+            ) : (
+              <RefreshCw
+                className={`w-3.5 h-3.5 ${
+                  (activeTab === 'security' && isSavingThreat) ||
+                  (activeTab === 'notifications' && isSavingPushover)
+                    ? 'animate-spin'
+                    : ''
+                }`}
+              />
+            )}
+            <span>
+              {activeTab === 'security'
+                ? isSavingThreat
+                  ? 'Saving...'
+                  : 'Save Threat Settings'
+                : activeTab === 'notifications'
+                ? isSavingPushover
+                  ? 'Saving...'
+                  : 'Save Pushover Settings'
+                : isSaved
+                ? 'Saved!'
+                : 'Save Changes'}
+            </span>
+          </button>
+        )}
       </div>
 
-      {/* 4-Tab Bar */}
-      <div className="border-b border-slate-200 dark:border-slate-800 px-6 flex space-x-6 bg-white dark:bg-slate-900 overflow-x-auto">
-        <button
-          onClick={() => setActiveTab('general')}
-          className={`py-3 min-h-[44px] text-sm font-medium border-b-2 flex items-center space-x-2 transition-colors whitespace-nowrap cursor-pointer ${
-            activeTab === 'general' ? 'border-[var(--color-brand)] text-[var(--color-brand-text)] font-semibold' : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-          }`}
-        >
-          <Sliders className="w-4 h-4" />
-          <span>General & System Tray</span>
-        </button>
-        <button
-          onClick={() => setActiveTab('ssh')}
-          className={`py-3 min-h-[44px] text-sm font-medium border-b-2 flex items-center space-x-2 transition-colors whitespace-nowrap cursor-pointer ${
-            activeTab === 'ssh' ? 'border-[var(--color-brand)] text-[var(--color-brand-text)] font-semibold' : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-          }`}
-        >
-          <Shield className="w-4 h-4" />
-          <span>SSH & Secrets</span>
-        </button>
-        <button
-          onClick={() => setActiveTab('logs')}
-          className={`py-3 min-h-[44px] text-sm font-medium border-b-2 flex items-center space-x-2 transition-colors whitespace-nowrap cursor-pointer ${
-            activeTab === 'logs' ? 'border-[var(--color-brand)] text-[var(--color-brand-text)] font-semibold' : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-          }`}
-        >
-          <Terminal className="w-4 h-4" />
-          <span>Application Logs</span>
-        </button>
-        <button
-          onClick={() => setActiveTab('database')}
-          className={`py-3 min-h-[44px] text-sm font-medium border-b-2 flex items-center space-x-2 transition-colors whitespace-nowrap cursor-pointer ${
-            activeTab === 'database' ? 'border-[var(--color-brand)] text-[var(--color-brand-text)] font-semibold' : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-          }`}
-        >
-          <Database className="w-4 h-4" />
-          <span>Database & Cache</span>
-        </button>
+      {/* Focused 5-Tab Bar */}
+      <div className="border-b border-slate-200 dark:border-slate-800 px-6 flex space-x-6 bg-white dark:bg-slate-900 overflow-x-auto shrink-0">
+        {(
+          [
+            { id: 'general', label: 'General', icon: Sliders },
+            { id: 'security', label: 'Security & AI', icon: ShieldAlert },
+            { id: 'notifications', label: 'Notifications', icon: Bell },
+            { id: 'sync', label: 'Sync & Host', icon: Server },
+            { id: 'logs', label: 'Application Logs', icon: Terminal },
+          ] as const
+        ).map((tab) => {
+          const Icon = tab.icon;
+          const isActive = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setActiveTab(tab.id)}
+              className={`py-3 min-h-[44px] text-sm font-medium border-b-2 flex items-center space-x-2 transition-colors whitespace-nowrap flex-shrink-0 cursor-pointer ${
+                isActive
+                  ? 'border-[var(--color-brand)] text-[var(--color-brand-text)] font-semibold'
+                  : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+              }`}
+            >
+              <Icon className="w-4 h-4 shrink-0" />
+              <span>{tab.label}</span>
+            </button>
+          );
+        })}
       </div>
 
       {/* Tab Contents */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+      <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-5">
         {activeTab === 'general' && (
-          <div className="w-full max-w-[1920px] mx-auto space-y-6">
-            {/* Appearance & Color Scheme Preference */}
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4 shadow-sm">
-              <div className="flex items-center justify-between gap-2">
-                <div>
-                  <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Appearance & Theme Preference</h3>
-                  <p className="text-xs text-slate-600 dark:text-slate-400">Select your preferred user theme. Synchronized across PanoramaDrSuite.</p>
-                </div>
-                <span className="text-xs font-mono px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 uppercase">
-                  Active: {resolvedTheme}
-                </span>
-              </div>
-
-              <SegmentedControl<'dark' | 'light' | 'system'>
-                activeVariant="brand"
-                fullWidth
-                value={theme}
-                onChange={setTheme}
-                options={[
-                  { value: 'dark', label: 'Dark Mode', icon: <Moon className="w-4 h-4" /> },
-                  { value: 'light', label: 'Light Mode', icon: <Sun className="w-4 h-4" /> },
-                  { value: 'system', label: 'System Sync', icon: <Laptop className="w-4 h-4" /> },
-                ]}
-              />
-            </div>
-
-            {/* Suite Repositories & Workspace Directory Configuration */}
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4 shadow-sm">
-              <div className="flex items-center justify-between gap-2">
-                <div>
-                  <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Suite Repositories Workspace</h3>
-                  <p className="text-xs text-slate-600 dark:text-slate-400">Root folder containing child application repositories with panorama.app.json manifests.</p>
-                </div>
-                {workspaceFeedback && (
-                  <span className="text-xs font-mono px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30">
-                    {workspaceFeedback}
+          <div className="w-full max-w-[1920px] mx-auto space-y-5">
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+              {/* Appearance & Theme Preference */}
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4 shadow-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                      Appearance &amp; Theme Preference
+                    </h3>
+                    <p className="text-xs text-slate-600 dark:text-slate-400">
+                      Select your preferred user theme. Synchronized across PanoramaDrSuite.
+                    </p>
+                  </div>
+                  <span className="text-xs font-mono px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 uppercase whitespace-nowrap flex-shrink-0">
+                    Active: {resolvedTheme}
                   </span>
-                )}
+                </div>
+
+                <SegmentedControl<'dark' | 'light' | 'system'>
+                  activeVariant="brand"
+                  fullWidth
+                  value={theme}
+                  onChange={setTheme}
+                  options={[
+                    { value: 'dark', label: 'Dark Mode', icon: <Moon className="w-4 h-4" /> },
+                    { value: 'light', label: 'Light Mode', icon: <Sun className="w-4 h-4" /> },
+                    { value: 'system', label: 'System Sync', icon: <Laptop className="w-4 h-4" /> },
+                  ]}
+                />
               </div>
 
-              <div className="space-y-2">
-                <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
-                  <input
-                    type="text"
-                    value={workspaceRoot}
-                    onChange={(e) => setWorkspaceRoot(e.target.value)}
-                    placeholder="e.g. C:\Users\<Username>\Documents\AG Projects"
-                    className="flex-1 min-w-[200px] px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
+              {/* Build Provenance */}
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-3 shadow-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center space-x-2">
+                    <Info className="w-4 h-4 text-[var(--color-brand-text)] shrink-0" />
+                    <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                      PanoramaSRE Build Provenance
+                    </h3>
+                  </div>
+                  <span className="px-2 py-0.5 rounded text-xs font-mono font-semibold bg-[var(--color-brand-subtle)] text-[var(--color-brand-text)] border border-[var(--color-brand-ring)] tabular-nums whitespace-nowrap flex-shrink-0">
+                    {APP_VERSION_INFO.fullVersionString}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-100 dark:border-slate-800 font-mono text-xs tabular-nums">
+                  <div>
+                    <span className="text-slate-600 dark:text-slate-400 block text-[11px]">
+                      Semantic Version:
+                    </span>
+                    <span className="text-slate-800 dark:text-slate-300 font-semibold">
+                      {APP_VERSION_INFO.version}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-600 dark:text-slate-400 block text-[11px]">
+                      Git Commit SHA:
+                    </span>
+                    <span className="text-[var(--color-accent-text)] font-semibold">
+                      {APP_VERSION_INFO.buildHash}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-600 dark:text-slate-400 block text-[11px]">
+                      Build Timestamp:
+                    </span>
+                    <span className="text-slate-800 dark:text-slate-300">
+                      {APP_VERSION_INFO.buildDate || 'Local Dev'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-600 dark:text-slate-400 block text-[11px]">
+                      Build Identifier:
+                    </span>
+                    <span className="text-slate-800 dark:text-slate-300">
+                      {APP_VERSION_INFO.buildNumber}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Suite Repositories Workspace */}
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4 shadow-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                      Suite Repositories Workspace
+                    </h3>
+                    <p className="text-xs text-slate-600 dark:text-slate-400">
+                      Root folder containing child application repositories with panorama.app.json manifests.
+                    </p>
+                  </div>
+                  {workspaceFeedback && (
+                    <span className="text-xs font-mono px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30 whitespace-nowrap flex-shrink-0">
+                      {workspaceFeedback}
+                    </span>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
+                    <input
+                      type="text"
+                      value={workspaceRoot}
+                      onChange={(e) => setWorkspaceRoot(e.target.value)}
+                      placeholder="e.g. C:\Users\<Username>\Documents\AG Projects"
+                      className="flex-1 min-w-[200px] px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleSelectWorkspaceFolder}
+                      className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                      title="Browse for folder"
+                    >
+                      <FolderOpen className="w-4 h-4" />
+                      <span>Browse...</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSaveWorkspaceRoot}
+                      className="btn-primary text-xs whitespace-nowrap flex-shrink-0"
+                    >
+                      Apply
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
+                    Default search path:{' '}
+                    <span className="text-slate-700 dark:text-slate-300">
+                      %USERPROFILE%\Documents\AG Projects
+                    </span>
+                  </p>
+                </div>
+              </div>
+
+              {/* System Tray & Window Lifecycle */}
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-3.5 shadow-sm">
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                  System Tray &amp; Window Lifecycle
+                </h3>
+
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <div className="text-sm text-slate-800 dark:text-slate-300">
+                      Minimize to System Tray on Close (X)
+                    </div>
+                    <div className="text-xs text-slate-600 dark:text-slate-400">
+                      Keeps background telemetry scheduler and local dev servers active.
+                    </div>
+                  </div>
+                  <ToggleSwitch
+                    checked={minimizeToTray}
+                    onChange={setMinimizeToTray}
+                    activeColor="brand"
                   />
-                  <button
-                    type="button"
-                    onClick={handleSelectWorkspaceFolder}
-                    className="btn-secondary text-xs flex items-center gap-1.5"
-                    title="Browse for folder"
-                  >
-                    <FolderOpen className="w-4 h-4" />
-                    <span>Browse...</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleSaveWorkspaceRoot}
-                    className="btn-primary text-xs"
-                  >
-                    Apply
-                  </button>
                 </div>
-                <p className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
-                  Default search path: <span className="text-slate-700 dark:text-slate-300">%USERPROFILE%\Documents\AG Projects</span>
-                </p>
-              </div>
-            </div>
 
-            {/* Version & Build Provenance Card */}
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-3 shadow-sm">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center space-x-2">
-                  <Info className="w-4 h-4 text-[var(--color-brand-text)]" />
-                  <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-200">PanoramaSRE Build Provenance</h3>
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <div className="text-sm text-slate-800 dark:text-slate-300">
+                      Windows 11 Toast Notifications
+                    </div>
+                    <div className="text-xs text-slate-600 dark:text-slate-400">
+                      Edge-triggered alerts on app outage, 75°C thermals, or SSL expiry.
+                    </div>
+                  </div>
+                  <ToggleSwitch
+                    checked={toastAlerts}
+                    onChange={setToastAlerts}
+                    activeColor="brand"
+                  />
                 </div>
-                <span className="px-2 py-0.5 rounded text-xs font-mono font-semibold bg-[var(--color-brand-subtle)] text-[var(--color-brand-text)] border border-[var(--color-brand-ring)] tabular-nums">
-                  {APP_VERSION_INFO.fullVersionString}
-                </span>
-              </div>
-              <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-100 dark:border-slate-800 font-mono text-xs tabular-nums">
-                <div>
-                  <span className="text-slate-600 dark:text-slate-400 block text-[11px]">Semantic Version:</span>
-                  <span className="text-slate-800 dark:text-slate-300 font-semibold">{APP_VERSION_INFO.version}</span>
-                </div>
-                <div>
-                  <span className="text-slate-600 dark:text-slate-400 block text-[11px]">Git Commit SHA:</span>
-                  <span className="text-[var(--color-accent-text)] font-semibold">{APP_VERSION_INFO.buildHash}</span>
-                </div>
-                <div>
-                  <span className="text-slate-600 dark:text-slate-400 block text-[11px]">Build Timestamp:</span>
-                  <span className="text-slate-800 dark:text-slate-300">{APP_VERSION_INFO.buildDate || 'Local Dev'}</span>
-                </div>
-                <div>
-                  <span className="text-slate-600 dark:text-slate-400 block text-[11px]">Build Identifier:</span>
-                  <span className="text-slate-800 dark:text-slate-300">{APP_VERSION_INFO.buildNumber}</span>
+
+                <div className="flex items-center justify-between gap-4 pt-2 border-t border-slate-100 dark:border-slate-800">
+                  <div>
+                    <div className="text-sm text-slate-800 dark:text-slate-300">
+                      Start PanoramaSRE minimized to tray at Windows login
+                    </div>
+                    <div className="text-xs text-slate-600 dark:text-slate-400">
+                      Registers HKCU\...\Run\PanoramaSRE with --minimized (zero UAC) for uninterrupted security audits.
+                    </div>
+                  </div>
+                  <ToggleSwitch
+                    checked={windowsAutostart}
+                    onChange={(val) => void handleToggleWindowsAutostart(val)}
+                    activeColor="brand"
+                  />
                 </div>
               </div>
             </div>
+          </div>
+        )}
 
+        {activeTab === 'security' && (
+          <div className="w-full max-w-[1920px] mx-auto space-y-5">
+            {/* 360° Threat Intelligence & AI (Cloudflare + Gemini 4 + UniFi) */}
             <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4 shadow-sm">
-              <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-200">System Tray & Window Lifecycle</h3>
-              
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <div className="text-sm text-slate-800 dark:text-slate-300">Minimize to System Tray on Close (X)</div>
-                  <div className="text-xs text-slate-600 dark:text-slate-400">Keeps background telemetry scheduler and local dev servers active.</div>
-                </div>
-                <ToggleSwitch
-                  checked={minimizeToTray}
-                  onChange={setMinimizeToTray}
-                  activeColor="brand"
-                />
-              </div>
-
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <div className="text-sm text-slate-800 dark:text-slate-300">Windows 11 Toast Notifications</div>
-                  <div className="text-xs text-slate-600 dark:text-slate-400">Edge-triggered alerts on app outage, 75°C thermals, or SSL expiry.</div>
-                </div>
-                <ToggleSwitch
-                  checked={toastAlerts}
-                  onChange={setToastAlerts}
-                  activeColor="brand"
-                />
-              </div>
-
-              <div className="flex items-center justify-between gap-4 pt-2 border-t border-slate-100 dark:border-slate-800">
-                <div>
-                  <div className="text-sm text-slate-800 dark:text-slate-300">
-                    Start PanoramaSRE minimized to tray at Windows login
-                  </div>
-                  <div className="text-xs text-slate-600 dark:text-slate-400">
-                    Registers HKCU\...\Run\PanoramaSRE with --minimized (zero UAC) for uninterrupted 6-hour security audits.
-                  </div>
-                </div>
-                <ToggleSwitch
-                  checked={windowsAutostart}
-                  onChange={(val) => void handleToggleWindowsAutostart(val)}
-                  activeColor="brand"
-                />
-              </div>
-            </div>
-
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4 shadow-sm">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-200">Telemetry & Unified 4-Tier Schedule</h3>
-                {onRunHourlyChecksNow && (
-                  <button
-                    type="button"
-                    onClick={onRunHourlyChecksNow}
-                    disabled={isCheckingHourly}
-                    className="btn-secondary text-xs font-mono flex items-center gap-1.5"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 text-[var(--color-accent-text)] ${isCheckingHourly ? 'animate-spin' : ''}`} />
-                    <span>{isCheckingHourly ? 'Running Hourly Checks...' : 'Run Hourly Checks Now'}</span>
-                  </button>
-                )}
-              </div>
-              
-              <div>
-                <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1.5">Tier 1 Local Polling Interval</label>
-                <CustomSelect
-                  value={pollInterval}
-                  onChange={(val) => {
-                    setPollInterval(val);
-                    localStorage.setItem('panoramasre_tier1_poll_interval', val);
-                    onPollIntervalChanged?.(val);
-                  }}
-                  options={[
-                    { value: '5', label: '5 seconds (High Frequency / Debug)' },
-                    { value: '15', label: '15 seconds (Recommended Default)' },
-                    { value: '30', label: '30 seconds (Low Power)' },
-                    { value: '60', label: '60 seconds' },
-                  ]}
-                />
-                <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 font-mono">
-                  Local-only polling of dev servers and the Named Pipe MCP bridge (zero LAN/WAN traffic).
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1.5">
-                  Tier 3 WSH SSH & Fleet Sync Interval
-                </label>
-                <CustomSelect
-                  value={securityAuditInterval}
-                  onChange={(val) => {
-                    setSecurityAuditInterval(val);
-                    localStorage.setItem('panoramasre_security_audit_interval', val);
-                    if (onSecurityAuditIntervalChanged) {
-                      onSecurityAuditIntervalChanged(val);
-                    }
-                  }}
-                  options={[
-                    { value: '1', label: '1 minute (High Frequency / Verification)' },
-                    { value: '3', label: '3 minutes' },
-                    { value: '5', label: '5 minutes (Recommended Default)' },
-                    { value: '10', label: '10 minutes' },
-                    { value: '15', label: '15 minutes' },
-                    { value: '30', label: '30 minutes (Low Resource)' },
-                  ]}
-                />
-                <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 font-mono">
-                  Probes network posture, all suite health endpoints, local Git composition, and WSH --fast SSH snapshot.
-                </p>
-              </div>
-
-              <div className="pt-2 border-t border-slate-200 dark:border-slate-800 space-y-2 tabular-nums">
-                <div className="flex items-center justify-between text-xs font-mono text-slate-600 dark:text-slate-400">
-                  <span className="font-semibold text-slate-700 dark:text-slate-300">Active 4-Tier Background Schedule</span>
-                  <span className="text-[11px] text-slate-500">
-                    Last hourly run: {lastHourlyCheckTime || 'Startup / Pending'}
-                  </span>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px] font-mono">
-                  <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
-                    <div className="font-semibold text-slate-800 dark:text-slate-200">Tier 1 · {pollInterval}s (Local)</div>
-                    <div className="text-slate-500">Dev Servers & Named Pipe MCP Bridge</div>
-                  </div>
-                  <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
-                    <div className="font-semibold text-slate-800 dark:text-slate-200">Tier 2 · 60s (LAN / Slots)</div>
-                    <div className="text-slate-500">4 Appliances (pooled) & 4x/day Smoke Slot Check</div>
-                  </div>
-                  <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
-                    <div className="font-semibold text-slate-800 dark:text-slate-200">Tier 3 · {securityAuditInterval}m (Fleet + SSH)</div>
-                    <div className="text-slate-500">Posture, Fleet Health & Git, WSH --fast SSH Snapshot</div>
-                  </div>
-                  <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
-                    <div className="font-semibold text-slate-800 dark:text-slate-200">Tier 4 · 1h + Startup (Slow/Upstream)</div>
-                    <div className="text-slate-500">Cloudflare Tunnel Release (ETag), SSL Fleet, Backup Ledger</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* 360° Threat Intelligence & AI (Cloudflare + Gemini 4 + UniFi) Card */}
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-5 shadow-sm">
-              <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="space-y-1">
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <ShieldAlert className="w-4 h-4 text-[var(--color-brand-text)] shrink-0" />
                     <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
                       360° Threat Intelligence &amp; AI (Cloudflare + Gemini 4 + UniFi)
                     </h3>
+                    <StatusBadge
+                      label={`Carbon (24h): ${threatDto?.carbonUsedLast24h ?? 0} / ${
+                        threatPrefs.dailyCarbonCap === 0 ? '∞' : threatPrefs.dailyCarbonCap
+                      }`}
+                      variant="info"
+                    />
                   </div>
                   <p className="text-xs text-slate-600 dark:text-slate-400">
                     Autonomous 6-hour security audits powered by read-only SSOT credentials (.env.local.keys / Windows DPAPI).
                   </p>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2 text-xs font-mono tabular-nums">
-                  <StatusBadge
-                    label={`Carbon (24h): ${threatDto?.carbonUsedLast24h ?? 0} / ${threatPrefs.dailyCarbonCap === 0 ? '∞' : threatPrefs.dailyCarbonCap}`}
-                    variant="info"
-                  />
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex items-center gap-2 text-xs font-medium text-slate-700 dark:text-slate-300">
+                    <span>Scheduled Audits</span>
+                    <ToggleSwitch
+                      size="sm"
+                      checked={threatPrefs.enabled}
+                      onChange={(val) =>
+                        setThreatPrefs((prev) => ({ ...prev, enabled: val }))
+                      }
+                      activeColor="brand"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleTestAllThreatConnectors()}
+                    disabled={isTestingAllConnectors}
+                    className="btn-accent text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                  >
+                    <RefreshCw
+                      className={`w-3.5 h-3.5 ${isTestingAllConnectors ? 'animate-spin' : ''}`}
+                    />
+                    <span>
+                      {isTestingAllConnectors
+                        ? `Testing (${
+                            connectorResults.filter((r) => r.status === 'pass' || r.status === 'fail')
+                              .length
+                          }/4)...`
+                        : 'Test All Connections'}
+                    </span>
+                  </button>
                 </div>
               </div>
 
-              <div className="flex items-center justify-between gap-4 pt-1">
+              {/* Compact 5-Column Audit Governance Strip */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 pt-3 border-t border-slate-200 dark:border-slate-800">
                 <div>
-                  <div className="text-sm font-medium text-slate-800 dark:text-slate-200">
-                    Enable Scheduled 360° Threat &amp; Zero Trust Audits
-                  </div>
-                  <div className="text-xs text-slate-600 dark:text-slate-400">
-                    Sleep-safe background timer checks due cadence on the alert leader instance and recovers missed windows up to 24h.
-                  </div>
-                </div>
-                <ToggleSwitch
-                  checked={threatPrefs.enabled}
-                  onChange={(val) =>
-                    setThreatPrefs((prev) => ({ ...prev, enabled: val }))
-                  }
-                  activeColor="brand"
-                />
-              </div>
-
-              {/* Read-Only SSOT Credentials */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-3 border-t border-slate-200 dark:border-slate-800">
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <label className="text-xs font-mono text-slate-600 dark:text-slate-400">
-                      Cloudflare Read-Only API Token (SSOT)
-                    </label>
-                    <span className="text-[11px] font-mono text-slate-500">
-                      {threatDto?.cfConfigured
-                        ? threatDto.cfSource === 'dpapi'
-                          ? 'Windows DPAPI'
-                          : '.env.local.keys'
-                        : 'Not configured'}
-                    </span>
-                  </div>
-                  <div
-                    aria-readonly="true"
-                    className="w-full truncate px-3 py-2.5 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 cursor-default select-all"
-                  >
-                    {threatDto?.cfConfigured
-                      ? threatDto.maskedCfToken
-                      : 'Not configured in .env.local.keys'}
-                  </div>
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-mono text-slate-600 dark:text-slate-400">
-                    Cloudflare Account ID (Auto-detected on Test)
-                  </label>
-                  <div
-                    aria-readonly="true"
-                    className="w-full truncate px-3 py-2.5 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 cursor-default select-all tabular-nums"
-                  >
-                    {threatDto?.cfAccountId || 'Auto-detected on Test'}
-                  </div>
-                </div>
-
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <label className="text-xs font-mono text-slate-600 dark:text-slate-400">
-                      Gemini API Key (Paid Tier for Log Privacy — SSOT)
-                    </label>
-                    <span className="text-[11px] font-mono text-slate-500">
-                      {threatDto?.geminiConfigured
-                        ? threatDto.geminiSource === 'dpapi'
-                          ? 'Windows DPAPI'
-                          : '.env.local.keys'
-                        : 'Not configured'}
-                    </span>
-                  </div>
-                  <div
-                    aria-readonly="true"
-                    className="w-full truncate px-3 py-2.5 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 cursor-default select-all"
-                  >
-                    {threatDto?.geminiConfigured
-                      ? threatDto.maskedGeminiKey
-                      : 'Not configured in .env.local.keys'}
-                  </div>
-                </div>
-
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <label className="text-xs font-mono text-slate-600 dark:text-slate-400">
-                      UniFi Integration X-API-Key &amp; Base URL (SSOT)
-                    </label>
-                    <span className="text-[11px] font-mono text-slate-500">
-                      {threatDto?.unifiConfigured
-                        ? threatDto.unifiSource === 'dpapi'
-                          ? 'Windows DPAPI'
-                          : '.env.local.keys'
-                        : 'Optional'}
-                    </span>
-                  </div>
-                  <div
-                    aria-readonly="true"
-                    className="w-full truncate px-3 py-2.5 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 cursor-default select-all"
-                  >
-                    {threatDto?.unifiConfigured
-                      ? threatDto.maskedUnifiKey
-                      : 'Not configured in .env.local.keys'}
-                  </div>
-                  <div
-                    aria-readonly="true"
-                    className="w-full truncate px-3 py-2.5 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 cursor-default select-all"
-                  >
-                    {threatPrefs.unifiBaseUrl || 'https://ui.panoramadr.com'}
-                  </div>
-                </div>
-              </div>
-
-              {/* Cadence, Models & Alert Controls (All CustomSelect) */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 pt-3 border-t border-slate-200 dark:border-slate-800">
-                <div>
-                  <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
+                  <label className="block text-[11px] font-mono text-slate-600 dark:text-slate-400 mb-1">
                     Audit Cadence
                   </label>
                   <CustomSelect
@@ -1162,7 +1086,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
+                  <label className="block text-[11px] font-mono text-slate-600 dark:text-slate-400 mb-1">
                     Tier 1 Triage Model
                   </label>
                   <CustomSelect
@@ -1179,8 +1103,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
-                    Tier 2 Forensic Escalation Model
+                  <label className="block text-[11px] font-mono text-slate-600 dark:text-slate-400 mb-1">
+                    Tier 2 Forensic Model
                   </label>
                   <CustomSelect
                     value={threatPrefs.tier2Model}
@@ -1188,14 +1112,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       setThreatPrefs((prev) => ({ ...prev, tier2Model: val }))
                     }
                     options={[
-                      { value: 'gemini-4-carbon', label: 'Gemini 4 Carbon (Deep Sec Recommended)' },
+                      { value: 'gemini-4-carbon', label: 'Gemini 4 Carbon (Recommended)' },
                       { value: 'gemini-4-neon', label: 'Gemini 4 Neon' },
                     ]}
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
+                  <label className="block text-[11px] font-mono text-slate-600 dark:text-slate-400 mb-1">
                     Daily Auto-Escalation Cap
                   </label>
                   <CustomSelect
@@ -1207,16 +1131,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       }))
                     }
                     options={[
-                      { value: '3', label: '3 Carbon escalations / 24h' },
-                      { value: '6', label: '6 Carbon escalations / 24h (Default)' },
-                      { value: '10', label: '10 Carbon escalations / 24h' },
-                      { value: '0', label: 'Unlimited (Manual/Auto Uncapped)' },
+                      { value: '3', label: '3 / 24h' },
+                      { value: '6', label: '6 / 24h (Default)' },
+                      { value: '10', label: '10 / 24h' },
+                      { value: '0', label: 'Unlimited' },
                     ]}
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
+                  <label className="block text-[11px] font-mono text-slate-600 dark:text-slate-400 mb-1">
                     Pushover Alert Threshold
                   </label>
                   <CustomSelect
@@ -1234,7 +1158,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
               </div>
 
-              {/* Dedicated Connector Verification Results Output */}
+              {/* Unified 4-Column SSOT Credentials & Connector Verification Grid */}
               {(() => {
                 const passCount = connectorResults.filter((r) => r.status === 'pass').length;
                 const failCount = connectorResults.filter((r) => r.status === 'fail').length;
@@ -1254,13 +1178,57 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   ? 'success'
                   : 'danger';
 
+                const connectorCredentialMeta: Record<
+                  ConnectorDiagnosticRow['id'],
+                  { sourceLabel: string; identity: string }
+                > = {
+                  cloudflare: {
+                    sourceLabel: threatDto?.cfConfigured
+                      ? threatDto.cfSource === 'dpapi'
+                        ? 'DPAPI'
+                        : '.env.local.keys'
+                      : 'Not configured',
+                    identity: threatDto?.cfConfigured
+                      ? `${threatDto.maskedCfToken}${
+                          threatDto.cfAccountId ? ` • Acct ${threatDto.cfAccountId}` : ''
+                        }`
+                      : 'Missing in .env.local.keys',
+                  },
+                  gemini: {
+                    sourceLabel: threatDto?.geminiConfigured
+                      ? threatDto.geminiSource === 'dpapi'
+                        ? 'DPAPI'
+                        : '.env.local.keys'
+                      : 'Not configured',
+                    identity: threatDto?.geminiConfigured
+                      ? threatDto.maskedGeminiKey
+                      : 'Missing in .env.local.keys',
+                  },
+                  unifi: {
+                    sourceLabel: threatDto?.unifiConfigured
+                      ? threatDto.unifiSource === 'dpapi'
+                        ? 'DPAPI'
+                        : '.env.local.keys'
+                      : 'Optional',
+                    identity: threatDto?.unifiConfigured
+                      ? `${threatDto.maskedUnifiKey} • ${
+                          threatPrefs.unifiBaseUrl || 'https://ui.panoramadr.com'
+                        }`
+                      : threatPrefs.unifiBaseUrl || 'https://ui.panoramadr.com',
+                  },
+                  wsh: {
+                    sourceLabel: 'OpenSSH Key',
+                    identity: 'root@wsh.panoramadr.com (RO SQLite)',
+                  },
+                };
+
                 return (
                   <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 p-4 space-y-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex items-center gap-2">
                         <Terminal className="w-4 h-4 text-[var(--color-brand-text)] shrink-0" />
                         <span className="text-xs font-mono font-semibold text-slate-800 dark:text-slate-200 uppercase tracking-wider">
-                          Connector Verification Output
+                          Read-Only SSOT Credentials &amp; Connector Verification
                         </span>
                       </div>
                       <div className="flex flex-wrap items-center gap-2 text-xs font-mono tabular-nums">
@@ -1273,88 +1241,76 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      {connectorResults.map((row) => (
-                        <div
-                          key={row.id}
-                          className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1.5"
-                        >
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="min-w-0">
-                              <div className="text-xs font-semibold text-slate-900 dark:text-slate-100">
-                                {row.label}
-                              </div>
-                              <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
-                                {row.surface}
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-1.5 shrink-0 tabular-nums">
-                              {row.durationMs !== undefined && (
-                                <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
-                                  {row.durationMs}ms
-                                </span>
-                              )}
-                              <StatusBadge
-                                label={row.status.toUpperCase()}
-                                variant={
-                                  row.status === 'pass'
-                                    ? 'success'
-                                    : row.status === 'fail'
-                                    ? 'danger'
-                                    : row.status === 'testing'
-                                    ? 'info'
-                                    : 'neutral'
-                                }
-                              />
-                            </div>
-                          </div>
-                          <p
-                            className={`text-[11px] font-mono leading-relaxed break-words ${
-                              row.status === 'fail'
-                                ? 'text-rose-700 dark:text-rose-300'
-                                : row.status === 'pass'
-                                ? 'text-emerald-800 dark:text-emerald-300'
-                                : 'text-slate-600 dark:text-slate-400'
-                            }`}
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+                      {connectorResults.map((row) => {
+                        const meta = connectorCredentialMeta[row.id];
+                        return (
+                          <div
+                            key={row.id}
+                            className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1.5"
                           >
-                            {row.detail}
-                          </p>
-                        </div>
-                      ))}
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate">
+                                  {row.label}
+                                </div>
+                                <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                                  {row.surface} • {meta.sourceLabel}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1.5 shrink-0 tabular-nums">
+                                {row.durationMs !== undefined && (
+                                  <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                                    {row.durationMs}ms
+                                  </span>
+                                )}
+                                <StatusBadge
+                                  label={row.status.toUpperCase()}
+                                  variant={
+                                    row.status === 'pass'
+                                      ? 'success'
+                                      : row.status === 'fail'
+                                      ? 'danger'
+                                      : row.status === 'testing'
+                                      ? 'info'
+                                      : 'neutral'
+                                  }
+                                />
+                              </div>
+                            </div>
+                            <div className="px-2 py-1 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800 text-[11px] font-mono text-slate-700 dark:text-slate-300 truncate tabular-nums">
+                              {meta.identity}
+                            </div>
+                            <p
+                              className={`text-[11px] font-mono leading-snug break-words ${
+                                row.status === 'fail'
+                                  ? 'text-rose-700 dark:text-rose-300'
+                                  : row.status === 'pass'
+                                  ? 'text-emerald-800 dark:text-emerald-300'
+                                  : 'text-slate-600 dark:text-slate-400'
+                              }`}
+                            >
+                              {row.detail}
+                            </p>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 );
               })()}
 
               {/* Footer */}
-              <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex flex-wrap sm:flex-nowrap items-center justify-between gap-2">
-                <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void handleSaveThreatSettings()}
-                    disabled={isSavingThreat}
-                    className="btn-primary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-                  >
-                    <Check className="w-3.5 h-3.5" />
-                    <span>{isSavingThreat ? 'Saving...' : 'Save Threat Intel Settings'}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => void handleTestAllThreatConnectors()}
-                    disabled={isTestingAllConnectors}
-                    className="btn-accent text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-                  >
-                    <RefreshCw
-                      className={`w-3.5 h-3.5 ${isTestingAllConnectors ? 'animate-spin' : ''}`}
-                    />
-                    <span>
-                      {isTestingAllConnectors
-                        ? `Testing All (${connectorResults.filter((r) => r.status === 'pass' || r.status === 'fail').length}/4)...`
-                        : 'Test All Connections'}
-                    </span>
-                  </button>
-                </div>
+              <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleSaveThreatSettings()}
+                  disabled={isSavingThreat}
+                  className="btn-primary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  <span>{isSavingThreat ? 'Saving...' : 'Save Threat Intel Settings'}</span>
+                </button>
 
                 {threatFeedback && (
                   <span
@@ -1375,38 +1331,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               onTriggerUnifiSiemAction={onTriggerUnifiSiemAction}
               onReapplyHardening={onReapplyHardening}
             />
-
-            <WorkStreamContainer
-              pageScope="settings"
-              title="Settings & Governance Stream"
-              description="Workspace rescan discovery, governance preference updates, and system log purge events."
-              tabs={terminalTabs}
-              onOpenInBottomConsole={onOpenInBottomConsole}
-              onAbortJob={onAbortJob}
-              onClearTab={onClearTab}
-              emptyHint="Apply a workspace path, save governance intervals, or purge logs to inspect stream output."
-            />
           </div>
         )}
 
-        {activeTab === 'ssh' && (
-          <div className="w-full max-w-[1920px] mx-auto space-y-6">
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-3 font-mono text-xs shadow-sm">
-              <div className="text-slate-600 dark:text-slate-400 font-semibold mb-2">TARGET HOST CONNECTION</div>
-              <div className="text-slate-800 dark:text-slate-300"><span className="text-slate-500">Host:</span> wsh.panoramadr.com</div>
-              <div className="text-slate-800 dark:text-slate-300"><span className="text-slate-500">User:</span> root</div>
-              <div className="text-slate-800 dark:text-slate-300"><span className="text-slate-500">Key:</span> C:\Users\rodrigo\.ssh\rsa-key-deployment</div>
-              <div className="text-slate-800 dark:text-slate-300"><span className="text-slate-500">Key Type:</span> OpenSSH Private Key (RSA)</div>
-            </div>
-
-            {/* Pushover Mobile Notifications & Trusted-Network Gate Card */}
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-5 shadow-sm">
+        {activeTab === 'notifications' && (
+          <div className="w-full max-w-[1920px] mx-auto space-y-5">
+            {/* Pushover Mobile Notifications & Trusted-Network Gate */}
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4 shadow-sm">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="space-y-1">
                   <div className="flex items-center gap-2">
                     <Bell className="w-4 h-4 text-[var(--color-brand-text)] shrink-0" />
                     <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                      Pushover Mobile Notifications & Roaming Gate
+                      Pushover Mobile Notifications &amp; Roaming Gate
                     </h3>
                   </div>
                   <p className="text-xs text-slate-600 dark:text-slate-400">
@@ -1414,7 +1351,18 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </p>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <div className="flex items-center gap-2 text-xs font-medium text-slate-700 dark:text-slate-300">
+                    <span>Enabled</span>
+                    <ToggleSwitch
+                      size="sm"
+                      checked={pushoverPrefs.enabled}
+                      onChange={(val) =>
+                        setPushoverPrefs((prev) => ({ ...prev, enabled: val }))
+                      }
+                      activeColor="brand"
+                    />
+                  </div>
                   {pushoverDto?.networkGate.isTrusted ? (
                     <span
                       className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono font-semibold bg-emerald-500/15 text-emerald-800 dark:text-emerald-400 border border-emerald-500/30 whitespace-nowrap flex-shrink-0"
@@ -1452,53 +1400,36 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <span className="text-slate-500 dark:text-slate-400">
                     Credentials:{' '}
                     {pushoverDto.configured
-                      ? `Active (${pushoverDto.credentialSource === 'dpapi' ? 'Windows DPAPI' : '.env.local.keys'} • ${pushoverDto.maskedToken})`
+                      ? `Active (${pushoverDto.credentialSource === 'dpapi' ? 'DPAPI' : '.env.local.keys'})`
                       : 'Not Configured'}
                   </span>
                 </div>
               )}
 
-              {/* Master Toggle */}
-              <div className="flex items-center justify-between gap-4 pt-1">
+              {/* Compact Credentials, Gate Anchors & Sound/Priority */}
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 pt-2 border-t border-slate-200 dark:border-slate-800">
                 <div>
-                  <div className="text-sm font-medium text-slate-800 dark:text-slate-200">
-                    Enable Automated Pushover Notifications
-                  </div>
-                  <div className="text-xs text-slate-600 dark:text-slate-400">
-                    Sends strictly once per new actionable event while connected to your trusted home network or VPN.
-                  </div>
-                </div>
-                <ToggleSwitch
-                  checked={pushoverPrefs.enabled}
-                  onChange={(val) =>
-                    setPushoverPrefs((prev) => ({ ...prev, enabled: val }))
-                  }
-                  activeColor="brand"
-                />
-              </div>
-
-              {/* Read-Only Credentials & Device Target */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2 border-t border-slate-200 dark:border-slate-800">
-                <div>
-                  <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
-                    App API Token (SSOT)
+                  <label className="block text-[11px] font-mono text-slate-600 dark:text-slate-400 mb-1">
+                    App &amp; User Keys (SSOT)
                   </label>
-                  <div className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300">
-                    {pushoverDto?.configured ? pushoverDto.maskedToken : 'Not configured in .env.local.keys'}
+                  <div className="px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 truncate">
+                    {pushoverDto?.configured
+                      ? `${pushoverDto.maskedToken} / ${pushoverDto.maskedUser}`
+                      : 'Missing in .env.local.keys'}
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
-                    User / Group Key (SSOT)
+                  <label className="block text-[11px] font-mono text-slate-600 dark:text-slate-400 mb-1">
+                    Home / VPN Gate Anchors
                   </label>
-                  <div className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300">
-                    {pushoverDto?.configured ? pushoverDto.maskedUser : 'Not configured in .env.local.keys'}
+                  <div className="px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 truncate tabular-nums">
+                    {pushoverPrefs.expectedWshIp} • {pushoverPrefs.canaryHost}
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
+                  <label className="block text-[11px] font-mono text-slate-600 dark:text-slate-400 mb-1">
                     Target Device (Optional)
                   </label>
                   <input
@@ -1511,52 +1442,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
                   />
                 </div>
-              </div>
-
-              {/* Read-Only Trusted Home / VPN Network Gate Anchors */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-slate-200 dark:border-slate-800">
-                <div>
-                  <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
-                    Expected WSH Split-DNS / Private IP
-                  </label>
-                  <div className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 tabular-nums">
-                    {pushoverPrefs.expectedWshIp}
-                  </div>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 font-mono">
-                    Suppresses alerts when roaming on external Wi-Fi without VPN.
-                  </p>
-                </div>
 
                 <div>
-                  <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
-                    Independent Home Network Canary Host
-                  </label>
-                  <div className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300">
-                    {pushoverPrefs.canaryHost}
-                  </div>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 font-mono">
-                    Proves home/VPN reachability even if DietPi WSH itself crashes.
-                  </p>
-                </div>
-              </div>
-
-              {/* Sound & Priority Selectors */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-slate-200 dark:border-slate-800">
-                <div>
-                  <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
-                    Notification Sound (Fixed App Signature)
-                  </label>
-                  <div className="px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 flex items-center justify-between">
-                    <span>cosmic</span>
-                    <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                      Always used for all PanoramaSRE alerts
-                    </span>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1">
-                    Failure Priority Level
+                  <label className="block text-[11px] font-mono text-slate-600 dark:text-slate-400 mb-1">
+                    Failure Priority (Sound: cosmic)
                   </label>
                   <CustomSelect
                     value={String(pushoverPrefs.failurePriority)}
@@ -1567,7 +1456,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       }))
                     }
                     options={[
-                      { value: '0', label: 'Normal (0) — Recommended Default' },
+                      { value: '0', label: 'Normal (0) — Recommended' },
                       { value: '1', label: 'High (1) — Bypass Quiet Hours' },
                       { value: '-1', label: 'Low / Quiet (-1)' },
                     ]}
@@ -1580,23 +1469,23 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <div className="text-xs font-mono font-semibold text-slate-600 dark:text-slate-400">
                   ACTIONABLE EVENT TRIGGERS
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 text-xs">
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5 text-xs">
                   {(
                     [
                       {
                         key: 'systemUpdates',
                         title: 'System & Tunnel Updates',
-                        desc: 'New cloudflared release, DietPi OS, Debian APT packages, or kernel reboot flag.',
+                        desc: 'New cloudflared release, DietPi OS, Debian APT packages, or reboot flag.',
                       },
                       {
                         key: 'appAndHostFailures',
                         title: 'App, WSH Host & Appliance Outages',
-                        desc: 'Unreachable suite apps, WSH systemd/thermal/security failures, or offline appliances.',
+                        desc: 'Unreachable suite apps, WSH thermal/security failures, or offline appliances.',
                       },
                       {
                         key: 'smokeFailures',
                         title: 'Production Smoke Suite Failures',
-                        desc: 'Failed checks during 4x/day scheduled or IPC smoke test executions.',
+                        desc: 'Failed checks during 4x/day scheduled or IPC smoke executions.',
                       },
                       {
                         key: 'sslAlerts',
@@ -1652,13 +1541,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
 
               {/* Action Footer */}
-              <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex flex-wrap sm:flex-nowrap items-center justify-between gap-2">
-                <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
+              <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
                     onClick={handleSavePushover}
                     disabled={isSavingPushover}
-                    className="btn-primary text-xs flex items-center gap-1.5"
+                    className="btn-primary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
                   >
                     <Check className="w-3.5 h-3.5" />
                     <span>{isSavingPushover ? 'Saving...' : 'Save Pushover Settings'}</span>
@@ -1668,7 +1557,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     type="button"
                     onClick={handleSendTestPushover}
                     disabled={isTestingPushover}
-                    className="btn-accent text-xs flex items-center gap-1.5"
+                    className="btn-accent text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
                   >
                     <Send className="w-3.5 h-3.5" />
                     <span>{isTestingPushover ? 'Sending Test...' : 'Send Test Alert'}</span>
@@ -1677,7 +1566,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <button
                     type="button"
                     onClick={handleResetPushoverLedger}
-                    className="btn-secondary text-xs flex items-center gap-1.5 tabular-nums"
+                    className="btn-secondary text-xs flex items-center gap-1.5 tabular-nums whitespace-nowrap flex-shrink-0"
                     title="Clears remembered alert fingerprints so current updates/failures re-notify once on next sync"
                   >
                     <RotateCcw className="w-3.5 h-3.5" />
@@ -1698,22 +1587,207 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 )}
               </div>
             </div>
+          </div>
+        )}
 
-            <WorkStreamContainer
-              pageScope="settings"
-              title="Settings & Governance Stream"
-              description="Workspace rescan discovery, governance preference updates, and system log purge events."
-              tabs={terminalTabs}
-              onOpenInBottomConsole={onOpenInBottomConsole}
-              onAbortJob={onAbortJob}
-              onClearTab={onClearTab}
-              emptyHint="Apply a workspace path, save governance intervals, or purge logs to inspect stream output."
-            />
+        {activeTab === 'sync' && (
+          <div className="w-full max-w-[1920px] mx-auto space-y-5">
+            {/* Telemetry & Unified 4-Tier Background Schedule */}
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                    Telemetry &amp; Unified 4-Tier Schedule
+                  </h3>
+                  <p className="text-xs text-slate-600 dark:text-slate-400">
+                    Controls background refresh cadences across dev servers, LAN probes, WSH SSH, and hourly checks.
+                  </p>
+                </div>
+                {onRunHourlyChecksNow && (
+                  <button
+                    type="button"
+                    onClick={onRunHourlyChecksNow}
+                    disabled={isCheckingHourly}
+                    className="btn-secondary text-xs font-mono flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                  >
+                    <RefreshCw
+                      className={`w-3.5 h-3.5 text-[var(--color-accent-text)] ${
+                        isCheckingHourly ? 'animate-spin' : ''
+                      }`}
+                    />
+                    <span>
+                      {isCheckingHourly ? 'Running Hourly Checks...' : 'Run Hourly Checks Now'}
+                    </span>
+                  </button>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1.5">
+                    Tier 1 Local Polling Interval
+                  </label>
+                  <CustomSelect
+                    value={pollInterval}
+                    onChange={(val) => {
+                      setPollInterval(val);
+                      localStorage.setItem('panoramasre_tier1_poll_interval', val);
+                      onPollIntervalChanged?.(val);
+                    }}
+                    options={[
+                      { value: '5', label: '5 seconds (High Frequency / Debug)' },
+                      { value: '15', label: '15 seconds (Recommended Default)' },
+                      { value: '30', label: '30 seconds (Low Power)' },
+                      { value: '60', label: '60 seconds' },
+                    ]}
+                  />
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 font-mono">
+                    Local-only polling of dev servers and the Named Pipe MCP bridge (zero LAN/WAN traffic).
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-mono text-slate-600 dark:text-slate-400 mb-1.5">
+                    Tier 3 WSH SSH &amp; Fleet Sync Interval
+                  </label>
+                  <CustomSelect
+                    value={securityAuditInterval}
+                    onChange={(val) => {
+                      setSecurityAuditInterval(val);
+                      localStorage.setItem('panoramasre_security_audit_interval', val);
+                      if (onSecurityAuditIntervalChanged) {
+                        onSecurityAuditIntervalChanged(val);
+                      }
+                    }}
+                    options={[
+                      { value: '1', label: '1 minute (High Frequency / Verification)' },
+                      { value: '3', label: '3 minutes' },
+                      { value: '5', label: '5 minutes (Recommended Default)' },
+                      { value: '10', label: '10 minutes' },
+                      { value: '15', label: '15 minutes' },
+                      { value: '30', label: '30 minutes (Low Resource)' },
+                    ]}
+                  />
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 font-mono">
+                    Probes network posture, all suite health endpoints, local Git composition, and WSH --fast SSH snapshot.
+                  </p>
+                </div>
+              </div>
+
+              <div className="pt-2 border-t border-slate-200 dark:border-slate-800 space-y-2 tabular-nums">
+                <div className="flex items-center justify-between text-xs font-mono text-slate-600 dark:text-slate-400">
+                  <span className="font-semibold text-slate-700 dark:text-slate-300">
+                    Active 4-Tier Background Schedule
+                  </span>
+                  <span className="text-[11px] text-slate-500">
+                    Last hourly run: {lastHourlyCheckTime || 'Startup / Pending'}
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2.5 text-[11px] font-mono">
+                  <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                    <div className="font-semibold text-slate-800 dark:text-slate-200">
+                      Tier 1 · {pollInterval}s (Local)
+                    </div>
+                    <div className="text-slate-500">Dev Servers &amp; Named Pipe MCP Bridge</div>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                    <div className="font-semibold text-slate-800 dark:text-slate-200">
+                      Tier 2 · 60s (LAN / Slots)
+                    </div>
+                    <div className="text-slate-500">4 Appliances (pooled) &amp; 4x/day Smoke Slots</div>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                    <div className="font-semibold text-slate-800 dark:text-slate-200">
+                      Tier 3 · {securityAuditInterval}m (Fleet + SSH)
+                    </div>
+                    <div className="text-slate-500">Posture, Fleet Health &amp; WSH Snapshot</div>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                    <div className="font-semibold text-slate-800 dark:text-slate-200">
+                      Tier 4 · 1h + Startup (Upstream)
+                    </div>
+                    <div className="text-slate-500">Tunnel ETag, SSL Fleet &amp; Backup Ledger</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Bottom 2-Column Host & Database Cards */}
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+              {/* Target WSH SSH Connection */}
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-3 shadow-sm">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Server className="w-4 h-4 text-[var(--color-brand-text)] shrink-0" />
+                    <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                      Target WSH Host SSH Connection
+                    </h3>
+                  </div>
+                  {onReapplyHardening && (
+                    <button
+                      type="button"
+                      onClick={onReapplyHardening}
+                      className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                    >
+                      <ShieldCheck className="w-3.5 h-3.5" />
+                      <span>Re-Apply WSH Firewall</span>
+                    </button>
+                  )}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 font-mono text-xs pt-1">
+                  <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                    <div className="text-[11px] text-slate-500">Host &amp; User</div>
+                    <div className="text-slate-800 dark:text-slate-200 font-semibold">
+                      root@wsh.panoramadr.com
+                    </div>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                    <div className="text-[11px] text-slate-500">Auth Mode</div>
+                    <div className="text-slate-800 dark:text-slate-200 font-semibold">
+                      OpenSSH Private Key (RSA)
+                    </div>
+                  </div>
+                  <div className="sm:col-span-2 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 truncate">
+                    <div className="text-[11px] text-slate-500">Key Path</div>
+                    <div className="text-slate-800 dark:text-slate-200 truncate">
+                      C:\Users\rodrigo\.ssh\rsa-key-deployment
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Local SQLite Telemetry Storage */}
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-3 shadow-sm">
+                <div className="flex items-center gap-2">
+                  <Database className="w-4 h-4 text-[var(--color-brand-text)] shrink-0" />
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                    Local SQLite Telemetry Storage
+                  </h3>
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-400">
+                  Stores threat actors, findings, audit logs, system telemetry, and command run history locally in WAL mode.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 font-mono text-xs tabular-nums">
+                  <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                    <div className="text-[11px] text-slate-500">Database &amp; Journal</div>
+                    <div className="text-slate-800 dark:text-slate-200 font-semibold">
+                      data/sre.sqlite (WAL)
+                    </div>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                    <div className="text-[11px] text-slate-500">Auto-Purge Retention</div>
+                    <div className="text-slate-800 dark:text-slate-200 font-semibold">
+                      Logs: 28d • Audits: 90d
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
         {activeTab === 'logs' && (
-          <div className="flex flex-col space-y-3 h-full">
+          <div className="flex flex-col space-y-3 h-full w-full max-w-[1920px] mx-auto">
             {/* Log Controls Header */}
             <div className="flex flex-wrap items-center justify-between gap-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-3 shadow-sm">
               <div className="flex items-center gap-2 flex-1 min-w-[200px]">
@@ -1728,12 +1802,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
 
               <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
-                <div className="w-36">
+                <div className="w-40">
                   <CustomSelect
                     value={selectedCategory}
                     onChange={setSelectedCategory}
                     options={[
                       { value: 'ALL', label: 'All Categories' },
+                      { value: 'SECURITY', label: 'SECURITY' },
                       { value: 'SYSTEM', label: 'SYSTEM' },
                       { value: 'DEV_SUPERVISOR', label: 'DEV_SUPERVISOR' },
                       { value: 'RUNNER', label: 'RUNNER' },
@@ -1817,8 +1892,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
             </div>
 
-            {/* Terminal Log Console */}
-            <div className="relative flex-1 min-h-[420px] max-h-[600px] flex flex-col">
+            {/* Full-Height Terminal Log Console */}
+            <div className="relative flex-1 min-h-[460px] flex flex-col">
               <div
                 ref={logsContainerRef}
                 onScroll={handleLogsScroll}
@@ -1833,7 +1908,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     const isWarn = log.level === 'WARN';
                     const isError = log.level === 'ERROR';
                     return (
-                      <div key={log.id} className="leading-relaxed hover:bg-slate-200/50 dark:hover:bg-slate-900/40 px-1 rounded flex items-start gap-2">
+                      <div
+                        key={log.id}
+                        className="leading-relaxed hover:bg-slate-200/50 dark:hover:bg-slate-900/40 px-1 rounded flex items-start gap-2"
+                      >
                         <span className="text-slate-500 shrink-0 text-[11px] select-none font-mono tabular-nums">
                           [{log.created_at.slice(11, 19)}]
                         </span>
@@ -1869,30 +1947,26 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   className="absolute bottom-3 right-4 z-10 inline-flex items-center gap-1.5 px-3.5 py-2 min-h-[36px] rounded-full text-xs font-semibold bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-[var(--color-on-accent)] shadow-lg transition-colors cursor-pointer tabular-nums"
                 >
                   <ArrowDownToLine className="w-3.5 h-3.5" />
-                  <span>{unseenLogsCount > 0 ? `Pin to Bottom (${unseenLogsCount} new)` : 'Pin to Bottom'}</span>
+                  <span>
+                    {unseenLogsCount > 0 ? `Pin to Bottom (${unseenLogsCount} new)` : 'Pin to Bottom'}
+                  </span>
                 </button>
               )}
             </div>
           </div>
         )}
 
-        {activeTab === 'database' && (
-          <div className="w-full max-w-[1920px] mx-auto space-y-6">
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-3 shadow-sm">
-              <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-200">Local SQLite Telemetry Storage</h3>
-              <p className="text-xs text-slate-600 dark:text-slate-400">Stores audit logs, system telemetry, and command run history locally in WAL mode.</p>
-              <div className="text-xs font-mono text-slate-600 dark:text-slate-400">Database file: data/sre.sqlite (WAL enabled)</div>
-            </div>
-
+        {activeTab !== 'logs' && hasSettingsStreamTabs && (
+          <div className="w-full max-w-[1920px] mx-auto">
             <WorkStreamContainer
               pageScope="settings"
               title="Settings & Governance Stream"
-              description="Workspace rescan discovery, governance preference updates, and system log purge events."
+              description="Workspace rescan discovery, governance preference updates, and SIEM operations."
               tabs={terminalTabs}
               onOpenInBottomConsole={onOpenInBottomConsole}
               onAbortJob={onAbortJob}
               onClearTab={onClearTab}
-              emptyHint="Apply a workspace path, save governance intervals, or purge logs to inspect stream output."
+              emptyHint="Run a SIEM check, apply a workspace path, or test connectors to inspect stream output."
             />
           </div>
         )}

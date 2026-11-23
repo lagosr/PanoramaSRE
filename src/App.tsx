@@ -9,7 +9,7 @@ import { TopLiveSyncBar } from './components/layout/TopLiveSyncBar';
 import { SreEventsConsolePanel, TerminalTab, SystemEventItem } from './components/layout/SreEventsConsolePanel';
 import { CommandCenterView } from './components/hud/CommandCenterView';
 import { LocalDevView } from './components/local-dev/LocalDevView';
-import { SettingsView } from './components/settings/SettingsView';
+import { SettingsView, type SettingsTab } from './components/settings/SettingsView';
 import { TopologyStacksView } from './components/topology/TopologyStacksView';
 import { DietPiHostView } from './components/dietpi/DietPiHostView';
 import type { CronActionRequest } from './components/dietpi/CronManagerPanel';
@@ -83,6 +83,10 @@ const DEFAULT_APPLIANCES = [
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<NavItem>('hud');
+  const [settingsNav, setSettingsNav] = useState<{ tab: SettingsTab; nonce: number }>({
+    tab: 'general',
+    nonce: 0,
+  });
   const [apps, setApps] = useState<DiscoveredApp[]>([]);
   const [appliances, setAppliances] = useState<ApplianceStatus[]>([]);
   const [networkPosture, setNetworkPosture] = useState<NetworkPosture>('LAN_DIRECT');
@@ -3375,7 +3379,12 @@ export const App: React.FC = () => {
       <div className="flex flex-1 min-h-0 w-full overflow-hidden relative">
         <SidebarRail
           activeTab={activeTab}
-          onSelectTab={setActiveTab}
+          onSelectTab={(tab) => {
+            if (tab === 'settings' && activeTab !== 'settings') {
+              setSettingsNav((prev) => ({ tab: 'general', nonce: prev.nonce + 1 }));
+            }
+            setActiveTab(tab);
+          }}
           unhealthyCount={unhealthyCount}
           backupFailureCount={backupFailureCount}
           behindReleasesCount={behindReleasesCount}
@@ -3715,7 +3724,10 @@ export const App: React.FC = () => {
               onEscalateRunToCarbon={handleEscalateThreatRunToCarbon}
               onSelectRunId={handleSelectThreatRunId}
               onRefreshAll={() => refreshThreatIntelState(selectedThreatDetail?.run?.id)}
-              onNavigateToSettings={() => setActiveTab('settings')}
+              onNavigateToSettings={() => {
+                setSettingsNav((prev) => ({ tab: 'security', nonce: prev.nonce + 1 }));
+                setActiveTab('settings');
+              }}
               wshSnapshot={wshSnapshot}
               terminalTabs={terminalTabs}
               onOpenInBottomConsole={handleOpenInBottomConsole}
@@ -3726,6 +3738,8 @@ export const App: React.FC = () => {
 
           {activeTab === 'settings' && (
             <SettingsView
+              initialTab={settingsNav.tab}
+              initialTabNonce={settingsNav.nonce}
               terminalTabs={terminalTabs}
               onWorkspaceChanged={() => syncFullTelemetry(true, true, 'settings', true)}
               pollInterval={tier1PollInterval}

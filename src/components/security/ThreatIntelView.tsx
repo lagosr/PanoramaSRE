@@ -3495,7 +3495,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                   onClick={onNavigateToSettings}
                   className="btn-ghost text-[11px] px-0 py-0.5 min-h-[24px] text-[var(--color-brand-text)] flex items-center gap-1 whitespace-nowrap flex-shrink-0"
                 >
-                  <span>Configure SIEM in Settings</span>
+                  <span>Manage SIEM in Settings</span>
                   <ArrowRight className="w-3 h-3" />
                 </button>
               </div>

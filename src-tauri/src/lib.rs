@@ -190,7 +190,6 @@ pub fn run() {
             upsert_waf_rule_override,
             delete_waf_rule_override,
             get_unifi_siem_env_config,
-            save_unifi_siem_env_config,
             get_windows_autostart_status,
             set_windows_autostart
         ])
