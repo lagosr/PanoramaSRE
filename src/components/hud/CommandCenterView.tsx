@@ -97,7 +97,7 @@ export function CommandCenterView({
     ((isLastBackupFailed && failedBackupApps.length > 0) || (backupLedger?.failed_runs_7d || 0) > 0);
 
   return (
-    <div className="p-4 sm:p-6 md:p-8 max-w-7xl mx-auto w-full min-w-0 space-y-6 overflow-hidden">
+    <div className="p-4 sm:p-6 md:p-8 max-w-[1920px] mx-auto w-full min-w-0 space-y-6 overflow-hidden">
       {/* Home Lab Appliances Status Banner */}
       <ApplianceStatusStrip appliances={appliances} sslFleet={sslFleet} />
 

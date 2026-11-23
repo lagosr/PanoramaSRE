@@ -110,7 +110,7 @@ export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
   };
 
   return (
-    <div className="p-8 max-w-7xl mx-auto space-y-8">
+    <div className="p-8 w-full min-w-0 max-w-[1920px] mx-auto space-y-8">
       {/* Header with Title & Action Controls */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>

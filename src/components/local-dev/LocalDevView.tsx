@@ -44,7 +44,7 @@ export function LocalDevView({
   ).length;
 
   return (
-    <div className="p-8 max-w-7xl mx-auto space-y-8">
+    <div className="p-8 w-full min-w-0 max-w-[1920px] mx-auto space-y-8">
       {/* Dev Server Supervisor Header */}
       <div>
         <div className="flex items-center justify-between">

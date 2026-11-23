@@ -86,7 +86,7 @@ export function DietPiHostView({
   const upgradablePkgs = parseAptList(snapshot?.apt_upgradable_raw || '');
 
   return (
-    <div className="p-8 max-w-7xl mx-auto space-y-8">
+    <div className="p-8 w-full min-w-0 max-w-[1920px] mx-auto space-y-8">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>

@@ -1199,7 +1199,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   };
 
   return (
-    <div className="p-4 sm:p-6 space-y-6 max-w-7xl mx-auto">
+    <div className="p-4 sm:p-6 space-y-6 w-full min-w-0 max-w-[1920px] mx-auto">
       {/* Top 360° Command Header Card */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">

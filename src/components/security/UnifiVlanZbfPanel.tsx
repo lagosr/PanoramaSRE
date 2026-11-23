@@ -434,6 +434,7 @@ export const UnifiVlanZbfPanel: React.FC<UnifiVlanZbfPanelProps> = ({
           lanClients={lanClients}
           onToggleLanTrust={onToggleLanTrust}
           renderPolicyRow={renderPolicyRow}
+          onOpenUnifiFirewall={onOpenUnifiFirewall}
         />
       )}
 

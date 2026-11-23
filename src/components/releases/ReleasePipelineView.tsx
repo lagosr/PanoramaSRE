@@ -475,7 +475,7 @@ export function ReleasePipelineView({
   }
 
   return (
-    <div className="p-8 max-w-7xl mx-auto space-y-6">
+    <div className="p-8 w-full min-w-0 max-w-[1920px] mx-auto space-y-6">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>

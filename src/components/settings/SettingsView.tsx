@@ -768,7 +768,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       {/* Tab Contents */}
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
         {activeTab === 'general' && (
-          <div className="max-w-4xl space-y-6">
+          <div className="w-full max-w-[1920px] mx-auto space-y-6">
             {/* Appearance & Color Scheme Preference */}
             <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4 shadow-sm">
               <div className="flex items-center justify-between gap-2">
@@ -1390,7 +1390,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         )}
 
         {activeTab === 'ssh' && (
-          <div className="max-w-4xl space-y-6">
+          <div className="w-full max-w-[1920px] mx-auto space-y-6">
             <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-3 font-mono text-xs shadow-sm">
               <div className="text-slate-600 dark:text-slate-400 font-semibold mb-2">TARGET HOST CONNECTION</div>
               <div className="text-slate-800 dark:text-slate-300"><span className="text-slate-500">Host:</span> wsh.panoramadr.com</div>
@@ -1877,7 +1877,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         )}
 
         {activeTab === 'database' && (
-          <div className="max-w-4xl space-y-6">
+          <div className="w-full max-w-[1920px] mx-auto space-y-6">
             <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-3 shadow-sm">
               <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-200">Local SQLite Telemetry Storage</h3>
               <p className="text-xs text-slate-600 dark:text-slate-400">Stores audit logs, system telemetry, and command run history locally in WAL mode.</p>

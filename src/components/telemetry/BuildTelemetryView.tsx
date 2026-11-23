@@ -137,7 +137,7 @@ export const BuildTelemetryView: React.FC<BuildTelemetryViewProps> = ({
   const cacheHighAlert = buildCacheGb >= 40;
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
+    <div className="p-6 w-full min-w-0 max-w-[1920px] mx-auto space-y-6">
       {/* Header & Filter Toolbar */}
       <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
