@@ -152,10 +152,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     pushoverThreshold: 'MEDIUM',
     unifiBaseUrl: 'https://ui.panoramadr.com',
   });
-  const [cfTokenInput, setCfTokenInput] = useState<string>('');
-  const [cfAccountInput, setCfAccountInput] = useState<string>('');
-  const [geminiKeyInput, setGeminiKeyInput] = useState<string>('');
-  const [unifiKeyInput, setUnifiKeyInput] = useState<string>('');
   const [windowsAutostart, setWindowsAutostart] = useState<boolean>(false);
   const [isSavingThreat, setIsSavingThreat] = useState<boolean>(false);
   const [threatTestingTarget, setThreatTestingTarget] = useState<string | null>(null);
@@ -169,7 +165,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       const dto = await invoke<ThreatIntelSettingsViewDto>('get_threat_intel_settings');
       setThreatDto(dto);
       setThreatPrefs(dto.preferences);
-      setCfAccountInput(dto.cfAccountId || '');
       setWindowsAutostart(Boolean(dto.windowsAutostartEnabled));
     } catch (err) {
       console.warn('Failed to load Threat Intel settings:', err);
@@ -197,21 +192,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
   };
 
-  const handleSaveThreatSettings = async (clearOverrides?: {
-    clearCfToken?: boolean;
-    clearGeminiKey?: boolean;
-    clearUnifiKey?: boolean;
-  }) => {
+  const handleSaveThreatSettings = async () => {
     setIsSavingThreat(true);
     try {
       const input: SaveThreatIntelSettingsInput = {
-        cfApiToken: cfTokenInput.trim() || null,
-        cfAccountId: cfAccountInput.trim() || null,
-        geminiApiKey: geminiKeyInput.trim() || null,
-        unifiApiKey: unifiKeyInput.trim() || null,
-        clearCfToken: clearOverrides?.clearCfToken ?? false,
-        clearGeminiKey: clearOverrides?.clearGeminiKey ?? false,
-        clearUnifiKey: clearOverrides?.clearUnifiKey ?? false,
+        cfApiToken: null,
+        cfAccountId: null,
+        geminiApiKey: null,
+        unifiApiKey: null,
+        clearCfToken: false,
+        clearGeminiKey: false,
+        clearUnifiKey: false,
         preferences: threatPrefs,
       };
       const updated = await invoke<ThreatIntelSettingsViewDto>('save_threat_intel_settings', {
@@ -219,15 +210,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       });
       setThreatDto(updated);
       setThreatPrefs(updated.preferences);
-      setCfAccountInput(updated.cfAccountId || '');
-      setCfTokenInput('');
-      setGeminiKeyInput('');
-      setUnifiKeyInput('');
       onThreatSettingsChanged?.(updated);
-      setThreatFeedback({ text: '360° Threat Intel settings sealed in DPAPI & SQLite', tone: 'ok' });
+      setThreatFeedback({ text: '360° Threat Intel preferences saved to SQLite', tone: 'ok' });
       setTimeout(() => setThreatFeedback(null), 4000);
       onEmitSettingsStream?.('Save 360° Threat Intelligence Settings', [
-        '[PanoramaSRE] Persisting 360° Threat Intel preferences & DPAPI-sealed secrets...',
+        '[PanoramaSRE] Persisting 360° Threat Intel preferences...',
         `[INFO] Enabled: ${updated.preferences.enabled} | Cadence: ${updated.preferences.cadenceHours}h | Tier1=${updated.preferences.tier1Model} | Tier2=${updated.preferences.tier2Model}`,
         `[INFO] Keys configured: CF=${updated.cfConfigured} (${updated.cfSource}) | Gemini=${updated.geminiConfigured} (${updated.geminiSource}) | UniFi=${updated.unifiConfigured} (${updated.unifiSource})`,
         '[PASS] 360° Threat Intelligence settings saved cleanly.',
@@ -256,10 +243,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           intelOk: boolean;
           auditOk: boolean;
         }>('test_cloudflare_threat_connection', {
-          tokenOverride: cfTokenInput.trim() || null,
-          accountIdOverride: cfAccountInput.trim() || null,
+          tokenOverride: null,
+          accountIdOverride: null,
         });
-        if (res.accountId) setCfAccountInput(res.accountId);
+        if (res.accountId) {
+          setThreatDto((prev) => (prev ? { ...prev, cfAccountId: res.accountId } : prev));
+        }
         const zoneNames = res.zones.map((z) => `${z.name} (${z.plan})`).join(', ');
         setThreatFeedback({
           text: `Cloudflare OK: ${zoneNames || res.accountId}`,
@@ -272,7 +261,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       } else if (target === 'gemini') {
         const res = await invoke<{ model: string; severity: string }>(
           'test_gemini_connection',
-          { apiKeyOverride: geminiKeyInput.trim() || null }
+          { apiKeyOverride: null }
         );
         setThreatFeedback({
           text: `Gemini OK (${res.model})`,
@@ -288,7 +277,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           clientCount?: number;
         }>('test_unifi_connection', {
           baseUrlOverride: threatPrefs.unifiBaseUrl.trim() || null,
-          apiKeyOverride: unifiKeyInput.trim() || null,
+          apiKeyOverride: null,
         });
         setThreatFeedback({
           text: `UniFi OK (${res.deviceCount ?? 0} devices, ${res.clientCount ?? 0} clients)`,
@@ -912,7 +901,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     </h3>
                   </div>
                   <p className="text-xs text-slate-600 dark:text-slate-400">
-                    Autonomous 6-hour security audits sealed with Windows DPAPI encryption. Uses strictly read-only credentials.
+                    Autonomous 6-hour security audits powered by read-only SSOT credentials (.env.local.keys / Windows DPAPI).
                   </p>
                 </div>
 
@@ -942,27 +931,30 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 />
               </div>
 
-              {/* DPAPI Sealed Secrets */}
+              {/* Read-Only SSOT Credentials */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-3 border-t border-slate-200 dark:border-slate-800">
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between gap-2">
                     <label className="text-xs font-mono text-slate-600 dark:text-slate-400">
-                      Cloudflare Read-Only API Token
+                      Cloudflare Read-Only API Token (SSOT)
                     </label>
                     <span className="text-[11px] font-mono text-slate-500">
                       {threatDto?.cfConfigured
-                        ? `${threatDto.cfSource} • ${threatDto.maskedCfToken}`
-                        : 'Not set'}
+                        ? threatDto.cfSource === 'dpapi'
+                          ? 'Windows DPAPI'
+                          : '.env.local.keys'
+                        : 'Not configured'}
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <input
-                      type="password"
-                      value={cfTokenInput}
-                      onChange={(e) => setCfTokenInput(e.target.value)}
-                      placeholder={threatDto?.cfConfigured ? '•••••••• (enter new token to replace)' : 'Paste Cloudflare read-only API token'}
-                      className="flex-1 px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
-                    />
+                    <div
+                      aria-readonly="true"
+                      className="flex-1 min-w-0 truncate px-3 py-2.5 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 cursor-default select-all"
+                    >
+                      {threatDto?.cfConfigured
+                        ? threatDto.maskedCfToken
+                        : 'Not configured in .env.local.keys'}
+                    </div>
                     <button
                       type="button"
                       onClick={() => void handleTestThreatConnector('cloudflare')}
@@ -971,16 +963,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     >
                       {threatTestingTarget === 'cloudflare' ? 'Testing...' : 'Test CF'}
                     </button>
-                    {threatDto?.cfConfigured && threatDto.cfSource === 'dpapi' && (
-                      <button
-                        type="button"
-                        onClick={() => void handleSaveThreatSettings({ clearCfToken: true })}
-                        className="btn-ghost text-xs whitespace-nowrap flex-shrink-0"
-                        title="Clear stored DPAPI token"
-                      >
-                        Clear
-                      </button>
-                    )}
                   </div>
                 </div>
 
@@ -988,34 +970,36 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <label className="block text-xs font-mono text-slate-600 dark:text-slate-400">
                     Cloudflare Account ID (Auto-detected on Test)
                   </label>
-                  <input
-                    type="text"
-                    value={cfAccountInput}
-                    onChange={(e) => setCfAccountInput(e.target.value)}
-                    placeholder="Optional override (e.g. fb9fa6bffe4bdd6f...)"
-                    className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
-                  />
+                  <div
+                    aria-readonly="true"
+                    className="w-full truncate px-3 py-2.5 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 cursor-default select-all tabular-nums"
+                  >
+                    {threatDto?.cfAccountId || 'Auto-detected on Test CF'}
+                  </div>
                 </div>
 
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between gap-2">
                     <label className="text-xs font-mono text-slate-600 dark:text-slate-400">
-                      Gemini API Key (Paid Tier for Log Privacy)
+                      Gemini API Key (Paid Tier for Log Privacy — SSOT)
                     </label>
                     <span className="text-[11px] font-mono text-slate-500">
                       {threatDto?.geminiConfigured
-                        ? `${threatDto.geminiSource} • ${threatDto.maskedGeminiKey}`
-                        : 'Not set'}
+                        ? threatDto.geminiSource === 'dpapi'
+                          ? 'Windows DPAPI'
+                          : '.env.local.keys'
+                        : 'Not configured'}
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <input
-                      type="password"
-                      value={geminiKeyInput}
-                      onChange={(e) => setGeminiKeyInput(e.target.value)}
-                      placeholder={threatDto?.geminiConfigured ? '•••••••• (enter new key to replace)' : 'Paste AQ... or AIza... Gemini Paid Tier key'}
-                      className="flex-1 px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
-                    />
+                    <div
+                      aria-readonly="true"
+                      className="flex-1 min-w-0 truncate px-3 py-2.5 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 cursor-default select-all"
+                    >
+                      {threatDto?.geminiConfigured
+                        ? threatDto.maskedGeminiKey
+                        : 'Not configured in .env.local.keys'}
+                    </div>
                     <button
                       type="button"
                       onClick={() => void handleTestThreatConnector('gemini')}
@@ -1024,37 +1008,31 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     >
                       {threatTestingTarget === 'gemini' ? 'Testing...' : 'Test Gemini'}
                     </button>
-                    {threatDto?.geminiConfigured && threatDto.geminiSource === 'dpapi' && (
-                      <button
-                        type="button"
-                        onClick={() => void handleSaveThreatSettings({ clearGeminiKey: true })}
-                        className="btn-ghost text-xs whitespace-nowrap flex-shrink-0"
-                      >
-                        Clear
-                      </button>
-                    )}
                   </div>
                 </div>
 
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between gap-2">
                     <label className="text-xs font-mono text-slate-600 dark:text-slate-400">
-                      UniFi Integration X-API-Key &amp; Base URL
+                      UniFi Integration X-API-Key &amp; Base URL (SSOT)
                     </label>
                     <span className="text-[11px] font-mono text-slate-500">
                       {threatDto?.unifiConfigured
-                        ? `${threatDto.unifiSource} • ${threatDto.maskedUnifiKey}`
+                        ? threatDto.unifiSource === 'dpapi'
+                          ? 'Windows DPAPI'
+                          : '.env.local.keys'
                         : 'Optional'}
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <input
-                      type="password"
-                      value={unifiKeyInput}
-                      onChange={(e) => setUnifiKeyInput(e.target.value)}
-                      placeholder={threatDto?.unifiConfigured ? '•••••••• (enter new X-API-Key)' : 'Paste UniFi CloudKey Integration API Key'}
-                      className="flex-1 px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
-                    />
+                    <div
+                      aria-readonly="true"
+                      className="flex-1 min-w-0 truncate px-3 py-2.5 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 cursor-default select-all"
+                    >
+                      {threatDto?.unifiConfigured
+                        ? threatDto.maskedUnifiKey
+                        : 'Not configured in .env.local.keys'}
+                    </div>
                     <button
                       type="button"
                       onClick={() => void handleTestThreatConnector('unifi')}
@@ -1063,26 +1041,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     >
                       {threatTestingTarget === 'unifi' ? 'Testing...' : 'Test UniFi'}
                     </button>
-                    {threatDto?.unifiConfigured && threatDto.unifiSource === 'dpapi' && (
-                      <button
-                        type="button"
-                        onClick={() => void handleSaveThreatSettings({ clearUnifiKey: true })}
-                        className="btn-ghost text-xs whitespace-nowrap flex-shrink-0"
-                        title="Clear stored DPAPI key"
-                      >
-                        Clear
-                      </button>
-                    )}
                   </div>
-                  <input
-                    type="text"
-                    value={threatPrefs.unifiBaseUrl}
-                    onChange={(e) =>
-                      setThreatPrefs((prev) => ({ ...prev, unifiBaseUrl: e.target.value }))
-                    }
-                    placeholder="https://ui.panoramadr.com"
-                    className="w-full px-3 py-1.5 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
-                  />
+                  <div
+                    aria-readonly="true"
+                    className="w-full truncate px-3 py-2.5 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 cursor-default select-all"
+                  >
+                    {threatPrefs.unifiBaseUrl || 'https://ui.panoramadr.com'}
+                  </div>
                 </div>
               </div>
 
