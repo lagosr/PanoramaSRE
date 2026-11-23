@@ -120,7 +120,7 @@ export function buildUnifiConsoleUrl(
     case 'threats':
       return `${root}/network/default/flows`;
     case 'policies':
-      return `${root}/network/default/settings/security`;
+      return `${root}/network/default/settings/zones`;
     default:
       return `${root}/network/default/dashboard`;
   }

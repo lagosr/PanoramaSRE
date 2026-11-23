@@ -121,7 +121,7 @@ describe('threat-utils', () => {
       'https://ui.panoramadr.com/network/default/flows'
     );
     expect(buildUnifiConsoleUrl('https://ui.panoramadr.com', 'policies')).toBe(
-      'https://ui.panoramadr.com/network/default/settings/security'
+      'https://ui.panoramadr.com/network/default/settings/zones'
     );
   });
 

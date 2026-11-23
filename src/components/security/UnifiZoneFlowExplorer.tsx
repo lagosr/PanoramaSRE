@@ -15,6 +15,7 @@ import {
   Laptop,
   LayoutGrid,
   Network,
+  RotateCcw,
   Search,
   Shield,
   ShieldCheck,
@@ -45,10 +46,12 @@ import {
   computeAutoZoneLayout,
   computeCanvasBounds,
   computeWireGeometries,
+  formatWirePillRuleSuffix,
   getEffectiveZoneViewMode,
   getZoneCardWidth,
   mergeIncrementalZoneLayout,
   setZoneViewModeOverride,
+  type WireManualAdjustment,
   type ZoneCardPosition,
   type ZoneCardRect,
   type ZoneCardViewMode,
@@ -208,12 +211,19 @@ export const UnifiZoneFlowExplorer: React.FC<UnifiZoneFlowExplorerProps> = ({
     null
   );
 
-  // Spatial Free-Canvas Positions & Drag State
+  // Spatial Free-Canvas Positions, Wire Bends & Drag State
   const [positionsByZoneId, setPositionsByZoneId] = useState<
     Record<string, ZoneCardPosition>
   >({});
   const [hasCustomLayout, setHasCustomLayout] = useState<boolean>(false);
   const [draggingZoneId, setDraggingZoneId] = useState<string | null>(null);
+  const [wireAdjustmentsById, setWireAdjustmentsById] = useState<
+    Record<string, WireManualAdjustment>
+  >({});
+  const [draggingWireState, setDraggingWireState] = useState<{
+    connectionId: string;
+    mode: 'wire' | 'label';
+  } | null>(null);
   const [cardStackOrder, setCardStackOrder] = useState<string[]>([]);
   const [canvasViewportWidth, setCanvasViewportWidth] = useState<number>(1200);
   const [measuredCardSizes, setMeasuredCardSizes] = useState<
@@ -230,6 +240,18 @@ export const UnifiZoneFlowExplorer: React.FC<UnifiZoneFlowExplorerProps> = ({
     startClientY: number;
     originX: number;
     originY: number;
+    moved: boolean;
+  } | null>(null);
+  const wireDragSessionRef = useRef<{
+    connectionId: string;
+    mode: 'wire' | 'label';
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    originWireDx: number;
+    originWireDy: number;
+    originLabelDx: number;
+    originLabelDy: number;
     moved: boolean;
   } | null>(null);
 
@@ -312,6 +334,20 @@ export const UnifiZoneFlowExplorer: React.FC<UnifiZoneFlowExplorerProps> = ({
     () => connections.find((c) => c.id === activeConnectionId) ?? null,
     [connections, activeConnectionId]
   );
+
+  // Drop stale manual wire/label adjustments when connections are filtered/hidden
+  useEffect(() => {
+    const validConnIds = new Set(connections.map((c) => c.id));
+    setWireAdjustmentsById((prev) => {
+      const keys = Object.keys(prev);
+      if (keys.every((k) => validConnIds.has(k))) return prev;
+      const next: Record<string, WireManualAdjustment> = {};
+      for (const k of keys) {
+        if (validConnIds.has(k)) next[k] = prev[k];
+      }
+      return next;
+    });
+  }, [connections]);
 
   const trustByMac = useMemo(() => {
     const map = new Map<string, LanClientBaselineRow>();
@@ -398,7 +434,7 @@ export const UnifiZoneFlowExplorer: React.FC<UnifiZoneFlowExplorerProps> = ({
     return map;
   }, [measuredCardSizes]);
 
-  // Reconcile spatial positions when selected zones, view modes, or container width change
+  // Reconcile spatial positions when selected zones, view modes, connections, or container width change
   useEffect(() => {
     if (selectedZoneIds.length === 0) {
       setPositionsByZoneId({});
@@ -411,13 +447,15 @@ export const UnifiZoneFlowExplorer: React.FC<UnifiZoneFlowExplorerProps> = ({
             prev,
             canvasViewportWidth,
             effectiveViewModeByZoneId,
-            measuredHeightMap
+            measuredHeightMap,
+            connections
           )
         : computeAutoZoneLayout(
             selectedZoneIds,
             canvasViewportWidth,
             effectiveViewModeByZoneId,
-            measuredHeightMap
+            measuredHeightMap,
+            connections
           );
       return positionsEqual(prev, next) ? prev : next;
     });
@@ -427,6 +465,7 @@ export const UnifiZoneFlowExplorer: React.FC<UnifiZoneFlowExplorerProps> = ({
     canvasViewportWidth,
     effectiveViewModeByZoneId,
     measuredHeightMap,
+    connections,
   ]);
 
   const rectsByZoneId = useMemo(() => {
@@ -458,9 +497,9 @@ export const UnifiZoneFlowExplorer: React.FC<UnifiZoneFlowExplorerProps> = ({
   const wireGeometries = useMemo(
     () =>
       selectedZones.length > 1
-        ? computeWireGeometries(connections, rectsByZoneId)
+        ? computeWireGeometries(connections, rectsByZoneId, wireAdjustmentsById)
         : [],
-    [selectedZones.length, connections, rectsByZoneId]
+    [selectedZones.length, connections, rectsByZoneId, wireAdjustmentsById]
   );
 
   const canvasBounds = useMemo(
@@ -485,7 +524,13 @@ export const UnifiZoneFlowExplorer: React.FC<UnifiZoneFlowExplorerProps> = ({
       const nextModes: Record<string, ZoneCardViewMode> = {};
       for (const id of selectedZoneIds) nextModes[id] = mode;
       setPositionsByZoneId(
-        computeAutoZoneLayout(selectedZoneIds, canvasViewportWidth, nextModes)
+        computeAutoZoneLayout(
+          selectedZoneIds,
+          canvasViewportWidth,
+          nextModes,
+          undefined,
+          connections
+        )
       );
     }
   };
@@ -502,12 +547,15 @@ export const UnifiZoneFlowExplorer: React.FC<UnifiZoneFlowExplorerProps> = ({
   const handleAutoArrange = () => {
     setHasCustomLayout(false);
     setDraggingZoneId(null);
+    setWireAdjustmentsById({});
+    setDraggingWireState(null);
     setPositionsByZoneId(
       computeAutoZoneLayout(
         selectedZoneIds,
         canvasViewportWidth,
         effectiveViewModeByZoneId,
-        measuredHeightMap
+        measuredHeightMap,
+        connections
       )
     );
   };
@@ -522,6 +570,7 @@ export const UnifiZoneFlowExplorer: React.FC<UnifiZoneFlowExplorerProps> = ({
 
   const handleSelectConnectedLan = () => {
     setHasCustomLayout(false);
+    setWireAdjustmentsById({});
     setSelectedZoneIds(pickDefaultFlowZoneIds(matrix, 4));
   };
 
@@ -534,6 +583,7 @@ export const UnifiZoneFlowExplorer: React.FC<UnifiZoneFlowExplorerProps> = ({
       )
       .map((z) => z.id);
     setHasCustomLayout(false);
+    setWireAdjustmentsById({});
     setSelectedZoneIds(userZones);
   };
 
@@ -698,6 +748,136 @@ export const UnifiZoneFlowExplorer: React.FC<UnifiZoneFlowExplorerProps> = ({
     });
   };
 
+  const handleResetWireAdjustment = (connectionId: string) => {
+    setWireAdjustmentsById((prev) => {
+      if (!prev[connectionId]) return prev;
+      const next = { ...prev };
+      delete next[connectionId];
+      return next;
+    });
+  };
+
+  const handleWirePointerDown = (
+    e: React.PointerEvent<Element>,
+    connectionId: string,
+    mode: 'wire' | 'label'
+  ) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    const cur = wireAdjustmentsById[connectionId] ?? {
+      wireDx: 0,
+      wireDy: 0,
+      labelDx: 0,
+      labelDy: 0,
+    };
+    const geom = wireGeometries.find((g) => g.connection.id === connectionId);
+    const effectiveOriginLabelDx =
+      cur.labelDx === 0 && cur.labelDy === 0 && geom
+        ? Math.round(geom.labelX - geom.anchorX)
+        : cur.labelDx;
+    const effectiveOriginLabelDy =
+      cur.labelDx === 0 && cur.labelDy === 0 && geom
+        ? Math.round(geom.labelY - geom.anchorY)
+        : cur.labelDy;
+
+    wireDragSessionRef.current = {
+      connectionId,
+      mode,
+      pointerId: e.pointerId,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      originWireDx: cur.wireDx,
+      originWireDy: cur.wireDy,
+      originLabelDx: effectiveOriginLabelDx,
+      originLabelDy: effectiveOriginLabelDy,
+      moved: false,
+    };
+    setHoveredConnectionId(connectionId);
+    setDraggingWireState({ connectionId, mode });
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // Ignore pointer capture unavailability
+    }
+  };
+
+  const handleWirePointerMove = (
+    e: React.PointerEvent<Element>,
+    connectionId: string
+  ) => {
+    const session = wireDragSessionRef.current;
+    if (
+      !session ||
+      session.connectionId !== connectionId ||
+      session.pointerId !== e.pointerId
+    ) {
+      return;
+    }
+    const dx = e.clientX - session.startClientX;
+    const dy = e.clientY - session.startClientY;
+    if (!session.moved && Math.hypot(dx, dy) < 5) {
+      return;
+    }
+    session.moved = true;
+
+    setWireAdjustmentsById((prev) => {
+      const cur = prev[connectionId] ?? {
+        wireDx: session.originWireDx,
+        wireDy: session.originWireDy,
+        labelDx: session.originLabelDx,
+        labelDy: session.originLabelDy,
+      };
+      if (session.mode === 'wire') {
+        return {
+          ...prev,
+          [connectionId]: {
+            ...cur,
+            wireDx: Math.round(session.originWireDx + dx),
+            wireDy: Math.round(session.originWireDy + dy),
+          },
+        };
+      }
+      return {
+        ...prev,
+        [connectionId]: {
+          ...cur,
+          labelDx: Math.round(session.originLabelDx + dx),
+          labelDy: Math.round(session.originLabelDy + dy),
+        },
+      };
+    });
+  };
+
+  const handleWirePointerUp = (
+    e: React.PointerEvent<Element>,
+    connectionId: string
+  ) => {
+    const session = wireDragSessionRef.current;
+    if (
+      !session ||
+      session.connectionId !== connectionId ||
+      session.pointerId !== e.pointerId
+    ) {
+      return;
+    }
+    const didMove = session.moved;
+    wireDragSessionRef.current = null;
+    setDraggingWireState(null);
+    try {
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      }
+    } catch {
+      // Ignore release errors
+    }
+
+    if (!didMove) {
+      handleOpenConnectionModal(connectionId);
+    }
+  };
+
   const renderWireSvgGroup = (
     geomList: typeof wireGeometries,
     mode: 'hit-and-base' | 'active-overlay'
@@ -706,10 +886,11 @@ export const UnifiZoneFlowExplorer: React.FC<UnifiZoneFlowExplorerProps> = ({
       const style = wireStrokeStyle(connection.verdict);
       const isActive = activeConnectionId === connection.id;
       const isHovered = hoveredConnectionId === connection.id;
-      const isFocused = isActive || isHovered;
+      const isDraggingThisWire = draggingWireState?.connectionId === connection.id;
+      const isFocused = isActive || isHovered || isDraggingThisWire;
       const dimmed =
-        (hoveredConnectionId && !isHovered) ||
-        (!hoveredConnectionId && activeConnectionId && !isActive);
+        (hoveredConnectionId && !isHovered && !isDraggingThisWire) ||
+        (!hoveredConnectionId && activeConnectionId && !isActive && !isDraggingThisWire);
 
       if (mode === 'active-overlay') {
         if (!isFocused) return null;
@@ -734,20 +915,29 @@ export const UnifiZoneFlowExplorer: React.FC<UnifiZoneFlowExplorerProps> = ({
             d={pathD}
             fill="none"
             stroke="transparent"
-            strokeWidth={18}
-            className="pointer-events-auto cursor-pointer"
+            strokeWidth={20}
+            className="pointer-events-auto cursor-grab active:cursor-grabbing"
             onMouseEnter={() => setHoveredConnectionId(connection.id)}
-            onMouseLeave={() => setHoveredConnectionId(null)}
-            onClick={() => handleOpenConnectionModal(connection.id)}
+            onMouseLeave={() => {
+              if (!draggingWireState) setHoveredConnectionId(null);
+            }}
+            onPointerDown={(e) => handleWirePointerDown(e, connection.id, 'wire')}
+            onPointerMove={(e) => handleWirePointerMove(e, connection.id)}
+            onPointerUp={(e) => handleWirePointerUp(e, connection.id)}
+            onPointerCancel={(e) => handleWirePointerUp(e, connection.id)}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              handleResetWireAdjustment(connection.id);
+            }}
           />
           <path
             d={pathD}
             fill="none"
             stroke={style.stroke}
-            strokeWidth={isFocused ? 3 : 2.1}
+            strokeWidth={isFocused ? 3.1 : 2.1}
             strokeDasharray={style.dashArray}
             strokeLinecap="round"
-            strokeOpacity={dimmed ? 0.32 : 0.85}
+            strokeOpacity={dimmed ? 0.34 : 0.88}
             markerEnd={`url(#${style.markerId})`}
             className="transition-opacity"
           />
@@ -765,7 +955,7 @@ export const UnifiZoneFlowExplorer: React.FC<UnifiZoneFlowExplorerProps> = ({
               Select Firewall Zones to Inspect ({selectedZones.length} active)
             </div>
             <p className="text-[11px] text-slate-600 dark:text-slate-400">
-              Drag any zone container to inspect overlapping tables or wires. Tap any wire pill or rule row to open its full firewall policy details.
+              Drag zone headers, wire curves, or wire labels to arrange freely. Tap any wire, label, or rule row to inspect details (double-click a wire/label to reset its bend).
             </p>
           </div>
 
@@ -798,12 +988,24 @@ export const UnifiZoneFlowExplorer: React.FC<UnifiZoneFlowExplorerProps> = ({
               type="button"
               onClick={handleAutoArrange}
               disabled={selectedZones.length === 0}
-              title="Re-arrange all open zone containers into a clean non-overlapping grid"
+              title="Re-arrange all open zone containers and wires into a clean non-overlapping layout"
               className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
             >
               <LayoutGrid className="w-3.5 h-3.5" />
               <span>Auto-Arrange</span>
             </button>
+
+            {Object.keys(wireAdjustmentsById).length > 0 && (
+              <button
+                type="button"
+                onClick={() => setWireAdjustmentsById({})}
+                title="Reset custom wire bends and label offsets while keeping your zone card positions"
+                className="btn-ghost text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Reset Wires</span>
+              </button>
+            )}
 
             <button
               type="button"
@@ -1257,7 +1459,7 @@ export const UnifiZoneFlowExplorer: React.FC<UnifiZoneFlowExplorerProps> = ({
                             No active rules match the current filter.
                           </div>
                         ) : (
-                          <div className="max-h-52 overflow-y-auto divide-y divide-slate-200 dark:divide-slate-800">
+                          <div className="max-h-44 overflow-y-auto divide-y divide-slate-200 dark:divide-slate-800">
                             {highLevelRules.map((item) => {
                               const pol = item.policy;
                               const isAllow = pol.action.toUpperCase() === 'ALLOW';
@@ -1643,41 +1845,129 @@ export const UnifiZoneFlowExplorer: React.FC<UnifiZoneFlowExplorerProps> = ({
               );
             })}
 
-            {/* Clickable Midpoint Wire Pills (z-[35] above all cards) */}
+            {/* Wire Leader Tethers & Draggable Midpoint Bend Handles (z-[32]) */}
+            {selectedZones.length > 1 && wireGeometries.length > 0 && (
+              <svg
+                aria-hidden="true"
+                width={canvasBounds.width}
+                height={canvasBounds.height}
+                className="absolute inset-0 pointer-events-none z-[32]"
+              >
+                {wireGeometries.map(
+                  ({ connection, anchorX, anchorY, labelX, labelY, tetherNeeded }) => {
+                    const style = wireStrokeStyle(connection.verdict);
+                    const isFocused =
+                      activeConnectionId === connection.id ||
+                      hoveredConnectionId === connection.id ||
+                      draggingWireState?.connectionId === connection.id;
+                    return (
+                      <g key={`handle-${connection.id}`}>
+                        {tetherNeeded && (
+                          <line
+                            x1={anchorX}
+                            y1={anchorY}
+                            x2={labelX}
+                            y2={labelY}
+                            stroke={style.stroke}
+                            strokeWidth={1.5}
+                            strokeDasharray="3 3"
+                            strokeOpacity={isFocused ? 0.9 : 0.6}
+                          />
+                        )}
+                        <g
+                          className="pointer-events-auto cursor-grab active:cursor-grabbing"
+                          onMouseEnter={() => setHoveredConnectionId(connection.id)}
+                          onMouseLeave={() => {
+                            if (!draggingWireState) setHoveredConnectionId(null);
+                          }}
+                          onPointerDown={(e) =>
+                            handleWirePointerDown(e, connection.id, 'wire')
+                          }
+                          onPointerMove={(e) => handleWirePointerMove(e, connection.id)}
+                          onPointerUp={(e) => handleWirePointerUp(e, connection.id)}
+                          onPointerCancel={(e) => handleWirePointerUp(e, connection.id)}
+                          onDoubleClick={(e) => {
+                            e.stopPropagation();
+                            handleResetWireAdjustment(connection.id);
+                          }}
+                        >
+                          <circle cx={anchorX} cy={anchorY} r={12} fill="transparent" />
+                          <circle
+                            cx={anchorX}
+                            cy={anchorY}
+                            r={isFocused ? 6 : 4.5}
+                            className="fill-white dark:fill-slate-900"
+                            stroke={style.stroke}
+                            strokeWidth={2.2}
+                          />
+                        </g>
+                      </g>
+                    );
+                  }
+                )}
+              </svg>
+            )}
+
+            {/* Draggable & Tap-to-Inspect Wire Labels (z-[35] above all cards) */}
             {selectedZones.length > 1 &&
               wireGeometries.map(({ connection, labelX, labelY }) => {
                 const style = wireStrokeStyle(connection.verdict);
                 const isActive = activeConnectionId === connection.id;
+                const isDraggingLabel =
+                  draggingWireState?.connectionId === connection.id &&
+                  draggingWireState.mode === 'label';
+                const ruleSuffix = formatWirePillRuleSuffix(connection);
+
                 return (
                   <button
                     key={`pill-${connection.id}`}
                     type="button"
                     style={{ left: `${labelX}px`, top: `${labelY}px` }}
                     onMouseEnter={() => setHoveredConnectionId(connection.id)}
-                    onMouseLeave={() => setHoveredConnectionId(null)}
-                    onClick={() => handleOpenConnectionModal(connection.id)}
-                    title={`Tap to inspect: ${connection.sourceZoneName} → ${connection.destinationZoneName} (${connection.primaryRuleName})`}
-                    className={`absolute -translate-x-1/2 -translate-y-1/2 z-[35] px-2.5 py-1 rounded-full bg-white dark:bg-slate-900 border shadow-md font-mono text-[10px] font-semibold flex items-center gap-1 whitespace-nowrap cursor-pointer transition-all ${
-                      style.pillClass
-                    } ${
-                      isActive
-                        ? 'ring-2 ring-[var(--color-brand)] scale-105 shadow-lg'
-                        : 'opacity-95 hover:opacity-100 hover:scale-105'
+                    onMouseLeave={() => {
+                      if (!draggingWireState) setHoveredConnectionId(null);
+                    }}
+                    onPointerDown={(e) =>
+                      handleWirePointerDown(e, connection.id, 'label')
+                    }
+                    onPointerMove={(e) => handleWirePointerMove(e, connection.id)}
+                    onPointerUp={(e) => handleWirePointerUp(e, connection.id)}
+                    onPointerCancel={(e) => handleWirePointerUp(e, connection.id)}
+                    onDoubleClick={(e) => {
+                      e.stopPropagation();
+                      handleResetWireAdjustment(connection.id);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        handleOpenConnectionModal(connection.id);
+                      }
+                    }}
+                    title={`Drag label to move · Tap to inspect: ${connection.sourceZoneName} → ${connection.destinationZoneName} (${connection.primaryRuleName}) · Double-click to reset`}
+                    className={`absolute -translate-x-1/2 -translate-y-1/2 z-[35] px-2.5 py-1 rounded-full bg-white dark:bg-slate-900 border shadow-md font-mono text-[10px] font-semibold flex items-center gap-1.5 whitespace-nowrap select-none transition-shadow ${
+                      isDraggingLabel
+                        ? 'cursor-grabbing ring-2 ring-[var(--color-brand)] shadow-xl scale-105'
+                        : 'cursor-grab hover:scale-105'
+                    } ${style.pillClass} ${
+                      isActive && !isDraggingLabel
+                        ? 'ring-2 ring-[var(--color-brand)] shadow-lg'
+                        : ''
                     }`}
                   >
-                    <Eye className="w-3 h-3 opacity-70 shrink-0" />
-                    <span className="max-w-[85px] truncate text-slate-600 dark:text-slate-300">
+                    <GripVertical className="w-3 h-3 text-slate-400 shrink-0" />
+                    <span className="font-bold">{style.shortLabel}</span>
+                    <span className="max-w-[78px] truncate text-slate-700 dark:text-slate-200">
                       {connection.sourceZoneName}
                     </span>
                     <ArrowRight className="w-3 h-3 shrink-0" />
-                    <span className="max-w-[85px] truncate text-slate-600 dark:text-slate-300">
+                    <span className="max-w-[78px] truncate text-slate-700 dark:text-slate-200">
                       {connection.destinationZoneName}
                     </span>
-                    <span>·</span>
-                    <span>{style.shortLabel}</span>
-                    <span className="max-w-[125px] truncate font-normal opacity-90">
-                      ({connection.primaryRuleName})
-                    </span>
+                    {ruleSuffix && (
+                      <span className="max-w-[130px] truncate font-normal text-slate-500 dark:text-slate-400">
+                        · {ruleSuffix}
+                      </span>
+                    )}
                   </button>
                 );
               })}

@@ -14,23 +14,36 @@ export interface ZoneCardRect {
   height: number;
 }
 
+export interface WireManualAdjustment {
+  wireDx: number;
+  wireDy: number;
+  labelDx: number;
+  labelDy: number;
+}
+
 export interface WireGeometry {
   connection: ZoneFlowConnection;
   pathD: string;
+  anchorX: number;
+  anchorY: number;
   labelX: number;
   labelY: number;
+  tetherNeeded: boolean;
+  isManuallyAdjusted: boolean;
 }
 
 export const HIGH_LEVEL_CARD_WIDTH = 360;
 export const INSPECTION_CARD_WIDTH = 520;
-export const ESTIMATED_HIGH_LEVEL_HEIGHT = 270;
-export const ESTIMATED_INSPECTION_HEIGHT = 560;
-export const CANVAS_PAD = 28;
-export const GUTTER_X = 136;
-export const GUTTER_Y = 96;
+export const ESTIMATED_HIGH_LEVEL_HEIGHT = 340;
+export const ESTIMATED_INSPECTION_HEIGHT = 640;
+export const CANVAS_PAD = 44;
+export const GUTTER_X = 220;
+export const GUTTER_Y = 148;
 
+const PILL_HALF_WIDTH = 112;
+const PILL_HALF_HEIGHT = 16;
 const PILL_COLLISION_WIDTH = 230;
-const PILL_COLLISION_HEIGHT = 32;
+const PILL_COLLISION_HEIGHT = 34;
 
 export function getZoneCardWidth(mode: ZoneCardViewMode): number {
   return mode === 'high-level' ? HIGH_LEVEL_CARD_WIDTH : INSPECTION_CARD_WIDTH;
@@ -66,6 +79,31 @@ export function clampCardPosition(pos: ZoneCardPosition): ZoneCardPosition {
   };
 }
 
+export function formatWirePillRuleSuffix(conn: ZoneFlowConnection): string | null {
+  const raw = (conn.primaryRuleName ?? '').trim();
+  if (!raw) return null;
+
+  const normalizedRule = raw.toLowerCase().replace(/\s+/g, ' ');
+  if (
+    normalizedRule === 'default allow' ||
+    normalizedRule === 'default block' ||
+    normalizedRule === 'return traffic only'
+  ) {
+    return null;
+  }
+
+  const src = conn.sourceZoneName.trim().toLowerCase().replace(/\s+/g, ' ');
+  const dst = conn.destinationZoneName.trim().toLowerCase().replace(/\s+/g, ' ');
+  if (
+    normalizedRule === `allow ${src} to ${dst}` ||
+    normalizedRule === `block ${src} to ${dst}`
+  ) {
+    return null;
+  }
+
+  return raw;
+}
+
 function estimateCardHeight(
   zoneId: string,
   mode: ZoneCardViewMode,
@@ -80,8 +118,90 @@ function estimateCardHeight(
     : ESTIMATED_INSPECTION_HEIGHT;
 }
 
+function buildTopologyAffinity(
+  zoneIds: string[],
+  connections?: ZoneFlowConnection[]
+): {
+  neighborsById: Map<string, Set<string>>;
+  edgeWeightById: Map<string, number>;
+} {
+  const validSet = new Set(zoneIds);
+  const neighborsById = new Map<string, Set<string>>();
+  const edgeWeightById = new Map<string, number>();
+
+  for (const id of zoneIds) {
+    neighborsById.set(id, new Set());
+    edgeWeightById.set(id, 0);
+  }
+
+  for (const conn of connections ?? []) {
+    if (
+      conn.sourceZoneId === conn.destinationZoneId ||
+      !validSet.has(conn.sourceZoneId) ||
+      !validSet.has(conn.destinationZoneId)
+    ) {
+      continue;
+    }
+    neighborsById.get(conn.sourceZoneId)?.add(conn.destinationZoneId);
+    neighborsById.get(conn.destinationZoneId)?.add(conn.sourceZoneId);
+    edgeWeightById.set(
+      conn.sourceZoneId,
+      (edgeWeightById.get(conn.sourceZoneId) ?? 0) + 1
+    );
+    edgeWeightById.set(
+      conn.destinationZoneId,
+      (edgeWeightById.get(conn.destinationZoneId) ?? 0) + 1
+    );
+  }
+
+  return { neighborsById, edgeWeightById };
+}
+
+function orderByAffinity(
+  ids: string[],
+  neighborsById: Map<string, Set<string>>,
+  edgeWeightById: Map<string, number>
+): string[] {
+  if (ids.length <= 1) return [...ids];
+  const originalIdx = new Map(ids.map((id, i) => [id, i]));
+  const sortedByDegree = [...ids].sort((a, b) => {
+    const degA = neighborsById.get(a)?.size ?? 0;
+    const degB = neighborsById.get(b)?.size ?? 0;
+    if (degB !== degA) return degB - degA;
+    const wA = edgeWeightById.get(a) ?? 0;
+    const wB = edgeWeightById.get(b) ?? 0;
+    if (wB !== wA) return wB - wA;
+    return (originalIdx.get(a) ?? 0) - (originalIdx.get(b) ?? 0);
+  });
+
+  const remaining = new Set(sortedByDegree);
+  const ordered: string[] = [];
+
+  while (remaining.size > 0) {
+    const seed = sortedByDegree.find((id) => remaining.has(id));
+    if (!seed) break;
+    ordered.push(seed);
+    remaining.delete(seed);
+
+    let last = seed;
+    while (remaining.size > 0) {
+      const neighbors = neighborsById.get(last);
+      const next = sortedByDegree.find(
+        (cand) => remaining.has(cand) && neighbors?.has(cand)
+      );
+      if (!next) break;
+      ordered.push(next);
+      remaining.delete(next);
+      last = next;
+    }
+  }
+
+  return ordered;
+}
+
 interface LayoutRowItem {
   zoneId: string;
+  mode: ZoneCardViewMode;
   width: number;
   height: number;
 }
@@ -90,59 +210,200 @@ export function computeAutoZoneLayout(
   zoneIds: string[],
   availableWidth: number,
   viewModeByZoneId: Record<string, ZoneCardViewMode>,
-  measuredHeights?: Record<string, number>
+  measuredHeights?: Record<string, number>,
+  connections?: ZoneFlowConnection[]
 ): Record<string, ZoneCardPosition> {
   if (zoneIds.length === 0) return {};
 
   const safeWidth = Math.max(
     INSPECTION_CARD_WIDTH + CANVAS_PAD * 2,
-    Math.round(availableWidth > 0 ? availableWidth : 1200)
+    Math.round(availableWidth > 0 ? availableWidth : 1360)
   );
 
-  const rows: Array<{
-    items: LayoutRowItem[];
-    rowWidth: number;
-    rowHeight: number;
-  }> = [];
+  const getDim = (id: string): LayoutRowItem => {
+    const mode = viewModeByZoneId[id] ?? 'high-level';
+    return {
+      zoneId: id,
+      mode,
+      width: getZoneCardWidth(mode),
+      height: estimateCardHeight(id, mode, measuredHeights),
+    };
+  };
 
-  let currentItems: LayoutRowItem[] = [];
-  let currentWidth = 0;
-  let currentMaxHeight = 0;
+  const { neighborsById, edgeWeightById } = buildTopologyAffinity(
+    zoneIds,
+    connections
+  );
+  const connectedIds = zoneIds.filter(
+    (id) => (neighborsById.get(id)?.size ?? 0) > 0
+  );
+  const isolatedIds = zoneIds.filter(
+    (id) => (neighborsById.get(id)?.size ?? 0) === 0
+  );
+  const orderedConnected = orderByAffinity(
+    connectedIds,
+    neighborsById,
+    edgeWeightById
+  );
+  const orderedAll = [...orderedConnected, ...isolatedIds];
 
-  for (const zoneId of zoneIds) {
-    const mode = viewModeByZoneId[zoneId] ?? 'high-level';
-    const w = getZoneCardWidth(mode);
-    const h = estimateCardHeight(zoneId, mode, measuredHeights);
-    const nextWidth =
-      currentItems.length === 0 ? w : currentWidth + GUTTER_X + w;
+  // 1-zone layout: centered horizontally at top
+  if (orderedAll.length === 1) {
+    const d = getDim(orderedAll[0]);
+    const x = Math.max(CANVAS_PAD, Math.round((safeWidth - d.width) / 2));
+    return { [d.zoneId]: clampCardPosition({ x, y: CANVAS_PAD }) };
+  }
 
-    if (
-      currentItems.length > 0 &&
-      CANVAS_PAD * 2 + nextWidth > safeWidth
-    ) {
+  // 2-zone layout: side-by-side when availableWidth fits cleanly, else vertical stack
+  if (orderedAll.length === 2) {
+    const [a, b] = [getDim(orderedAll[0]), getDim(orderedAll[1])];
+    if (a.width + b.width + GUTTER_X + CANVAS_PAD * 2 <= safeWidth) {
+      const rowWidth = a.width + GUTTER_X + b.width;
+      const startX = Math.max(CANVAS_PAD, Math.round((safeWidth - rowWidth) / 2));
+      return {
+        [a.zoneId]: clampCardPosition({ x: startX, y: CANVAS_PAD }),
+        [b.zoneId]: clampCardPosition({ x: startX + a.width + GUTTER_X, y: CANVAS_PAD }),
+      };
+    }
+    const ax = Math.max(CANVAS_PAD, Math.round((safeWidth - a.width) / 2));
+    const bx = Math.max(CANVAS_PAD, Math.round((safeWidth - b.width) / 2));
+    return {
+      [a.zoneId]: clampCardPosition({ x: ax, y: CANVAS_PAD }),
+      [b.zoneId]: clampCardPosition({ x: bx, y: CANVAS_PAD + a.height + GUTTER_Y }),
+    };
+  }
+
+  // 3-zone inverted triangle formation:
+  // Two cards on Row 1 separated by wide corridor, highest-degree hub centered underneath on Row 2
+  // so every pairwise wire has a clear unobstructed path without passing behind a middle card.
+  if (orderedAll.length === 3) {
+    const sortedHub = [...orderedAll].sort((a, b) => {
+      const degA = neighborsById.get(a)?.size ?? 0;
+      const degB = neighborsById.get(b)?.size ?? 0;
+      if (degB !== degA) return degB - degA;
+      const wA = edgeWeightById.get(a) ?? 0;
+      const wB = edgeWeightById.get(b) ?? 0;
+      if (wB !== wA) return wB - wA;
+      return zoneIds.indexOf(a) - zoneIds.indexOf(b);
+    });
+    const hubId =
+      (neighborsById.get(sortedHub[0])?.size ?? 0) > 0
+        ? sortedHub[0]
+        : orderedAll[2];
+    const topPairIds = orderedAll.filter((id) => id !== hubId);
+    const left = getDim(topPairIds[0]);
+    const right = getDim(topPairIds[1]);
+    const hub = getDim(hubId);
+
+    const triGutterX = Math.max(GUTTER_X, 260);
+    const row1Width = left.width + triGutterX + right.width;
+    const row1X = Math.max(CANVAS_PAD, Math.round((safeWidth - row1Width) / 2));
+    const row1MaxH = Math.max(left.height, right.height);
+    const hubX = Math.max(
+      CANVAS_PAD,
+      Math.round(row1X + (row1Width - hub.width) / 2)
+    );
+    const hubY = CANVAS_PAD + row1MaxH + GUTTER_Y;
+
+    return {
+      [left.zoneId]: clampCardPosition({ x: row1X, y: CANVAS_PAD }),
+      [right.zoneId]: clampCardPosition({
+        x: row1X + left.width + triGutterX,
+        y: CANVAS_PAD,
+      }),
+      [hub.zoneId]: clampCardPosition({ x: hubX, y: hubY }),
+    };
+  }
+
+  // 4-zone clean 2x2 matrix grid
+  if (orderedAll.length === 4) {
+    const [d0, d1, d2, d3] = orderedAll.map(getDim);
+    const gridGutterX = Math.max(GUTTER_X, 240);
+    const gridGutterY = Math.max(GUTTER_Y, 156);
+    const col0W = Math.max(d0.width, d2.width);
+    const col1W = Math.max(d1.width, d3.width);
+    const totalW = col0W + gridGutterX + col1W;
+    const baseX = Math.max(CANVAS_PAD, Math.round((safeWidth - totalW) / 2));
+    const row1H = Math.max(d0.height, d1.height);
+    const row2Y = CANVAS_PAD + row1H + gridGutterY;
+
+    return {
+      [d0.zoneId]: clampCardPosition({
+        x: baseX + Math.round((col0W - d0.width) / 2),
+        y: CANVAS_PAD,
+      }),
+      [d1.zoneId]: clampCardPosition({
+        x: baseX + col0W + gridGutterX + Math.round((col1W - d1.width) / 2),
+        y: CANVAS_PAD,
+      }),
+      [d2.zoneId]: clampCardPosition({
+        x: baseX + Math.round((col0W - d2.width) / 2),
+        y: row2Y,
+      }),
+      [d3.zoneId]: clampCardPosition({
+        x: baseX + col0W + gridGutterX + Math.round((col1W - d3.width) / 2),
+        y: row2Y,
+      }),
+    };
+  }
+
+  // 5+ zones: adaptive row packing keeping connected zones grouped cleanly before isolated zones
+  const packGroup = (
+    groupIds: string[]
+  ): Array<{ items: LayoutRowItem[]; rowWidth: number; rowHeight: number }> => {
+    const rows: Array<{
+      items: LayoutRowItem[];
+      rowWidth: number;
+      rowHeight: number;
+    }> = [];
+    let currentItems: LayoutRowItem[] = [];
+    let currentWidth = 0;
+    let currentMaxHeight = 0;
+
+    for (const id of groupIds) {
+      const item = getDim(id);
+      const nextWidth =
+        currentItems.length === 0 ? item.width : currentWidth + GUTTER_X + item.width;
+      const allHighLevelRow =
+        currentItems.every((i) => i.mode === 'high-level') &&
+        item.mode === 'high-level';
+      const maxCols = safeWidth >= 1650 && allHighLevelRow ? 3 : 2;
+
+      if (
+        currentItems.length > 0 &&
+        (currentItems.length >= maxCols || CANVAS_PAD * 2 + nextWidth > safeWidth)
+      ) {
+        rows.push({
+          items: currentItems,
+          rowWidth: currentWidth,
+          rowHeight: currentMaxHeight,
+        });
+        currentItems = [item];
+        currentWidth = item.width;
+        currentMaxHeight = item.height;
+      } else {
+        currentItems.push(item);
+        currentWidth = nextWidth;
+        currentMaxHeight = Math.max(currentMaxHeight, item.height);
+      }
+    }
+
+    if (currentItems.length > 0) {
       rows.push({
         items: currentItems,
         rowWidth: currentWidth,
         rowHeight: currentMaxHeight,
       });
-      currentItems = [{ zoneId, width: w, height: h }];
-      currentWidth = w;
-      currentMaxHeight = h;
-    } else {
-      currentItems.push({ zoneId, width: w, height: h });
-      currentWidth = nextWidth;
-      currentMaxHeight = Math.max(currentMaxHeight, h);
     }
-  }
+    return rows;
+  };
 
-  if (currentItems.length > 0) {
-    rows.push({
-      items: currentItems,
-      rowWidth: currentWidth,
-      rowHeight: currentMaxHeight,
-    });
-  }
+  const rows = [
+    ...packGroup(orderedConnected),
+    ...packGroup(isolatedIds),
+  ];
 
+  const rowGutterY = Math.max(GUTTER_Y, 156);
   const positions: Record<string, ZoneCardPosition> = {};
   let cursorY = CANVAS_PAD;
 
@@ -155,7 +416,7 @@ export function computeAutoZoneLayout(
       positions[item.zoneId] = clampCardPosition({ x: cursorX, y: cursorY });
       cursorX += item.width + GUTTER_X;
     }
-    cursorY += row.rowHeight + GUTTER_Y;
+    cursorY += row.rowHeight + rowGutterY;
   }
 
   return positions;
@@ -166,7 +427,8 @@ export function mergeIncrementalZoneLayout(
   existingPositions: Record<string, ZoneCardPosition>,
   availableWidth: number,
   viewModeByZoneId: Record<string, ZoneCardViewMode>,
-  measuredHeights?: Record<string, number>
+  measuredHeights?: Record<string, number>,
+  connections?: ZoneFlowConnection[]
 ): Record<string, ZoneCardPosition> {
   const next: Record<string, ZoneCardPosition> = {};
   const missingIds: string[] = [];
@@ -199,7 +461,8 @@ export function mergeIncrementalZoneLayout(
     missingIds,
     availableWidth,
     viewModeByZoneId,
-    measuredHeights
+    measuredHeights,
+    connections
   );
   const offsetY = keptCount === 0 ? 0 : maxBottom + GUTTER_Y - CANVAS_PAD;
 
@@ -214,11 +477,93 @@ export function mergeIncrementalZoneLayout(
   return next;
 }
 
+function pointInsideRect(
+  px: number,
+  py: number,
+  r: ZoneCardRect,
+  pad: number
+): boolean {
+  return (
+    px >= r.x - pad &&
+    px <= r.x + r.width + pad &&
+    py >= r.y - pad &&
+    py <= r.y + r.height + pad
+  );
+}
+
+function pillOverlapsRect(
+  lx: number,
+  ly: number,
+  r: ZoneCardRect,
+  pad: number
+): boolean {
+  return (
+    lx + PILL_HALF_WIDTH > r.x - pad &&
+    lx - PILL_HALF_WIDTH < r.x + r.width + pad &&
+    ly + PILL_HALF_HEIGHT > r.y - pad &&
+    ly - PILL_HALF_HEIGHT < r.y + r.height + pad
+  );
+}
+
+function pillsCollide(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number
+): boolean {
+  return (
+    Math.abs(ax - bx) < PILL_COLLISION_WIDTH &&
+    Math.abs(ay - by) < PILL_COLLISION_HEIGHT
+  );
+}
+
+function evalCubic(
+  t: number,
+  sx: number,
+  sy: number,
+  c1x: number,
+  c1y: number,
+  c2x: number,
+  c2y: number,
+  ex: number,
+  ey: number
+): { x: number; y: number } {
+  const mt = 1 - t;
+  const mt2 = mt * mt;
+  const t2 = t * t;
+  return {
+    x: mt2 * mt * sx + 3 * mt2 * t * c1x + 3 * mt * t2 * c2x + t2 * t * ex,
+    y: mt2 * mt * sy + 3 * mt2 * t * c1y + 3 * mt * t2 * c2y + t2 * t * ey,
+  };
+}
+
+function evalQuadratic(
+  t: number,
+  sx: number,
+  sy: number,
+  qx: number,
+  qy: number,
+  ex: number,
+  ey: number
+): { x: number; y: number } {
+  const mt = 1 - t;
+  return {
+    x: mt * mt * sx + 2 * mt * t * qx + t * t * ex,
+    y: mt * mt * sy + 2 * mt * t * qy + t * t * ey,
+  };
+}
+
 export function computeWireGeometries(
   connections: ZoneFlowConnection[],
-  rectsByZoneId: Record<string, ZoneCardRect>
+  rectsByZoneId: Record<string, ZoneCardRect>,
+  adjustmentsByConnectionId?: Record<string, WireManualAdjustment>
 ): WireGeometry[] {
-  const geometries: WireGeometry[] = [];
+  const allRects = Object.values(rectsByZoneId).filter(
+    (r) => r.width > 0 && r.height > 0
+  );
+  const rawResults: Array<WireGeometry & { hasManualLabel: boolean }> = [];
+  const placedPills: Array<{ x: number; y: number }> = [];
+  let detourStaggerCount = 0;
 
   for (const conn of connections) {
     const sRect = rectsByZoneId[conn.sourceZoneId];
@@ -282,7 +627,7 @@ export function computeWireGeometries(
     const edgeDist = Math.max(1, Math.hypot(edgeDx, edgeDy));
     const nx = -edgeDy / edgeDist;
     const ny = edgeDx / edgeDist;
-    const laneOffset = conn.hasOppositeWire ? 22 : 0;
+    const laneOffset = conn.hasOppositeWire ? 24 : 0;
 
     const sx = x1 + nx * laneOffset;
     const sy = y1 + ny * laneOffset;
@@ -296,36 +641,182 @@ export function computeWireGeometries(
     const c2x = ex + tx2 * curveHandle + nx * archBoost;
     const c2y = ey + ty2 * curveHandle + ny * archBoost;
 
-    const labelX = 0.125 * sx + 0.375 * c1x + 0.375 * c2x + 0.125 * ex;
-    const labelY = 0.125 * sy + 0.375 * c1y + 0.375 * c2y + 0.125 * ey;
-    if (!Number.isFinite(labelX) || !Number.isFinite(labelY)) continue;
+    const baseMid = evalCubic(0.5, sx, sy, c1x, c1y, c2x, c2y, ex, ey);
+    if (!Number.isFinite(baseMid.x) || !Number.isFinite(baseMid.y)) continue;
 
-    geometries.push({
+    const adj = adjustmentsByConnectionId?.[conn.id];
+    const wireDx = adj?.wireDx ?? 0;
+    const wireDy = adj?.wireDy ?? 0;
+    const labelDx = adj?.labelDx ?? 0;
+    const labelDy = adj?.labelDy ?? 0;
+    const hasManualWire = wireDx !== 0 || wireDy !== 0;
+    const hasManualLabel = labelDx !== 0 || labelDy !== 0;
+
+    let pathD = '';
+    let anchorX = baseMid.x;
+    let anchorY = baseMid.y;
+    let sampleCurve: (t: number) => { x: number; y: number } = (t) =>
+      evalCubic(t, sx, sy, c1x, c1y, c2x, c2y, ex, ey);
+
+    if (hasManualWire) {
+      anchorX = Math.max(24, baseMid.x + wireDx);
+      anchorY = Math.max(24, baseMid.y + wireDy);
+      const qx = 2 * anchorX - 0.5 * (sx + ex);
+      const qy = 2 * anchorY - 0.5 * (sy + ey);
+      pathD = `M ${sx.toFixed(1)} ${sy.toFixed(1)} Q ${qx.toFixed(1)} ${qy.toFixed(1)}, ${ex.toFixed(1)} ${ey.toFixed(1)}`;
+      sampleCurve = (t) => evalQuadratic(t, sx, sy, qx, qy, ex, ey);
+    } else {
+      // Check third-party zone cards that block the default spline corridor
+      const otherRects = Object.entries(rectsByZoneId)
+        .filter(([zId, r]) => zId !== conn.sourceZoneId && zId !== conn.destinationZoneId && r.width > 0 && r.height > 0)
+        .map(([, r]) => r);
+
+      const blockers: ZoneCardRect[] = [];
+      for (const r of otherRects) {
+        let hit = false;
+        for (let step = 3; step <= 17; step += 1) {
+          const pt = evalCubic(step / 20, sx, sy, c1x, c1y, c2x, c2y, ex, ey);
+          if (pointInsideRect(pt.x, pt.y, r, 18)) {
+            hit = true;
+            break;
+          }
+        }
+        if (hit) blockers.push(r);
+      }
+
+      if (blockers.length > 0) {
+        const minX = Math.min(...blockers.map((r) => r.x));
+        const minY = Math.min(...blockers.map((r) => r.y));
+        const maxX = Math.max(...blockers.map((r) => r.x + r.width));
+        const maxY = Math.max(...blockers.map((r) => r.y + r.height));
+        const stagger = detourStaggerCount * 32 + (conn.hasOppositeWire ? 18 : 0);
+        detourStaggerCount += 1;
+
+        let detourX = baseMid.x;
+        let detourY = baseMid.y;
+
+        if (horizontalPrimary) {
+          const aboveY = Math.max(28, minY - 46 - stagger);
+          const belowY = maxY + 46 + stagger;
+          const midY = (sy + ey) / 2;
+          const pickAbove =
+            minY >= 96 && Math.abs(aboveY - midY) <= Math.abs(belowY - midY);
+          detourX = Math.max(28, Math.min(minX, maxX) + (maxX - minX) / 2);
+          detourY = pickAbove ? aboveY : belowY;
+        } else {
+          const leftX = Math.max(28, minX - 48 - stagger);
+          const rightX = maxX + 48 + stagger;
+          const midX = (sx + ex) / 2;
+          const pickLeft =
+            minX >= 110 && Math.abs(leftX - midX) <= Math.abs(rightX - midX);
+          detourX = pickLeft ? leftX : rightX;
+          detourY = Math.max(28, minY + (maxY - minY) / 2);
+        }
+
+        anchorX = detourX;
+        anchorY = detourY;
+        const qx = 2 * detourX - 0.5 * (sx + ex);
+        const qy = 2 * detourY - 0.5 * (sy + ey);
+        pathD = `M ${sx.toFixed(1)} ${sy.toFixed(1)} Q ${qx.toFixed(1)} ${qy.toFixed(1)}, ${ex.toFixed(1)} ${ey.toFixed(1)}`;
+        sampleCurve = (t) => evalQuadratic(t, sx, sy, qx, qy, ex, ey);
+      } else {
+        pathD = `M ${sx.toFixed(1)} ${sy.toFixed(1)} C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${ex.toFixed(1)} ${ey.toFixed(1)}`;
+      }
+    }
+
+    let labelX = anchorX;
+    let labelY = anchorY;
+
+    if (hasManualLabel) {
+      labelX = Math.max(90, anchorX + labelDx);
+      labelY = Math.max(20, anchorY + labelDy);
+    } else {
+      const candidates: Array<{ x: number; y: number }> = [
+        { x: anchorX, y: anchorY },
+      ];
+      for (const t of [0.42, 0.58, 0.34, 0.66, 0.26, 0.74]) {
+        candidates.push(sampleCurve(t));
+      }
+      candidates.push(
+        { x: anchorX + nx * 34, y: anchorY + ny * 34 },
+        { x: anchorX - nx * 34, y: anchorY - ny * 34 },
+        { x: anchorX, y: Math.max(22, anchorY - 40) },
+        { x: anchorX, y: anchorY + 40 }
+      );
+
+      let bestScore = Infinity;
+      let bestPoint = candidates[0];
+      for (const cand of candidates) {
+        const cx = Math.max(90, cand.x);
+        const cy = Math.max(20, cand.y);
+        let score = Math.hypot(cx - anchorX, cy - anchorY) * 0.5;
+        for (const r of allRects) {
+          if (pillOverlapsRect(cx, cy, r, 12)) {
+            score += 10000;
+          }
+        }
+        for (const p of placedPills) {
+          if (pillsCollide(cx, cy, p.x, p.y)) {
+            score += 500;
+          }
+        }
+        if (score < bestScore) {
+          bestScore = score;
+          bestPoint = { x: cx, y: cy };
+        }
+      }
+      labelX = bestPoint.x;
+      labelY = bestPoint.y;
+    }
+
+    placedPills.push({ x: labelX, y: labelY });
+
+    rawResults.push({
       connection: conn,
-      pathD: `M ${sx.toFixed(1)} ${sy.toFixed(1)} C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${ex.toFixed(1)} ${ey.toFixed(1)}`,
+      pathD,
+      anchorX,
+      anchorY,
       labelX,
       labelY,
+      tetherNeeded: false,
+      isManuallyAdjusted: hasManualWire || hasManualLabel,
+      hasManualLabel,
     });
   }
 
-  // Iterative midpoint pill collision separation so wire labels never stack invisibly
+  // Iterative midpoint pill separation pass for auto-placed labels only
   for (let pass = 0; pass < 6; pass += 1) {
     let moved = false;
-    for (let i = 0; i < geometries.length; i += 1) {
-      for (let j = i + 1; j < geometries.length; j += 1) {
-        const a = geometries[i];
-        const b = geometries[j];
-        const overlapX = Math.abs(a.labelX - b.labelX) < PILL_COLLISION_WIDTH;
-        const deltaY = Math.abs(a.labelY - b.labelY);
-        if (overlapX && deltaY < PILL_COLLISION_HEIGHT) {
-          const push = (PILL_COLLISION_HEIGHT - deltaY) / 2 + 2;
+    for (let i = 0; i < rawResults.length; i += 1) {
+      for (let j = i + 1; j < rawResults.length; j += 1) {
+        const a = rawResults[i];
+        const b = rawResults[j];
+        if (!pillsCollide(a.labelX, a.labelY, b.labelX, b.labelY)) {
+          continue;
+        }
+        const deltaY = Math.abs(b.labelY - a.labelY);
+        const overlapY = PILL_COLLISION_HEIGHT - deltaY;
+        if (!a.hasManualLabel && !b.hasManualLabel) {
+          const push = overlapY / 2 + 2;
           if (a.labelY <= b.labelY) {
-            a.labelY = Math.max(18, a.labelY - push);
+            a.labelY = Math.max(20, a.labelY - push);
             b.labelY += push;
           } else {
-            b.labelY = Math.max(18, b.labelY - push);
+            b.labelY = Math.max(20, b.labelY - push);
             a.labelY += push;
           }
+          moved = true;
+        } else if (!a.hasManualLabel) {
+          a.labelY =
+            a.labelY <= b.labelY
+              ? Math.max(20, b.labelY - PILL_COLLISION_HEIGHT - 2)
+              : b.labelY + PILL_COLLISION_HEIGHT + 2;
+          moved = true;
+        } else if (!b.hasManualLabel) {
+          b.labelY =
+            b.labelY <= a.labelY
+              ? Math.max(20, a.labelY - PILL_COLLISION_HEIGHT - 2)
+              : a.labelY + PILL_COLLISION_HEIGHT + 2;
           moved = true;
         }
       }
@@ -333,7 +824,10 @@ export function computeWireGeometries(
     if (!moved) break;
   }
 
-  return geometries;
+  return rawResults.map(({ hasManualLabel: _ignored, ...geom }) => ({
+    ...geom,
+    tetherNeeded: Math.hypot(geom.labelX - geom.anchorX, geom.labelY - geom.anchorY) > 14,
+  }));
 }
 
 export function computeCanvasBounds(
@@ -351,8 +845,8 @@ export function computeCanvasBounds(
   }
 
   for (const geom of geometries) {
-    maxRight = Math.max(maxRight, geom.labelX + 140);
-    maxBottom = Math.max(maxBottom, geom.labelY + 48);
+    maxRight = Math.max(maxRight, geom.anchorX + 96, geom.labelX + 140);
+    maxBottom = Math.max(maxBottom, geom.anchorY + 64, geom.labelY + 48);
   }
 
   return {
