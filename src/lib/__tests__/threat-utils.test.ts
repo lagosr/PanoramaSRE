@@ -1,22 +1,40 @@
 import { describe, it, expect } from 'vitest';
 import {
+  buildActorCountryOptions,
+  buildActorVectorOptions,
   buildCloudflareSecurityEventsUrl,
   buildCloudflareZeroTrustLogsUrl,
+  buildDomainFilterOptions,
+  buildExternalFindingVectorOptions,
+  buildSeverityFilterOptions,
   buildUnifiConsoleUrl,
   buildWafRuleExpression,
   classifyActionSurface,
   classifyAllowlistSurface,
   classifyFindingSurface,
+  classifyFindingVector,
   collectorStatusToBadgeVariant,
   computeThreatSidebarBadge,
+  extractRootZone,
+  filterExternalCampaigns,
+  filterExternalFindings,
   filterLanClients,
   filterThreatActors,
   formatCompactBytes,
+  matchesDomainFilter,
+  matchesSeverityFilter,
+  normalizeHostname,
   safeParseJson,
   severityToBadgeVariant,
   verdictToBadgeVariant,
 } from '../threat-utils';
-import type { LanClientBaselineRow, ThreatActorRow, ThreatAuditRunRow } from '../types';
+import type {
+  GeminiCampaignDto,
+  LanClientBaselineRow,
+  ThreatActorRow,
+  ThreatAuditRunRow,
+  ThreatFindingRow,
+} from '../types';
 
 function makeRun(overrides: Partial<ThreatAuditRunRow> = {}): ThreatAuditRunRow {
   return {
@@ -255,5 +273,206 @@ describe('threat-utils', () => {
       'AA:BB:CC:11:22:33',
     ]);
     expect(filterLanClients(lan, 'DD:EE:FF', 'TRUSTED')).toHaveLength(1);
+  });
+
+  it('normalizes hostnames, builds deduplicated domain options, and matches zone vs exact hosts', () => {
+    expect(normalizeHostname('HTTPS://WSH.PanoramaDR.com:443/api/health.')).toBe('wsh.panoramadr.com');
+    expect(extractRootZone('wsh.panoramadr.com', ['panoramadr.com', 'parakith.com'])).toBe(
+      'panoramadr.com'
+    );
+    expect(extractRootZone('sub.customzone.io')).toBe('customzone.io');
+
+    const hostsList = [
+      ['panoramadr.com', 'wsh.panoramadr.com'],
+      ['panoramadr.com'],
+      ['parakith.com'],
+      [],
+    ];
+    const domainOpts = buildDomainFilterOptions(hostsList, ['panoramadr.com', 'parakith.com']);
+    expect(domainOpts.map((o) => o.value)).toEqual([
+      'ALL',
+      'zone:panoramadr.com',
+      'zone:parakith.com',
+      'host:panoramadr.com',
+      'host:wsh.panoramadr.com',
+      'NONE',
+    ]);
+    expect(domainOpts.find((o) => o.value === 'zone:panoramadr.com')?.label).toBe(
+      'panoramadr.com (Zone) (2)'
+    );
+    expect(domainOpts.find((o) => o.value === 'NONE')?.label).toBe('Account-Wide / No Host (1)');
+
+    expect(matchesDomainFilter(['panoramadr.com'], 'zone:panoramadr.com')).toBe(true);
+    expect(matchesDomainFilter(['wsh.panoramadr.com'], 'zone:panoramadr.com')).toBe(true);
+    expect(matchesDomainFilter(['panoramadr.com'], 'host:wsh.panoramadr.com')).toBe(false);
+    expect(matchesDomainFilter(['wsh.panoramadr.com'], 'host:wsh.panoramadr.com')).toBe(true);
+    expect(matchesDomainFilter([], 'NONE')).toBe(true);
+    expect(matchesDomainFilter(['parakith.com'], 'NONE')).toBe(false);
+  });
+
+  it('filters Cloudflare external findings by domain, severity, vector, and search query', () => {
+    const makeFinding = (overrides: Partial<ThreatFindingRow> = {}): ThreatFindingRow => ({
+      id: 'f-1',
+      runId: 'run-1',
+      sourceLayer: 'CLOUDFLARE',
+      ruleId: 'SECRET_EXPLOIT_PROBE',
+      severity: 'MEDIUM',
+      category: 'HTTP_ATTACK',
+      title: 'Automated Secret/Exploit Probing',
+      summary: 'Probed /.env',
+      host: 'parakith.com',
+      actorIp: '198.51.100.10',
+      actorAsn: 'AS14061',
+      rayIdsJson: '["ray-111"]',
+      evidenceJson: '{}',
+      createdAt: '2026-11-22T12:00:00Z',
+      ...overrides,
+    });
+
+    const findings: ThreatFindingRow[] = [
+      makeFinding({ id: 'f-origin', ruleId: 'ORIGIN_BREACH_THROUGH', severity: 'HIGH', category: 'ORIGIN_BREACH', host: 'wsh.panoramadr.com', rayIdsJson: '["ray-origin"]' }),
+      makeFinding({ id: 'f-probe', ruleId: 'SECRET_EXPLOIT_PROBE', severity: 'MEDIUM', category: 'HTTP_ATTACK', host: 'parakith.com' }),
+      makeFinding({ id: 'f-intel', ruleId: 'MALICIOUS_INTEL_HIT', severity: 'CRITICAL', category: 'HTTP_ATTACK', host: 'panoramadr.com' }),
+      makeFinding({ id: 'f-zt', ruleId: 'ZT_UNEXPECTED_ACCESS', severity: 'HIGH', category: 'ZERO_TRUST', host: 'wsh.panoramadr.com' }),
+      makeFinding({ id: 'f-tun', ruleId: 'TUNNEL_DEGRADED', severity: 'MEDIUM', category: 'TUNNEL', host: 'wsh.panoramadr.com' }),
+      makeFinding({ id: 'f-aud', ruleId: 'CONTROL_PLANE_MUTATION', severity: 'MEDIUM', category: 'AUDIT_LOG', host: null }),
+    ];
+
+    expect(classifyFindingVector(findings[0])).toBe('ORIGIN_BREACH');
+    expect(classifyFindingVector(findings[1])).toBe('EXPLOIT_PROBES');
+    expect(classifyFindingVector(findings[2])).toBe('INTEL_TAGGED');
+    expect(classifyFindingVector(findings[3])).toBe('ZERO_TRUST');
+    expect(classifyFindingVector(findings[4])).toBe('TUNNEL');
+    expect(classifyFindingVector(findings[5])).toBe('AUDIT_LOG');
+
+    const vecOpts = buildExternalFindingVectorOptions(findings);
+    expect(vecOpts.find((v) => v.value === 'ALL')?.label).toBe('All Vectors (6)');
+    expect(vecOpts.find((v) => v.value === 'ORIGIN_BREACH')?.label).toBe('Origin Breach (200/302) (1)');
+
+    expect(matchesSeverityFilter('HIGH', 'CRITICAL_HIGH')).toBe(true);
+    expect(matchesSeverityFilter('CRITICAL', 'CRITICAL_HIGH')).toBe(true);
+    expect(matchesSeverityFilter('MEDIUM', 'CRITICAL_HIGH')).toBe(false);
+
+    const sevOpts = buildSeverityFilterOptions(findings.map((f) => f.severity));
+    expect(sevOpts.find((s) => s.value === 'CRITICAL_HIGH')?.label).toBe('Critical & High (3)');
+
+    expect(
+      filterExternalFindings(findings, { search: '', domain: 'zone:panoramadr.com', severity: 'ALL', vector: 'ALL' }).map((f) => f.id)
+    ).toEqual(['f-origin', 'f-intel', 'f-zt', 'f-tun']);
+    expect(
+      filterExternalFindings(findings, { search: '', domain: 'host:wsh.panoramadr.com', severity: 'CRITICAL_HIGH', vector: 'ALL' }).map((f) => f.id)
+    ).toEqual(['f-origin', 'f-zt']);
+    expect(
+      filterExternalFindings(findings, { search: 'ray-origin', domain: 'ALL', severity: 'ALL', vector: 'ORIGIN_BREACH' }).map((f) => f.id)
+    ).toEqual(['f-origin']);
+    expect(
+      filterExternalFindings(findings, { search: '', domain: 'NONE', severity: 'ALL', vector: 'AUDIT_LOG' }).map((f) => f.id)
+    ).toEqual(['f-aud']);
+  });
+
+  it('filters external threat actors and campaigns by domain, severity, vector, and country', () => {
+    const actors: ThreatActorRow[] = [
+      makeActor({
+        id: '198.51.100.1',
+        ipAddress: '198.51.100.1',
+        country: 'CN',
+        highestSeverity: 'HIGH',
+        totalOrigin200s: 3,
+        runsSeen: 4,
+        intelTagsJson: '["botnet"]',
+        latestClassification: 'EXPLOIT_ATTEMPT',
+        targetHostsJson: '["wsh.panoramadr.com"]',
+        samplePathsJson: '["/.env","/wp-login.php"]',
+      }),
+      makeActor({
+        id: '203.0.113.2',
+        ipAddress: '203.0.113.2',
+        country: 'US',
+        highestSeverity: 'LOW',
+        totalOrigin200s: 0,
+        runsSeen: 1,
+        intelTagsJson: '[]',
+        latestClassification: 'BENIGN_CRAWLER',
+        targetHostsJson: '["parakith.com"]',
+        samplePathsJson: '["/robots.txt"]',
+      }),
+      makeActor({
+        id: '192.0.2.3',
+        ipAddress: '192.0.2.3',
+        country: '',
+        highestSeverity: 'CRITICAL',
+        totalOrigin200s: 0,
+        runsSeen: 2,
+        intelTagsJson: '["scanner"]',
+        latestClassification: 'TARGETED_RECON',
+        targetHostsJson: '["parakith.com"]',
+        samplePathsJson: '["/api/health","/wp-admin"]',
+      }),
+    ];
+
+    expect(
+      filterThreatActors(actors, '', 'ACTIVE', {
+        domain: 'zone:panoramadr.com',
+        severity: 'CRITICAL_HIGH',
+        vector: 'ORIGIN_CROSSOVER',
+        country: 'NON_US',
+      }).map((a) => a.id)
+    ).toEqual(['198.51.100.1']);
+
+    expect(
+      filterThreatActors(actors, '', 'ACTIVE', {
+        vector: 'REPEAT_OFFENDER',
+        country: 'UNKNOWN',
+      }).map((a) => a.id)
+    ).toEqual(['192.0.2.3']);
+
+    expect(
+      filterThreatActors(actors, '', 'ACTIVE', {
+        vector: 'EXPLOIT_PROBES',
+      }).map((a) => a.id)
+    ).toEqual(['198.51.100.1', '192.0.2.3']);
+
+    expect(
+      filterThreatActors(actors, '', 'ACTIVE', {
+        vector: 'CLASS:BENIGN_CRAWLER',
+        country: 'US',
+      }).map((a) => a.id)
+    ).toEqual(['203.0.113.2']);
+
+    const actorVecOpts = buildActorVectorOptions(actors);
+    expect(actorVecOpts.find((o) => o.value === 'ORIGIN_CROSSOVER')?.label).toBe('Origin 200 Crossover (1)');
+    expect(actorVecOpts.find((o) => o.value === 'CLASS:EXPLOIT_ATTEMPT')?.label).toBe(
+      'Class: Exploit Attempt (1)'
+    );
+
+    const countryOpts = buildActorCountryOptions(actors);
+    expect(countryOpts.map((o) => o.value)).toEqual(['ALL', 'NON_US', 'US', 'CN', 'UNKNOWN']);
+    expect(countryOpts.find((o) => o.value === 'NON_US')?.label).toBe('Non-US Traffic (1)');
+
+    const campaigns: GeminiCampaignDto[] = [
+      {
+        name: 'WP Recon',
+        severity: 'MEDIUM',
+        sourceLayers: ['CLOUDFLARE'],
+        targetHosts: ['parakith.com'],
+        pattern: '/wp-login.php',
+        countEstimate: 120,
+        sampleRayIds: ['r1'],
+      },
+      {
+        name: 'Root Probe on WSH',
+        severity: 'HIGH',
+        sourceLayers: ['CLOUDFLARE'],
+        targetHosts: ['wsh.panoramadr.com'],
+        pattern: '/api/admin',
+        countEstimate: 5,
+        sampleRayIds: ['r2'],
+      },
+    ];
+    expect(
+      filterExternalCampaigns(campaigns, { domain: 'host:wsh.panoramadr.com', severity: 'CRITICAL_HIGH' }).map(
+        (c) => c.name
+      )
+    ).toEqual(['Root Probe on WSH']);
   });
 });

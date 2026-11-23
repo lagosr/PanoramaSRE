@@ -31,6 +31,8 @@ import {
   ArrowRight,
   ArrowLeftRight,
   Info,
+  Filter,
+  X,
 } from 'lucide-react';
 import { CustomSelect } from '../ui/CustomSelect';
 import { WorkStreamContainer } from '../ui/WorkStreamContainer';
@@ -39,17 +41,25 @@ import { formatLocalDateTime, formatRelativeTime } from '../../lib/formatters';
 import type { UnifiSiemAction } from '../../lib/script-adapters';
 import { getVlanBadgeStyle } from '../../lib/unifi-zbf';
 import {
+  buildActorCountryOptions,
+  buildActorVectorOptions,
   buildCloudflareSecurityEventsUrl,
   buildCloudflareZeroTrustLogsUrl,
+  buildDomainFilterOptions,
+  buildExternalFindingVectorOptions,
+  buildSeverityFilterOptions,
   buildUnifiConsoleUrl,
   buildWafRuleExpression,
   classifyActionSurface,
   classifyAllowlistSurface,
   classifyFindingSurface,
   collectorStatusToBadgeVariant,
+  filterExternalCampaigns,
+  filterExternalFindings,
   filterLanClients,
   filterThreatActors,
   formatCompactBytes,
+  normalizeHostname,
   safeParseJson,
   severityToBadgeVariant,
   verdictToBadgeVariant,
@@ -172,10 +182,20 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   const [lookbackHours, setLookbackHours] = useState<string>('6');
   const [auditElapsedSec, setAuditElapsedSec] = useState<number>(0);
 
-  // External Threat Actors state
+  // External Threat Actors, Findings & Campaigns filter state
   const [actors, setActors] = useState<ThreatActorRow[]>([]);
   const [actorDispositionFilter, setActorDispositionFilter] = useState<string>('ACTIVE');
   const [actorSearch, setActorSearch] = useState<string>('');
+  const [actorDomainFilter, setActorDomainFilter] = useState<string>('ALL');
+  const [actorSeverityFilter, setActorSeverityFilter] = useState<string>('ALL');
+  const [actorVectorFilter, setActorVectorFilter] = useState<string>('ALL');
+  const [actorCountryFilter, setActorCountryFilter] = useState<string>('ALL');
+  const [findingSearch, setFindingSearch] = useState<string>('');
+  const [findingDomainFilter, setFindingDomainFilter] = useState<string>('ALL');
+  const [findingSeverityFilter, setFindingSeverityFilter] = useState<string>('ALL');
+  const [findingVectorFilter, setFindingVectorFilter] = useState<string>('ALL');
+  const [campaignDomainFilter, setCampaignDomainFilter] = useState<string>('ALL');
+  const [campaignSeverityFilter, setCampaignSeverityFilter] = useState<string>('ALL');
   const [isLoadingActors, setIsLoadingActors] = useState<boolean>(false);
 
   // Internal LAN Baseline, VLAN/ZBF Topology, Allowlist & UniFi SIEM .env.siem state
@@ -353,10 +373,189 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
     [zonesSummary]
   );
 
-  const filteredActors = useMemo(
-    () => filterThreatActors(actors, actorSearch, actorDispositionFilter),
-    [actors, actorSearch, actorDispositionFilter]
+  const knownCfZones = useMemo(() => {
+    const zoneSet = new Set<string>(['panoramadr.com', 'parakith.com']);
+    for (const z of zonesSummary) {
+      const clean = normalizeHostname(z.name);
+      if (clean) zoneSet.add(clean);
+    }
+    return Array.from(zoneSet);
+  }, [zonesSummary]);
+
+  const activeQuickZoneFilter = useMemo(() => {
+    if (
+      campaignDomainFilter !== 'ALL' &&
+      campaignDomainFilter === findingDomainFilter &&
+      findingDomainFilter === actorDomainFilter
+    ) {
+      return campaignDomainFilter;
+    }
+    return '';
+  }, [campaignDomainFilter, findingDomainFilter, actorDomainFilter]);
+
+  const handleToggleExternalZoneFilter = useCallback(
+    (zoneName: string) => {
+      const cleanZone = normalizeHostname(zoneName);
+      if (!cleanZone) return;
+      const targetVal = `zone:${cleanZone}`;
+      const isAlreadySelected =
+        campaignDomainFilter === targetVal &&
+        findingDomainFilter === targetVal &&
+        actorDomainFilter === targetVal;
+      const next = isAlreadySelected ? 'ALL' : targetVal;
+      setCampaignDomainFilter(next);
+      setFindingDomainFilter(next);
+      setActorDomainFilter(next);
+    },
+    [campaignDomainFilter, findingDomainFilter, actorDomainFilter]
   );
+
+  const externalFindings = useMemo(
+    () => activeFindings.filter((f) => classifyFindingSurface(f.sourceLayer) === 'external'),
+    [activeFindings]
+  );
+
+  const internalFindings = useMemo(
+    () => activeFindings.filter((f) => classifyFindingSurface(f.sourceLayer) === 'internal'),
+    [activeFindings]
+  );
+
+  const externalCampaigns = useMemo(
+    () => geminiBrief?.attackCampaigns ?? [],
+    [geminiBrief]
+  );
+
+  const campaignDomainOptions = useMemo(
+    () =>
+      buildDomainFilterOptions(
+        externalCampaigns.map((c) => c.targetHosts),
+        knownCfZones
+      ),
+    [externalCampaigns, knownCfZones]
+  );
+
+  const campaignSeverityOptions = useMemo(
+    () => buildSeverityFilterOptions(externalCampaigns.map((c) => c.severity)),
+    [externalCampaigns]
+  );
+
+  const filteredExternalCampaigns = useMemo(
+    () =>
+      filterExternalCampaigns(externalCampaigns, {
+        domain: campaignDomainFilter,
+        severity: campaignSeverityFilter,
+      }),
+    [externalCampaigns, campaignDomainFilter, campaignSeverityFilter]
+  );
+
+  const hasActiveCampaignFilters =
+    campaignDomainFilter !== 'ALL' || campaignSeverityFilter !== 'ALL';
+
+  const clearCampaignFilters = useCallback(() => {
+    setCampaignDomainFilter('ALL');
+    setCampaignSeverityFilter('ALL');
+  }, []);
+
+  const findingDomainOptions = useMemo(
+    () =>
+      buildDomainFilterOptions(
+        externalFindings.map((f) => [f.host]),
+        knownCfZones
+      ),
+    [externalFindings, knownCfZones]
+  );
+
+  const findingSeverityOptions = useMemo(
+    () => buildSeverityFilterOptions(externalFindings.map((f) => f.severity)),
+    [externalFindings]
+  );
+
+  const findingVectorOptions = useMemo(
+    () => buildExternalFindingVectorOptions(externalFindings),
+    [externalFindings]
+  );
+
+  const filteredExternalFindings = useMemo(
+    () =>
+      filterExternalFindings(externalFindings, {
+        search: findingSearch,
+        domain: findingDomainFilter,
+        severity: findingSeverityFilter,
+        vector: findingVectorFilter,
+      }),
+    [externalFindings, findingSearch, findingDomainFilter, findingSeverityFilter, findingVectorFilter]
+  );
+
+  const hasActiveFindingFilters =
+    findingSearch.trim().length > 0 ||
+    findingDomainFilter !== 'ALL' ||
+    findingSeverityFilter !== 'ALL' ||
+    findingVectorFilter !== 'ALL';
+
+  const clearFindingFilters = useCallback(() => {
+    setFindingSearch('');
+    setFindingDomainFilter('ALL');
+    setFindingSeverityFilter('ALL');
+    setFindingVectorFilter('ALL');
+  }, []);
+
+  const actorDomainOptions = useMemo(
+    () =>
+      buildDomainFilterOptions(
+        actors.map((a) => safeParseJson<string[]>(a.targetHostsJson, [])),
+        knownCfZones
+      ),
+    [actors, knownCfZones]
+  );
+
+  const actorSeverityOptions = useMemo(
+    () => buildSeverityFilterOptions(actors.map((a) => a.highestSeverity)),
+    [actors]
+  );
+
+  const actorVectorOptions = useMemo(
+    () => buildActorVectorOptions(actors),
+    [actors]
+  );
+
+  const actorCountryOptions = useMemo(
+    () => buildActorCountryOptions(actors),
+    [actors]
+  );
+
+  const filteredActors = useMemo(
+    () =>
+      filterThreatActors(actors, actorSearch, actorDispositionFilter, {
+        domain: actorDomainFilter,
+        severity: actorSeverityFilter,
+        vector: actorVectorFilter,
+        country: actorCountryFilter,
+      }),
+    [
+      actors,
+      actorSearch,
+      actorDispositionFilter,
+      actorDomainFilter,
+      actorSeverityFilter,
+      actorVectorFilter,
+      actorCountryFilter,
+    ]
+  );
+
+  const hasActiveActorFilters =
+    actorSearch.trim().length > 0 ||
+    actorDomainFilter !== 'ALL' ||
+    actorSeverityFilter !== 'ALL' ||
+    actorVectorFilter !== 'ALL' ||
+    actorCountryFilter !== 'ALL';
+
+  const clearActorFilters = useCallback(() => {
+    setActorSearch('');
+    setActorDomainFilter('ALL');
+    setActorSeverityFilter('ALL');
+    setActorVectorFilter('ALL');
+    setActorCountryFilter('ALL');
+  }, []);
 
   const trustedLanCount = useMemo(
     () => lanClients.filter((c) => c.isTrusted).length,
@@ -389,16 +588,6 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   const filteredLanClients = useMemo(
     () => filterLanClients(lanClients, lanSearch, lanTrustFilter, lanVlanFilter),
     [lanClients, lanSearch, lanTrustFilter, lanVlanFilter]
-  );
-
-  const externalFindings = useMemo(
-    () => activeFindings.filter((f) => classifyFindingSurface(f.sourceLayer) === 'external'),
-    [activeFindings]
-  );
-
-  const internalFindings = useMemo(
-    () => activeFindings.filter((f) => classifyFindingSurface(f.sourceLayer) === 'internal'),
-    [activeFindings]
   );
 
   const externalActions = useMemo(
@@ -1396,7 +1585,13 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
 
             {/* External Telemetry Detail Grid */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 tabular-nums pt-2 border-t border-slate-200 dark:border-slate-800">
-              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5">
+              <div
+                className={`p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border space-y-1.5 transition-colors ${
+                  activeQuickZoneFilter === 'zone:panoramadr.com'
+                    ? 'border-[var(--color-brand)] ring-1 ring-[var(--color-brand-ring)]'
+                    : 'border-slate-200 dark:border-slate-800'
+                }`}
+              >
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-mono font-semibold text-slate-700 dark:text-slate-300">
                     panoramadr.com
@@ -1414,9 +1609,33 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                     Origin 200s: {panoramaZone?.untrustedOrigin200s ?? 0}
                   </span>
                 </div>
+                <div className="pt-1 flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleExternalZoneFilter('panoramadr.com')}
+                    className={`min-h-[36px] px-2.5 py-1 rounded-lg border text-[11px] font-mono inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 transition-colors cursor-pointer ${
+                      activeQuickZoneFilter === 'zone:panoramadr.com'
+                        ? 'bg-[var(--color-brand-subtle)] border-[var(--color-brand-ring)] text-[var(--color-brand-text)] font-semibold'
+                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-[var(--color-brand)]'
+                    }`}
+                  >
+                    <Filter className="w-3 h-3 shrink-0" />
+                    <span>
+                      {activeQuickZoneFilter === 'zone:panoramadr.com'
+                        ? 'Filtering Zone ✓'
+                        : 'Filter Tables'}
+                    </span>
+                  </button>
+                </div>
               </div>
 
-              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5">
+              <div
+                className={`p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border space-y-1.5 transition-colors ${
+                  activeQuickZoneFilter === 'zone:parakith.com'
+                    ? 'border-[var(--color-brand)] ring-1 ring-[var(--color-brand-ring)]'
+                    : 'border-slate-200 dark:border-slate-800'
+                }`}
+              >
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-mono font-semibold text-slate-700 dark:text-slate-300">
                     parakith.com
@@ -1431,6 +1650,24 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                   <span>4xx/5xx: {parakithZone?.error4xx5xx ?? 0}</span>
                   <span>WAF hits: {parakithZone?.firewallEventsCount ?? 0}</span>
                   <span>Bandwidth: {formatCompactBytes(parakithZone?.totalBytes ?? 0)}</span>
+                </div>
+                <div className="pt-1 flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleExternalZoneFilter('parakith.com')}
+                    className={`min-h-[36px] px-2.5 py-1 rounded-lg border text-[11px] font-mono inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 transition-colors cursor-pointer ${
+                      activeQuickZoneFilter === 'zone:parakith.com'
+                        ? 'bg-[var(--color-brand-subtle)] border-[var(--color-brand-ring)] text-[var(--color-brand-text)] font-semibold'
+                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-[var(--color-brand)]'
+                    }`}
+                  >
+                    <Filter className="w-3 h-3 shrink-0" />
+                    <span>
+                      {activeQuickZoneFilter === 'zone:parakith.com'
+                        ? 'Filtering Zone ✓'
+                        : 'Filter Tables'}
+                    </span>
+                  </button>
                 </div>
               </div>
 
@@ -1496,93 +1733,143 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
           </div>
 
           {/* External Gemini Attack Campaigns & Mitigations */}
-          {geminiBrief && (geminiBrief.attackCampaigns.length > 0 || externalActions.length > 0) && (
+          {geminiBrief && (externalCampaigns.length > 0 || externalActions.length > 0) && (
             <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
-              {geminiBrief.attackCampaigns.length > 0 && (
+              {externalCampaigns.length > 0 && (
                 <div className="space-y-3">
-                  <div className="text-xs font-mono font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
-                    External Attack Campaigns ({geminiBrief.attackCampaigns.length})
-                  </div>
-                  <div className="space-y-3">
-                    {geminiBrief.attackCampaigns.map((camp, idx) => {
-                      const copyId = `ext-camp-waf-${idx}`;
-                      return (
-                        <div
-                          key={`${camp.name}-${idx}`}
-                          className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-2.5"
+                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
+                    <div className="text-xs font-mono font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider tabular-nums">
+                      External Attack Campaigns (
+                      {hasActiveCampaignFilters
+                        ? `${filteredExternalCampaigns.length} / ${externalCampaigns.length}`
+                        : externalCampaigns.length}
+                      )
+                    </div>
+
+                    <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
+                      <div className="w-full sm:w-56">
+                        <CustomSelect
+                          value={campaignDomainFilter}
+                          onChange={setCampaignDomainFilter}
+                          options={campaignDomainOptions}
+                        />
+                      </div>
+                      <div className="w-full sm:w-48">
+                        <CustomSelect
+                          value={campaignSeverityFilter}
+                          onChange={setCampaignSeverityFilter}
+                          options={campaignSeverityOptions}
+                        />
+                      </div>
+                      {hasActiveCampaignFilters && (
+                        <button
+                          type="button"
+                          onClick={clearCampaignFilters}
+                          className="btn-ghost text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
                         >
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <StatusBadge
-                                label={camp.severity}
-                                variant={severityToBadgeVariant(camp.severity)}
-                              />
-                              <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                                {camp.name}
-                              </span>
-                              <span className="text-xs font-mono text-slate-500 tabular-nums">
-                                ~{camp.countEstimate} events
-                              </span>
-                            </div>
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              {camp.targetHosts.map((h) => (
-                                <span
-                                  key={h}
-                                  className="px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-[11px] font-mono text-slate-700 dark:text-slate-300"
-                                >
-                                  {h}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-
-                          <p className="text-xs text-slate-700 dark:text-slate-300">{camp.pattern}</p>
-
-                          {camp.sampleRayIds.length > 0 && (
-                            <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-mono">
-                              <span className="text-slate-500">Ray IDs:</span>
-                              {camp.sampleRayIds.slice(0, 6).map((ray) => (
-                                <button
-                                  key={ray}
-                                  type="button"
-                                  onClick={() => void handleCopyText(`ray-${ray}`, ray)}
-                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-[var(--color-brand)] cursor-pointer"
-                                  title="Click to copy Cloudflare Ray ID"
-                                >
-                                  <span>{ray}</span>
-                                  {copiedKey === `ray-${ray}` ? (
-                                    <Check className="w-3 h-3 text-emerald-500" />
-                                  ) : (
-                                    <Copy className="w-3 h-3 opacity-60" />
-                                  )}
-                                </button>
-                              ))}
-                            </div>
-                          )}
-
-                          {camp.suggestedWafExpression && (
-                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1">
-                              <pre className="flex-1 overflow-x-auto px-3 py-2 rounded-lg bg-white dark:bg-[#050b14] border border-slate-200/90 dark:border-slate-800 text-emerald-900 dark:text-emerald-400 font-mono text-xs">
-                                {camp.suggestedWafExpression}
-                              </pre>
-                              <button
-                                type="button"
-                                onClick={() => void handleCopyText(copyId, camp.suggestedWafExpression || '')}
-                                className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-                              >
-                                {copiedKey === copyId ? (
-                                  <Check className="w-3.5 h-3.5 text-emerald-500" />
-                                ) : (
-                                  <Copy className="w-3.5 h-3.5" />
-                                )}
-                                <span>{copiedKey === copyId ? 'Copied!' : 'Copy WAF Rule'}</span>
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
+                          <X className="w-3.5 h-3.5" />
+                          <span>Clear</span>
+                        </button>
+                      )}
+                    </div>
                   </div>
+
+                  {filteredExternalCampaigns.length === 0 ? (
+                    <div className="p-6 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-center space-y-2.5">
+                      <div className="text-xs text-slate-500 dark:text-slate-400">
+                        No attack campaigns match the selected domain or severity filter.
+                      </div>
+                      <button
+                        type="button"
+                        onClick={clearCampaignFilters}
+                        className="btn-secondary text-xs inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                        <span>Clear Campaign Filters</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {filteredExternalCampaigns.map((camp, idx) => {
+                        const copyId = `ext-camp-waf-${camp.name}-${idx}`;
+                        return (
+                          <div
+                            key={`${camp.name}-${camp.severity}-${idx}`}
+                            className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-2.5"
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <StatusBadge
+                                  label={camp.severity}
+                                  variant={severityToBadgeVariant(camp.severity)}
+                                />
+                                <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                                  {camp.name}
+                                </span>
+                                <span className="text-xs font-mono text-slate-500 tabular-nums">
+                                  ~{camp.countEstimate} events
+                                </span>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                {camp.targetHosts.map((h) => (
+                                  <span
+                                    key={h}
+                                    className="px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-[11px] font-mono text-slate-700 dark:text-slate-300"
+                                  >
+                                    {h}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+
+                            <p className="text-xs text-slate-700 dark:text-slate-300">{camp.pattern}</p>
+
+                            {camp.sampleRayIds.length > 0 && (
+                              <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-mono">
+                                <span className="text-slate-500">Ray IDs:</span>
+                                {camp.sampleRayIds.slice(0, 6).map((ray) => (
+                                  <button
+                                    key={ray}
+                                    type="button"
+                                    onClick={() => void handleCopyText(`ray-${ray}`, ray)}
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-[var(--color-brand)] cursor-pointer"
+                                    title="Click to copy Cloudflare Ray ID"
+                                  >
+                                    <span>{ray}</span>
+                                    {copiedKey === `ray-${ray}` ? (
+                                      <Check className="w-3 h-3 text-emerald-500" />
+                                    ) : (
+                                      <Copy className="w-3 h-3 opacity-60" />
+                                    )}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+
+                            {camp.suggestedWafExpression && (
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1">
+                                <pre className="flex-1 overflow-x-auto px-3 py-2 rounded-lg bg-white dark:bg-[#050b14] border border-slate-200/90 dark:border-slate-800 text-emerald-900 dark:text-emerald-400 font-mono text-xs">
+                                  {camp.suggestedWafExpression}
+                                </pre>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleCopyText(copyId, camp.suggestedWafExpression || '')}
+                                  className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                                >
+                                  {copiedKey === copyId ? (
+                                    <Check className="w-3.5 h-3.5 text-emerald-500" />
+                                  ) : (
+                                    <Copy className="w-3.5 h-3.5" />
+                                  )}
+                                  <span>{copiedKey === copyId ? 'Copied!' : 'Copy WAF Rule'}</span>
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1602,13 +1889,60 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <ShieldCheck className="w-5 h-5 text-[var(--color-brand-text)]" />
-                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
-                  External Perimeter Findings ({externalFindings.length})
+                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 tabular-nums">
+                  External Perimeter Findings (
+                  {hasActiveFindingFilters
+                    ? `${filteredExternalFindings.length} / ${externalFindings.length}`
+                    : externalFindings.length}
+                  )
                 </h3>
               </div>
-              <span className="text-xs font-mono text-slate-500 dark:text-slate-400">
-                Cloudflare HTTP/WAF, IP Threat Intel, Zero Trust Access &amp; Tunnel rules
-              </span>
+              <div className="flex flex-wrap items-center gap-2">
+                {hasActiveFindingFilters && (
+                  <button
+                    type="button"
+                    onClick={clearFindingFilters}
+                    className="btn-ghost text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                    <span>Clear Filters</span>
+                  </button>
+                )}
+                <span className="text-xs font-mono text-slate-500 dark:text-slate-400">
+                  Cloudflare HTTP/WAF, IP Threat Intel, Zero Trust Access &amp; Tunnel rules
+                </span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={findingSearch}
+                  onChange={(e) => setFindingSearch(e.target.value)}
+                  placeholder="Filter IP, ASN, host, rule, ray ID..."
+                  className="w-full min-h-[40px] pl-8 pr-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
+                />
+              </div>
+
+              <CustomSelect
+                value={findingDomainFilter}
+                onChange={setFindingDomainFilter}
+                options={findingDomainOptions}
+              />
+
+              <CustomSelect
+                value={findingVectorFilter}
+                onChange={setFindingVectorFilter}
+                options={findingVectorOptions}
+              />
+
+              <CustomSelect
+                value={findingSeverityFilter}
+                onChange={setFindingSeverityFilter}
+                options={findingSeverityOptions}
+              />
             </div>
 
             {externalFindings.length === 0 ? (
@@ -1618,36 +1952,75 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                   No External Deterministic Anomalies Flagged in This Window
                 </div>
               </div>
+            ) : filteredExternalFindings.length === 0 ? (
+              <div className="p-6 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-center space-y-2.5">
+                <div className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+                  No External Findings Match Active Filters
+                </div>
+                <button
+                  type="button"
+                  onClick={clearFindingFilters}
+                  className="btn-secondary text-xs inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  <span>Clear Finding Filters</span>
+                </button>
+              </div>
             ) : (
-              <div className="space-y-3">{externalFindings.map(renderFindingRow)}</div>
+              <div className="space-y-3">{filteredExternalFindings.map(renderFindingRow)}</div>
             )}
           </div>
 
           {/* Recurring External Threat Actors Ledger */}
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
-                  Recurring External Threat Actors ({filteredActors.length})
+                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 tabular-nums">
+                  Recurring External Threat Actors (
+                  {hasActiveActorFilters
+                    ? `${filteredActors.length} / ${actors.length}`
+                    : filteredActors.length}
+                  )
                 </h3>
                 <p className="text-xs text-slate-600 dark:text-slate-400">
                   Cross-run external IP/ASN tracking with origin-reach cross-over alerts and 1-click Cloudflare WAF rules.
                 </p>
               </div>
 
-              <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
-                <div className="relative flex-1 sm:w-64">
+              {hasActiveActorFilters && (
+                <button
+                  type="button"
+                  onClick={clearActorFilters}
+                  className="btn-ghost text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  <span>Clear Filters</span>
+                </button>
+              )}
+            </div>
+
+            <div className="space-y-2.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-2.5">
+                <div className="relative sm:col-span-2 lg:col-span-6">
                   <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                   <input
                     type="text"
                     value={actorSearch}
                     onChange={(e) => setActorSearch(e.target.value)}
-                    placeholder="Filter IP, ASN, org, host..."
-                    className="w-full pl-8 pr-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
+                    placeholder="Filter IP, ASN, org, host, path..."
+                    className="w-full min-h-[40px] pl-8 pr-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
                   />
                 </div>
 
-                <div className="w-40">
+                <div className="lg:col-span-3">
+                  <CustomSelect
+                    value={actorDomainFilter}
+                    onChange={setActorDomainFilter}
+                    options={actorDomainOptions}
+                  />
+                </div>
+
+                <div className="lg:col-span-3">
                   <CustomSelect
                     value={actorDispositionFilter}
                     onChange={setActorDispositionFilter}
@@ -1659,6 +2032,26 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                     ]}
                   />
                 </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <CustomSelect
+                  value={actorVectorFilter}
+                  onChange={setActorVectorFilter}
+                  options={actorVectorOptions}
+                />
+
+                <CustomSelect
+                  value={actorSeverityFilter}
+                  onChange={setActorSeverityFilter}
+                  options={actorSeverityOptions}
+                />
+
+                <CustomSelect
+                  value={actorCountryFilter}
+                  onChange={setActorCountryFilter}
+                  options={actorCountryOptions}
+                />
               </div>
             </div>
 
@@ -1677,8 +2070,22 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
             {isLoadingActors ? (
               <div className="p-8 text-center text-xs font-mono text-slate-500">Loading threat actors...</div>
             ) : filteredActors.length === 0 ? (
-              <div className="p-8 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-center text-xs text-slate-500">
-                No threat actors match the selected disposition filter.
+              <div className="p-8 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-center space-y-2.5 text-xs text-slate-500">
+                <div>
+                  {actors.length > 0 && hasActiveActorFilters
+                    ? 'No threat actors match the active domain, vector, severity, country, or search filters.'
+                    : 'No threat actors match the selected disposition filter.'}
+                </div>
+                {actors.length > 0 && hasActiveActorFilters && (
+                  <button
+                    type="button"
+                    onClick={clearActorFilters}
+                    className="btn-secondary text-xs inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                    <span>Clear Actor Filters</span>
+                  </button>
+                )}
               </div>
             ) : (
               <div className="space-y-3">
