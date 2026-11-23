@@ -179,6 +179,7 @@ pub fn run() {
             get_lan_clients_baseline,
             set_lan_client_trusted,
             trust_all_lan_clients,
+            get_unifi_network_topology,
             get_threat_allowlist,
             upsert_threat_allowlist,
             delete_threat_allowlist,

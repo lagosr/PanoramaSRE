@@ -235,12 +235,23 @@ export function classifyAllowlistSurface(entryType: string): 'external' | 'inter
 export function filterLanClients(
   clients: LanClientBaselineRow[],
   search: string,
-  trustFilter: 'ALL' | 'TRUSTED' | 'UNREVIEWED'
+  trustFilter: 'ALL' | 'TRUSTED' | 'UNREVIEWED',
+  vlanFilter = 'ALL'
 ): LanClientBaselineRow[] {
   const q = search.trim().toLowerCase();
+  const vlanTarget = vlanFilter.trim().toLowerCase();
   return clients.filter((cli) => {
     if (trustFilter === 'TRUSTED' && !cli.isTrusted) return false;
     if (trustFilter === 'UNREVIEWED' && cli.isTrusted) return false;
+    if (vlanTarget && vlanTarget !== 'all') {
+      const cliVlan = (cli.networkVlan || '').trim().toLowerCase();
+      if (!cliVlan) return false;
+      const matched =
+        cliVlan === vlanTarget ||
+        cliVlan.startsWith(`${vlanTarget} (`) ||
+        vlanTarget.startsWith(`${cliVlan} (`);
+      if (!matched) return false;
+    }
     if (!q) return true;
     const hay = [
       cli.label,

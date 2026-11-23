@@ -29,8 +29,10 @@ mod tests {
         DomainProfile, PanoramaAuthTelemetry, WshSecuritySnapshot,
     };
     use panorama_sre_lib::commands::unifi_ops::{
-        parse_unifi_clients_json, parse_unifi_devices_json, parse_unifi_policies_json,
-        parse_unifi_sites_json, UnifiClientDto, UnifiSecuritySnapshot, UnifiSiteDto,
+        enrich_unifi_topology, merge_unifi_network_detail, parse_unifi_clients_json,
+        parse_unifi_devices_json, parse_unifi_networks_json, parse_unifi_policies_json,
+        parse_unifi_sites_json, parse_unifi_zones_json, UnifiClientDto, UnifiSecuritySnapshot,
+        UnifiSiteDto,
     };
     use panorama_sre_lib::db::{
         ConsoleSessionRecord, LanClientBaselineRow, OptInCacheRow, SreDatabase, ThreatActorRow,
@@ -1061,6 +1063,105 @@ mod tests {
     }
 
     #[test]
+    fn test_unifi_vlan_cidr_matching_and_zbf_policies() {
+        let nets_json = serde_json::json!({
+            "data": [{
+                "id": "net-20",
+                "name": "Untrusted",
+                "enabled": true,
+                "vlanId": 20,
+                "zoneId": "zone-iot",
+                "default": false,
+                "metadata": { "origin": "USER_DEFINED" }
+            }]
+        });
+        let mut nets = parse_unifi_networks_json(&nets_json);
+        assert_eq!(nets.len(), 1);
+        merge_unifi_network_detail(
+            &mut nets[0],
+            &serde_json::json!({
+                "isolationEnabled": false,
+                "internetAccessEnabled": true,
+                "mdnsForwardingEnabled": true,
+                "ipv4Configuration": { "hostIpAddress": "10.10.20.1", "prefixLength": 24 }
+            }),
+        );
+        assert_eq!(nets[0].subnet_cidr.as_deref(), Some("10.10.20.0/24"));
+        assert_eq!(nets[0].gateway_ip.as_deref(), Some("10.10.20.1"));
+        assert!(nets[0].mdns_forwarding_enabled);
+
+        let zones_json = serde_json::json!({
+            "data": [{
+                "id": "zone-iot",
+                "name": "Untrusted & IoT systems",
+                "networkIds": ["net-20"],
+                "metadata": { "origin": "USER_DEFINED" }
+            }]
+        });
+        let mut zones = parse_unifi_zones_json(&zones_json);
+
+        let clients_json = serde_json::json!({
+            "data": [{
+                "id": "c1",
+                "macAddress": "b8:27:eb:0c:15:a6",
+                "ipAddress": "10.10.20.9",
+                "name": "solar-assistant"
+            }]
+        });
+        let mut clients = parse_unifi_clients_json(&clients_json);
+
+        enrich_unifi_topology(&mut nets, &mut zones, &mut clients);
+        assert_eq!(clients[0].network_name.as_deref(), Some("Untrusted (VLAN 20)"));
+        assert_eq!(clients[0].vlan_id, Some(20));
+        assert_eq!(clients[0].zone_name.as_deref(), Some("Untrusted & IoT systems"));
+        assert_eq!(nets[0].client_count, 1);
+        assert_eq!(zones[0].client_count, 1);
+        assert_eq!(zones[0].vlan_ids, vec![20]);
+        assert_eq!(zones[0].network_names, vec!["Untrusted"]);
+
+        let zbf_pol_json = serde_json::json!({
+            "data": [{
+                "id": "zbf-1",
+                "name": "Allow HomeAssistant to UNVR",
+                "enabled": true,
+                "index": 10000,
+                "action": { "type": "ALLOW", "allowReturnTraffic": true },
+                "source": {
+                    "zoneId": "zone-iot",
+                    "trafficFilter": {
+                        "type": "IP_ADDRESS",
+                        "ipAddressFilter": { "items": [{ "value": "10.10.20.50" }] }
+                    }
+                },
+                "destination": {
+                    "zoneId": "zone-cam",
+                    "trafficFilter": {
+                        "type": "PORT",
+                        "portFilter": { "items": [{ "value": 443 }] }
+                    }
+                },
+                "ipProtocolScope": { "protocolFilter": { "protocol": { "name": "TCP" } } },
+                "connectionStateFilter": ["NEW"],
+                "loggingEnabled": true,
+                "schedule": { "mode": "ALWAYS" },
+                "metadata": { "origin": "USER_DEFINED" }
+            }]
+        });
+        let zbf_pols = parse_unifi_policies_json(&zbf_pol_json);
+        assert_eq!(zbf_pols.len(), 1);
+        assert_eq!(zbf_pols[0].origin, "USER_DEFINED");
+        assert_eq!(zbf_pols[0].source_zone_id.as_deref(), Some("zone-iot"));
+        assert_eq!(zbf_pols[0].destination_zone_id.as_deref(), Some("zone-cam"));
+        assert!(zbf_pols[0].allow_return_traffic);
+        assert!(zbf_pols[0].has_source_filter);
+        assert!(zbf_pols[0].has_destination_filter);
+        assert_eq!(zbf_pols[0].protocol.as_deref(), Some("TCP"));
+        assert_eq!(zbf_pols[0].connection_states, vec!["NEW"]);
+        assert!(zbf_pols[0].logging_enabled);
+        assert_eq!(zbf_pols[0].schedule_mode.as_deref(), Some("ALWAYS"));
+    }
+
+    #[test]
     fn test_stage0_split_sensitivity_and_allowlist() {
         assert_eq!(classify_host_sensitivity("wsh.panoramadr.com"), DomainProfile::StrictPrivate);
         assert_eq!(classify_host_sensitivity("parakith.com"), DomainProfile::PublicWeb);
@@ -1147,6 +1248,7 @@ mod tests {
         let unifi_snap = UnifiSecuritySnapshot {
             base_url: "https://ui.panoramadr.com".into(),
             app_version: "9.4".into(),
+            captured_at: "2026-11-22T15:05:00Z".into(),
             sites: vec![UnifiSiteDto { id: "s1".into(), name: "default".into(), internal_reference: None }],
             devices: vec![],
             clients: vec![UnifiClientDto {
@@ -1156,10 +1258,14 @@ mod tests {
                 name: Some("unknown-box".into()),
                 hostname: None,
                 network_name: Some("Kid Safe".into()),
+                vlan_id: Some(100),
+                zone_name: Some("Kids isolation".into()),
                 oui_vendor: Some("Unknown".into()),
                 client_type: Some("WIRED".into()),
             }],
             policies: vec![],
+            networks: vec![],
+            zones: vec![],
         };
         let prior_lan = vec![LanClientBaselineRow {
             mac_address: "11:22:33:44:55:66".into(),

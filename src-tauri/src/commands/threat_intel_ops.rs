@@ -31,6 +31,7 @@ const SETTING_CF_TOKEN_DPAPI: &str = "cf_api_token_dpapi";
 const SETTING_CF_ACCOUNT_ID: &str = "cf_account_id";
 const SETTING_GEMINI_KEY_DPAPI: &str = "gemini_api_key_dpapi";
 const SETTING_UNIFI_KEY_DPAPI: &str = "unifi_api_key_dpapi";
+const SETTING_UNIFI_TOPOLOGY_CACHE: &str = "unifi_topology_cache_v1";
 const THREAT_DEDUP_KEY: &str = "threat_audit::summary";
 const RUN_WINDOWS_REG_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_WINDOWS_REG_VALUE: &str = "PanoramaSRE";
@@ -3051,10 +3052,13 @@ pub async fn execute_threat_audit_pipeline(
         }
     }
 
-    // Update LAN clients baseline in SQLite
+    // Update LAN clients baseline & UniFi topology cache in SQLite
     if let Some(ref unifi) = unifi_opt {
         let now_str = started_at.to_rfc3339();
         if let Ok(guard) = db.lock() {
+            if let Ok(topo_json) = serde_json::to_string(unifi) {
+                let _ = guard.set_setting(SETTING_UNIFI_TOPOLOGY_CACHE, &topo_json);
+            }
             for cli in &unifi.clients {
                 let row = LanClientBaselineRow {
                     mac_address: cli.mac_address.to_ascii_uppercase(),
@@ -3927,6 +3931,65 @@ pub async fn trust_all_lan_clients(
     guard
         .trust_all_lan_clients()
         .map_err(|e| format!("Failed to trust LAN baseline clients: {}", e))
+}
+
+#[tauri::command]
+pub async fn get_unifi_network_topology(
+    db: State<'_, Arc<Mutex<SreDatabase>>>,
+    force_refresh: Option<bool>,
+) -> Result<Option<UnifiSecuritySnapshot>, String> {
+    let force = force_refresh.unwrap_or(false);
+    let (cached_json, base_url, api_key) = {
+        let guard = db.lock().map_err(|e| format!("DB mutex poisoned: {}", e))?;
+        let cached = if !force {
+            guard
+                .get_setting(SETTING_UNIFI_TOPOLOGY_CACHE)
+                .ok()
+                .flatten()
+        } else {
+            None
+        };
+        let prefs = load_threat_preferences(&guard);
+        let key = resolve_dpapi_or_env_secret(&guard, SETTING_UNIFI_KEY_DPAPI, "UNIFI_API_KEY")
+            .map(|r| r.value);
+        (cached, prefs.unifi_base_url, key)
+    };
+
+    if let Some(raw) = cached_json {
+        if let Ok(snap) = serde_json::from_str::<UnifiSecuritySnapshot>(&raw) {
+            if !snap.networks.is_empty() || !snap.zones.is_empty() {
+                return Ok(Some(snap));
+            }
+        }
+    }
+
+    let Some(key) = api_key else {
+        return Ok(None);
+    };
+
+    let snap = collect_unifi_snapshot(&base_url, &key).await?;
+    let now_str = Utc::now().to_rfc3339();
+    if let Ok(guard) = db.lock() {
+        if let Ok(json_str) = serde_json::to_string(&snap) {
+            let _ = guard.set_setting(SETTING_UNIFI_TOPOLOGY_CACHE, &json_str);
+        }
+        for cli in &snap.clients {
+            let row = LanClientBaselineRow {
+                mac_address: cli.mac_address.to_ascii_uppercase(),
+                ip_address: cli.ip_address.clone(),
+                hostname: cli.hostname.clone().or_else(|| cli.name.clone()),
+                network_vlan: cli.network_name.clone(),
+                oui_vendor: cli.oui_vendor.clone(),
+                first_seen_at: now_str.clone(),
+                last_seen_at: now_str.clone(),
+                is_trusted: false,
+                label: cli.name.clone().unwrap_or_default(),
+            };
+            let _ = guard.upsert_lan_client(&row);
+        }
+    }
+
+    Ok(Some(snap))
 }
 
 #[tauri::command]

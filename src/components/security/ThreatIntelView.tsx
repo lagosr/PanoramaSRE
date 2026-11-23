@@ -34,8 +34,10 @@ import {
 } from 'lucide-react';
 import { CustomSelect } from '../ui/CustomSelect';
 import { WorkStreamContainer } from '../ui/WorkStreamContainer';
+import { UnifiVlanZbfPanel } from './UnifiVlanZbfPanel';
 import { formatLocalDateTime, formatRelativeTime } from '../../lib/formatters';
 import type { UnifiSiemAction } from '../../lib/script-adapters';
+import { getVlanBadgeStyle } from '../../lib/unifi-zbf';
 import {
   buildCloudflareSecurityEventsUrl,
   buildCloudflareZeroTrustLogsUrl,
@@ -67,6 +69,7 @@ import type {
   ThreatIntelSettingsViewDto,
   ThreatRunDetailDto,
   UnifiSiemEnvConfigDto,
+  UnifiTopologySnapshotDto,
   WshSnapshot,
   ZeroTrustSummary,
 } from '../../lib/types';
@@ -175,10 +178,14 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   const [actorSearch, setActorSearch] = useState<string>('');
   const [isLoadingActors, setIsLoadingActors] = useState<boolean>(false);
 
-  // Internal LAN Baseline, Allowlist & UniFi SIEM .env.siem state
+  // Internal LAN Baseline, VLAN/ZBF Topology, Allowlist & UniFi SIEM .env.siem state
   const [lanClients, setLanClients] = useState<LanClientBaselineRow[]>([]);
   const [lanSearch, setLanSearch] = useState<string>('');
   const [lanTrustFilter, setLanTrustFilter] = useState<'ALL' | 'UNREVIEWED' | 'TRUSTED'>('ALL');
+  const [lanVlanFilter, setLanVlanFilter] = useState<string>('ALL');
+  const [unifiTopology, setUnifiTopology] = useState<UnifiTopologySnapshotDto | null>(null);
+  const [isLoadingTopology, setIsLoadingTopology] = useState<boolean>(false);
+  const [topologyError, setTopologyError] = useState<string | null>(null);
   const [allowlist, setAllowlist] = useState<ThreatAllowlistRow[]>([]);
   const [siemEnv, setSiemEnv] = useState<UnifiSiemEnvConfigDto | null>(null);
   const [siemAllowedIpsInput, setSiemAllowedIpsInput] = useState<string>('');
@@ -266,6 +273,30 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
     }
   }, []);
 
+  const loadUnifiTopology = useCallback(async (forceRefresh = false) => {
+    setIsLoadingTopology(true);
+    setTopologyError(null);
+    try {
+      const snap = await invoke<UnifiTopologySnapshotDto | null>(
+        'get_unifi_network_topology',
+        { forceRefresh }
+      );
+      setUnifiTopology(snap ?? null);
+      if (snap) {
+        const updatedLan = await invoke<LanClientBaselineRow[]>('get_lan_clients_baseline').catch(
+          () => null
+        );
+        if (Array.isArray(updatedLan)) {
+          setLanClients(updatedLan);
+        }
+      }
+    } catch (err) {
+      setTopologyError(String(err));
+    } finally {
+      setIsLoadingTopology(false);
+    }
+  }, []);
+
   useEffect(() => {
     void loadActors();
   }, [loadActors, activeRun?.id]);
@@ -273,6 +304,10 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   useEffect(() => {
     void loadSourcesAndAllowlist();
   }, [loadSourcesAndAllowlist, activeRun?.id]);
+
+  useEffect(() => {
+    void loadUnifiTopology(false);
+  }, [loadUnifiTopology, activeRun?.id, settings?.unifiConfigured]);
 
   const collectorStatuses: CollectorStatuses = useMemo(() => {
     const fallback: CollectorStatuses = {
@@ -328,9 +363,32 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
     [lanClients]
   );
 
+  const availableVlanOptions = useMemo(() => {
+    const counts = new Map<string, number>();
+    if (unifiTopology?.networks) {
+      for (const n of unifiTopology.networks) {
+        const label = n.vlanId != null ? `${n.name} (VLAN ${n.vlanId})` : n.name;
+        counts.set(label, n.clientCount);
+      }
+    }
+    for (const cli of lanClients) {
+      const v = (cli.networkVlan || '').trim();
+      if (!v) continue;
+      if (!counts.has(v)) {
+        counts.set(v, (counts.get(v) ?? 0) + 1);
+      }
+    }
+    const items = Array.from(counts.entries()).map(([label, count]) => ({
+      value: label,
+      label: `${label} (${count})`,
+    }));
+    items.sort((a, b) => a.label.localeCompare(b.label));
+    return [{ value: 'ALL', label: `All VLANs (${lanClients.length})` }, ...items];
+  }, [unifiTopology?.networks, lanClients]);
+
   const filteredLanClients = useMemo(
-    () => filterLanClients(lanClients, lanSearch, lanTrustFilter),
-    [lanClients, lanSearch, lanTrustFilter]
+    () => filterLanClients(lanClients, lanSearch, lanTrustFilter, lanVlanFilter),
+    [lanClients, lanSearch, lanTrustFilter, lanVlanFilter]
   );
 
   const externalFindings = useMemo(
@@ -2102,8 +2160,24 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
             </div>
           </div>
 
+          {/* UniFi VLAN Directory & Zone-Based Firewall Matrix */}
+          <UnifiVlanZbfPanel
+            topology={unifiTopology}
+            isLoading={isLoadingTopology}
+            error={topologyError}
+            selectedVlanFilter={lanVlanFilter}
+            onSelectVlanFilter={setLanVlanFilter}
+            onRefresh={() => void loadUnifiTopology(true)}
+            onOpenUnifiFirewall={() =>
+              void handleOpenExternal(buildUnifiConsoleUrl(unifiBaseUrl, 'policies'))
+            }
+          />
+
           {/* UniFi LAN Baseline Trust Table */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
+          <div
+            id="lan-device-baseline"
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4"
+          >
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 tabular-nums">
@@ -2114,6 +2188,15 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                 </p>
               </div>
               <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
+                {lanVlanFilter !== 'ALL' && (
+                  <button
+                    type="button"
+                    onClick={() => setLanVlanFilter('ALL')}
+                    className="btn-ghost text-xs whitespace-nowrap flex-shrink-0"
+                  >
+                    Clear VLAN Filter ({lanVlanFilter})
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => void loadSourcesAndAllowlist()}
@@ -2135,22 +2218,22 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
               </div>
             </div>
 
-            {/* Clear Explanation of What Trusting a Device Means */}
+            {/* Clear Explanation of What Trusting a Device Means vs Malware/Threat Detection */}
             <div className="flex items-start gap-2.5 p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs text-slate-700 dark:text-slate-300">
               <Info className="w-4 h-4 text-[var(--color-accent-text)] shrink-0 mt-0.5" />
               <div className="space-y-1">
                 <div className="font-semibold text-slate-900 dark:text-slate-100">
-                  What does trusting a device mean?
+                  What does trusting a device mean? (Does NOT bypass malware or behavioral threat alerts)
                 </div>
                 <p className="leading-relaxed text-slate-600 dark:text-slate-400">
-                  Trusting a device is <strong>100% local and read-only inside PanoramaSRE</strong> — it never modifies your UniFi Wi-Fi, VLANs, or firewall rules. It marks a MAC address as <em>owner-verified hardware inventory</em> so you can quickly filter reviewed vs. unreviewed devices and clear Gemini&apos;s initial-baseline review reminder. Whenever an unrecognized MAC address first joins the LAN outside this baseline, Stage 0 still flags a <code className="font-mono">HIGH</code> Unknown LAN Device alert until you inspect or allowlist it.
+                  Owner-Verified trust is <strong>100% local and read-only inside PanoramaSRE</strong> — it never changes UniFi Wi-Fi, VLANs, or firewall rules, and it <strong>only confirms that the physical MAC hardware belongs in your house</strong> (clearing &quot;Unknown Device Joined LAN&quot; reminders). <strong>It never exempts a trusted phone, PC, or Wi-Fi appliance from future threat scans:</strong> if a trusted device gets compromised tomorrow and triggers UniFi IPS/CEF alerts, unexpected WSH SSH, PanoramaAuth anomalies, or Cloudflare alerts, PanoramaSRE still catches and flags it at full severity. Only adding a rule in <strong>Allowlist &amp; Controls</strong> suppresses behavioral alerts.
                 </p>
               </div>
             </div>
 
-            {/* Search & Trust Filter */}
+            {/* Search, VLAN Filter & Trust Filter */}
             {lanClients.length > 0 && (
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
                 <div className="relative flex-1">
                   <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                   <input
@@ -2161,7 +2244,14 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                     className="w-full pl-8 pr-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
                   />
                 </div>
-                <div className="w-full sm:w-52">
+                <div className="w-full lg:w-64">
+                  <CustomSelect
+                    value={lanVlanFilter}
+                    onChange={setLanVlanFilter}
+                    options={availableVlanOptions}
+                  />
+                </div>
+                <div className="w-full lg:w-48">
                   <CustomSelect
                     value={lanTrustFilter}
                     onChange={(val) =>
@@ -2183,7 +2273,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
               </div>
             ) : filteredLanClients.length === 0 ? (
               <div className="p-6 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-center text-xs text-slate-500">
-                No LAN devices match your current search or trust filter.
+                No LAN devices match your current search, VLAN, or trust filter.
               </div>
             ) : (
               <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
@@ -2193,37 +2283,55 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                       <th className="py-2.5 px-3">Device / Hostname</th>
                       <th className="py-2.5 px-3">MAC Address</th>
                       <th className="py-2.5 px-3">IP Address</th>
-                      <th className="py-2.5 px-3">VLAN / Vendor</th>
+                      <th className="py-2.5 px-3">VLAN &amp; Vendor</th>
                       <th className="py-2.5 px-3">Last Seen</th>
                       <th className="py-2.5 px-3 text-right">Owner-Verified</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-mono tabular-nums">
-                    {filteredLanClients.map((cli) => (
-                      <tr key={cli.macAddress} className="hover:bg-slate-50/70 dark:hover:bg-slate-950/60">
-                        <td className="py-2.5 px-3 font-sans font-medium text-slate-900 dark:text-slate-100">
-                          {cli.label || cli.hostname || 'Unnamed Device'}
-                        </td>
-                        <td className="py-2.5 px-3 text-slate-700 dark:text-slate-300">{cli.macAddress}</td>
-                        <td className="py-2.5 px-3 text-slate-700 dark:text-slate-300">{cli.ipAddress || '—'}</td>
-                        <td className="py-2.5 px-3 text-slate-500 dark:text-slate-400">
-                          {[cli.networkVlan, cli.ouiVendor].filter(Boolean).join(' • ') || '—'}
-                        </td>
-                        <td className="py-2.5 px-3 text-slate-500 dark:text-slate-400" title={formatLocalDateTime(cli.lastSeenAt)}>
-                          {formatRelativeTime(cli.lastSeenAt)}
-                        </td>
-                        <td className="py-2 px-3 text-right">
-                          <div className="inline-flex justify-end">
-                            <ToggleSwitch
-                              size="sm"
-                              checked={cli.isTrusted}
-                              onChange={(val) => void handleToggleLanTrust(cli, val)}
-                              activeColor="brand"
-                            />
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
+                    {filteredLanClients.map((cli) => {
+                      const vlanStyle = getVlanBadgeStyle(cli.networkVlan);
+                      return (
+                        <tr key={cli.macAddress} className="hover:bg-slate-50/70 dark:hover:bg-slate-950/60">
+                          <td className="py-2.5 px-3 font-sans font-medium text-slate-900 dark:text-slate-100">
+                            {cli.label || cli.hostname || 'Unnamed Device'}
+                          </td>
+                          <td className="py-2.5 px-3 text-slate-700 dark:text-slate-300">{cli.macAddress}</td>
+                          <td className="py-2.5 px-3 text-slate-700 dark:text-slate-300">{cli.ipAddress || '—'}</td>
+                          <td className="py-2.5 px-3">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {cli.networkVlan ? (
+                                <span
+                                  className={`px-2 py-0.5 rounded border text-[11px] font-mono font-medium ${vlanStyle.chipClass}`}
+                                >
+                                  {cli.networkVlan}
+                                </span>
+                              ) : (
+                                <span className="text-slate-400">—</span>
+                              )}
+                              {cli.ouiVendor && (
+                                <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                                  {cli.ouiVendor}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-3 text-slate-500 dark:text-slate-400" title={formatLocalDateTime(cli.lastSeenAt)}>
+                            {formatRelativeTime(cli.lastSeenAt)}
+                          </td>
+                          <td className="py-2 px-3 text-right">
+                            <div className="inline-flex justify-end">
+                              <ToggleSwitch
+                                size="sm"
+                                checked={cli.isTrusted}
+                                onChange={(val) => void handleToggleLanTrust(cli, val)}
+                                activeColor="brand"
+                              />
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

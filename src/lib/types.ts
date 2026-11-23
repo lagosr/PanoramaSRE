@@ -1169,4 +1169,85 @@ export interface ThreatAuditProgressEvent {
   timestamp: string;
 }
 
+export interface UnifiNetworkDto {
+  id: string;
+  name: string;
+  vlanId?: number | null;
+  enabled: boolean;
+  isDefault: boolean;
+  zoneId?: string | null;
+  zoneName?: string | null;
+  subnetCidr?: string | null;
+  gatewayIp?: string | null;
+  isolationEnabled: boolean;
+  internetAccessEnabled: boolean;
+  mdnsForwardingEnabled: boolean;
+  origin: string;
+  clientCount: number;
+}
+
+export interface UnifiZoneDto {
+  id: string;
+  name: string;
+  origin: string;
+  networkIds: string[];
+  networkNames: string[];
+  vlanIds: number[];
+  clientCount: number;
+}
+
+export interface UnifiPolicyDto {
+  id: string;
+  name: string;
+  action: string;
+  enabled: boolean;
+  description?: string | null;
+  index: number;
+  origin: string;
+  sourceZoneId?: string | null;
+  destinationZoneId?: string | null;
+  allowReturnTraffic: boolean;
+  hasSourceFilter: boolean;
+  sourceFilterSummary?: string | null;
+  hasDestinationFilter: boolean;
+  destinationFilterSummary?: string | null;
+  protocol?: string | null;
+  connectionStates: string[];
+  loggingEnabled: boolean;
+  scheduleMode?: string | null;
+}
+
+export interface UnifiClientTopologyDto {
+  id: string;
+  macAddress: string;
+  ipAddress?: string | null;
+  name?: string | null;
+  hostname?: string | null;
+  networkName?: string | null;
+  vlanId?: number | null;
+  zoneName?: string | null;
+  ouiVendor?: string | null;
+  clientType?: string | null;
+}
+
+export interface UnifiTopologySnapshotDto {
+  baseUrl: string;
+  appVersion: string;
+  capturedAt: string;
+  sites: Array<{ id: string; name: string; internalReference?: string | null }>;
+  devices: Array<{
+    id: string;
+    name: string;
+    macAddress: string;
+    ipAddress?: string | null;
+    model?: string | null;
+    state: string;
+    firmwareVersion?: string | null;
+  }>;
+  clients: UnifiClientTopologyDto[];
+  policies: UnifiPolicyDto[];
+  networks: UnifiNetworkDto[];
+  zones: UnifiZoneDto[];
+}
+
 
