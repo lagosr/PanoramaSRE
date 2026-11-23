@@ -4,15 +4,19 @@ import {
   buildCloudflareZeroTrustLogsUrl,
   buildUnifiConsoleUrl,
   buildWafRuleExpression,
+  classifyActionSurface,
+  classifyAllowlistSurface,
+  classifyFindingSurface,
   collectorStatusToBadgeVariant,
   computeThreatSidebarBadge,
+  filterLanClients,
   filterThreatActors,
   formatCompactBytes,
   safeParseJson,
   severityToBadgeVariant,
   verdictToBadgeVariant,
 } from '../threat-utils';
-import type { ThreatActorRow, ThreatAuditRunRow } from '../types';
+import type { LanClientBaselineRow, ThreatActorRow, ThreatAuditRunRow } from '../types';
 
 function makeRun(overrides: Partial<ThreatAuditRunRow> = {}): ThreatAuditRunRow {
   return {
@@ -195,5 +199,61 @@ describe('threat-utils', () => {
     expect(formatCompactBytes(0)).toBe('0 B');
     expect(formatCompactBytes(2048)).toBe('2.0 KB');
     expect(formatCompactBytes(15 * 1024 * 1024)).toBe('15 MB');
+  });
+
+  it('classifies external, internal, and crossover surfaces accurately and filters LAN clients', () => {
+    expect(classifyFindingSurface('CLOUDFLARE')).toBe('external');
+    expect(classifyFindingSurface('ZERO_TRUST')).toBe('external');
+    expect(classifyFindingSurface('UNIFI')).toBe('internal');
+    expect(classifyFindingSurface('WSH')).toBe('internal');
+    expect(classifyFindingSurface('PANORAMA_AUTH')).toBe('internal');
+
+    expect(classifyActionSurface('CLOUDFLARE_WAF')).toBe('external');
+    expect(classifyActionSurface('ZERO_TRUST_ACCESS')).toBe('external');
+    expect(classifyActionSurface('UNIFI_NETWORK')).toBe('internal');
+    expect(classifyActionSurface('ORIGIN_WSH')).toBe('internal');
+    expect(classifyActionSurface('ALLOWLIST')).toBe('crossover');
+
+    expect(classifyAllowlistSurface('IP')).toBe('external');
+    expect(classifyAllowlistSurface('CIDR')).toBe('external');
+    expect(classifyAllowlistSurface('ASN')).toBe('external');
+    expect(classifyAllowlistSurface('EMAIL')).toBe('external');
+    expect(classifyAllowlistSurface('LAN_MAC')).toBe('internal');
+    expect(classifyAllowlistSurface('SSH_KEY')).toBe('internal');
+
+    const lan: LanClientBaselineRow[] = [
+      {
+        macAddress: 'AA:BB:CC:11:22:33',
+        ipAddress: '10.10.20.9',
+        hostname: 'solar-assistant',
+        networkVlan: 'IoT',
+        ouiVendor: 'Raspberry Pi',
+        firstSeenAt: '2026-11-22T00:00:00Z',
+        lastSeenAt: '2026-11-22T12:00:00Z',
+        isTrusted: false,
+        label: 'Solar Assistant',
+      },
+      {
+        macAddress: 'DD:EE:FF:44:55:66',
+        ipAddress: '172.25.25.5',
+        hostname: 'wsh',
+        networkVlan: 'Servers',
+        ouiVendor: 'Raspberry Pi',
+        firstSeenAt: '2026-11-22T00:00:00Z',
+        lastSeenAt: '2026-11-22T12:00:00Z',
+        isTrusted: true,
+        label: 'WSH',
+      },
+    ];
+
+    expect(filterLanClients(lan, '', 'ALL')).toHaveLength(2);
+    expect(filterLanClients(lan, '', 'TRUSTED').map((c) => c.hostname)).toEqual(['wsh']);
+    expect(filterLanClients(lan, '', 'UNREVIEWED').map((c) => c.hostname)).toEqual([
+      'solar-assistant',
+    ]);
+    expect(filterLanClients(lan, '10.10.20', 'ALL').map((c) => c.macAddress)).toEqual([
+      'AA:BB:CC:11:22:33',
+    ]);
+    expect(filterLanClients(lan, 'DD:EE:FF', 'TRUSTED')).toHaveLength(1);
   });
 });

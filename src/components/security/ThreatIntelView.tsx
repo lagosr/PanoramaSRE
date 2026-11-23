@@ -28,6 +28,9 @@ import {
   Play,
   Square,
   Save,
+  ArrowRight,
+  ArrowLeftRight,
+  Info,
 } from 'lucide-react';
 import { CustomSelect } from '../ui/CustomSelect';
 import { WorkStreamContainer } from '../ui/WorkStreamContainer';
@@ -38,7 +41,11 @@ import {
   buildCloudflareZeroTrustLogsUrl,
   buildUnifiConsoleUrl,
   buildWafRuleExpression,
+  classifyActionSurface,
+  classifyAllowlistSurface,
+  classifyFindingSurface,
   collectorStatusToBadgeVariant,
+  filterLanClients,
   filterThreatActors,
   formatCompactBytes,
   safeParseJson,
@@ -48,6 +55,7 @@ import {
 import type {
   CfZoneSummary,
   CollectorStatuses,
+  GeminiActionDto,
   GeminiBriefDto,
   InternalNetworkSummary,
   LanClientBaselineRow,
@@ -55,6 +63,7 @@ import type {
   ThreatActorRow,
   ThreatAllowlistRow,
   ThreatAuditRunRow,
+  ThreatFindingRow,
   ThreatIntelSettingsViewDto,
   ThreatRunDetailDto,
   UnifiSiemEnvConfigDto,
@@ -62,13 +71,23 @@ import type {
   ZeroTrustSummary,
 } from '../../lib/types';
 
-type SubViewTab = 'overview' | 'actors' | 'sources';
+type SubViewTab = 'overview' | 'external' | 'internal' | 'allowlist';
+
+export interface ThreatAuditProgressUiState {
+  runId: string;
+  stage: string;
+  label: string;
+  message: string;
+  level: string;
+  startedAtMs: number;
+}
 
 interface ThreatIntelViewProps {
   latestDetail: ThreatRunDetailDto | null;
   runs: ThreatAuditRunRow[];
   settings: ThreatIntelSettingsViewDto | null;
   isRunningAudit: boolean;
+  auditProgress?: ThreatAuditProgressUiState | null;
   onRunAuditNow: (windowHours: number, forceCarbon?: boolean) => Promise<void>;
   onEscalateRunToCarbon: (runId: string) => Promise<void>;
   onSelectRunId: (runId: string) => Promise<void>;
@@ -104,11 +123,35 @@ const EMPTY_INTERNAL_SUMMARY: InternalNetworkSummary = {
   unifiCefSecurityAlerts: 0,
 };
 
+const AUDIT_PIPELINE_STEPS = [
+  { key: 'collect', label: '1. Collect (CF / UniFi / WSH)' },
+  { key: 'stage0', label: '2. Stage 0 Triage' },
+  { key: 'stage1', label: '3. Gemini Stage 1' },
+  { key: 'stage2', label: '4. Carbon & Save' },
+];
+
+function stageToStepIndex(stage: string | undefined): number {
+  switch ((stage || '').toLowerCase()) {
+    case 'stage0':
+      return 1;
+    case 'stage1':
+      return 2;
+    case 'forensics':
+    case 'stage2':
+    case 'persist':
+    case 'done':
+      return 3;
+    default:
+      return 0;
+  }
+}
+
 export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   latestDetail,
   runs,
   settings,
   isRunningAudit,
+  auditProgress = null,
   onRunAuditNow,
   onEscalateRunToCarbon,
   onSelectRunId,
@@ -124,15 +167,18 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
 }) => {
   const [subView, setSubView] = useState<SubViewTab>('overview');
   const [lookbackHours, setLookbackHours] = useState<string>('6');
+  const [auditElapsedSec, setAuditElapsedSec] = useState<number>(0);
 
-  // Threat Actors state
+  // External Threat Actors state
   const [actors, setActors] = useState<ThreatActorRow[]>([]);
   const [actorDispositionFilter, setActorDispositionFilter] = useState<string>('ACTIVE');
   const [actorSearch, setActorSearch] = useState<string>('');
   const [isLoadingActors, setIsLoadingActors] = useState<boolean>(false);
 
-  // LAN Baseline, Allowlist & UniFi SIEM .env.siem state
+  // Internal LAN Baseline, Allowlist & UniFi SIEM .env.siem state
   const [lanClients, setLanClients] = useState<LanClientBaselineRow[]>([]);
+  const [lanSearch, setLanSearch] = useState<string>('');
+  const [lanTrustFilter, setLanTrustFilter] = useState<'ALL' | 'UNREVIEWED' | 'TRUSTED'>('ALL');
   const [allowlist, setAllowlist] = useState<ThreatAllowlistRow[]>([]);
   const [siemEnv, setSiemEnv] = useState<UnifiSiemEnvConfigDto | null>(null);
   const [siemAllowedIpsInput, setSiemAllowedIpsInput] = useState<string>('');
@@ -148,6 +194,20 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
 
   const activeRun = latestDetail?.run ?? runs[0] ?? null;
   const activeFindings = latestDetail?.findings ?? [];
+
+  useEffect(() => {
+    if (!isRunningAudit) {
+      setAuditElapsedSec(0);
+      return;
+    }
+    const startMs = auditProgress?.startedAtMs ?? Date.now();
+    const sync = () => {
+      setAuditElapsedSec(Math.max(0, Math.floor((Date.now() - startMs) / 1000)));
+    };
+    sync();
+    const timer = window.setInterval(sync, 1000);
+    return () => window.clearInterval(timer);
+  }, [isRunningAudit, auditProgress?.startedAtMs]);
 
   const handleCopyText = useCallback(async (key: string, text: string) => {
     if (!text) return;
@@ -268,12 +328,56 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
     [lanClients]
   );
 
+  const filteredLanClients = useMemo(
+    () => filterLanClients(lanClients, lanSearch, lanTrustFilter),
+    [lanClients, lanSearch, lanTrustFilter]
+  );
+
+  const externalFindings = useMemo(
+    () => activeFindings.filter((f) => classifyFindingSurface(f.sourceLayer) === 'external'),
+    [activeFindings]
+  );
+
+  const internalFindings = useMemo(
+    () => activeFindings.filter((f) => classifyFindingSurface(f.sourceLayer) === 'internal'),
+    [activeFindings]
+  );
+
+  const externalActions = useMemo(
+    () => (geminiBrief?.recommendedActions || []).filter((a) => classifyActionSurface(a.surface) === 'external'),
+    [geminiBrief]
+  );
+
+  const internalActions = useMemo(
+    () => (geminiBrief?.recommendedActions || []).filter((a) => classifyActionSurface(a.surface) === 'internal'),
+    [geminiBrief]
+  );
+
   const siemContainer = useMemo(
     () =>
       (wshSnapshot?.containers || []).find((c) =>
         (c.Names || c.ID || '').toLowerCase().includes('unifi-siem')
       ),
     [wshSnapshot?.containers]
+  );
+
+  const healthyTunnelsCount = useMemo(
+    () => zeroTrustSummary.tunnels.filter((t) => t.status.toLowerCase() === 'healthy').length,
+    [zeroTrustSummary.tunnels]
+  );
+
+  const totalOrigin200Breaches = useMemo(
+    () =>
+      (panoramaZone?.untrustedOrigin200s ?? 0) +
+      zonesSummary
+        .filter((z) => !z.name.toLowerCase().includes('parakith'))
+        .reduce((acc, z) => (panoramaZone && z.id === panoramaZone.id ? acc : acc + (z.untrustedOrigin200s || 0)), 0),
+    [panoramaZone, zonesSummary]
+  );
+
+  const totalWafHits = useMemo(
+    () => zonesSummary.reduce((acc, z) => acc + (z.firewallEventsCount || 0), 0),
+    [zonesSummary]
   );
 
   const handleSaveSiemEnv = async (e: React.FormEvent) => {
@@ -339,7 +443,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
       const updated = await invoke<number>('trust_all_lan_clients');
       await loadSourcesAndAllowlist();
       setSourceFeedback({
-        text: `Marked ${updated} LAN baseline device(s) as trusted.`,
+        text: `Marked ${updated} LAN baseline device(s) as owner-verified trusted.`,
         tone: 'ok',
       });
       setTimeout(() => setSourceFeedback(null), 4000);
@@ -382,11 +486,201 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   const carbonUsed24h = settings?.carbonUsedLast24h ?? 0;
   const cfAccountId = settings?.cfAccountId || '';
   const unifiBaseUrl = settings?.preferences.unifiBaseUrl || 'https://ui.panoramadr.com';
+  const activeStepIdx = stageToStepIndex(auditProgress?.stage);
 
   const deepLinkZoneForAction = (surface: string): string => {
     const s = surface.toUpperCase();
     if (s.includes('PARAKITH')) return 'parakith.com';
     return panoramaZone?.name || 'panoramadr.com';
+  };
+
+  const scrollToSecurityStream = () => {
+    document.getElementById('security-work-stream')?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start',
+    });
+  };
+
+  const renderFindingRow = (f: ThreatFindingRow) => {
+    const rayIds = safeParseJson<string[]>(f.rayIdsJson, []);
+    const wafExpr = buildWafRuleExpression(
+      f.actorIp ? [f.actorIp] : [],
+      f.actorAsn ? [f.actorAsn] : []
+    );
+    const copyWafKey = `find-waf-${f.id}`;
+    const zoneForLink = f.host?.includes('parakith') ? 'parakith.com' : 'panoramadr.com';
+    const isExt = classifyFindingSurface(f.sourceLayer) === 'external';
+
+    return (
+      <div
+        key={f.id}
+        className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-2"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusBadge label={f.severity} variant={severityToBadgeVariant(f.severity)} />
+            <StatusBadge label={f.sourceLayer} variant="neutral" />
+            <StatusBadge
+              label={isExt ? 'External Perimeter' : 'Internal LAN / WSH'}
+              variant={isExt ? 'info' : 'accent'}
+            />
+            <span className="text-[11px] font-mono text-slate-500">{f.ruleId}</span>
+            <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+              {f.title}
+            </span>
+          </div>
+
+          <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
+            {wafExpr && (
+              <button
+                type="button"
+                onClick={() => void handleCopyText(copyWafKey, wafExpr)}
+                className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+              >
+                {copiedKey === copyWafKey ? (
+                  <Check className="w-3.5 h-3.5 text-emerald-500" />
+                ) : (
+                  <Copy className="w-3.5 h-3.5" />
+                )}
+                <span>{copiedKey === copyWafKey ? 'Copied!' : 'Copy WAF Rule'}</span>
+              </button>
+            )}
+            {f.sourceLayer === 'CLOUDFLARE' && (
+              <button
+                type="button"
+                onClick={() =>
+                  void handleOpenExternal(
+                    buildCloudflareSecurityEventsUrl(cfAccountId, zoneForLink, f.actorIp)
+                  )
+                }
+                className="btn-ghost text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span>Cloudflare Events</span>
+              </button>
+            )}
+            {f.sourceLayer === 'UNIFI' && (
+              <button
+                type="button"
+                onClick={() => void handleOpenExternal(buildUnifiConsoleUrl(unifiBaseUrl, 'threats'))}
+                className="btn-ghost text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span>UniFi Console</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        <p className="text-xs text-slate-700 dark:text-slate-300">{f.summary}</p>
+
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] font-mono text-slate-500 dark:text-slate-400">
+          {f.host && <span>Host: {f.host}</span>}
+          {f.actorIp && <span>IP: {f.actorIp}</span>}
+          {f.actorAsn && <span>ASN: {f.actorAsn}</span>}
+          {rayIds.length > 0 && <span>Rays: {rayIds.slice(0, 4).join(', ')}</span>}
+        </div>
+      </div>
+    );
+  };
+
+  const renderActionRow = (act: GeminiActionDto, idx: number, prefix: string) => {
+    const copyKey = `${prefix}-waf-${idx}`;
+    const surfaceDomain = classifyActionSurface(act.surface);
+    const isUnifi = surfaceDomain === 'internal';
+    const isZt = act.surface.toUpperCase().includes('ZERO_TRUST');
+    const isCrossover = surfaceDomain === 'crossover';
+    const deepUrl = isUnifi
+      ? buildUnifiConsoleUrl(unifiBaseUrl, 'policies')
+      : isZt
+      ? buildCloudflareZeroTrustLogsUrl(cfAccountId)
+      : buildCloudflareSecurityEventsUrl(cfAccountId, deepLinkZoneForAction(act.surface));
+
+    const surfaceBadgeLabel =
+      surfaceDomain === 'external'
+        ? 'External (Cloudflare)'
+        : surfaceDomain === 'internal'
+        ? 'Internal (UniFi / WSH)'
+        : 'Cross-Surface (Allowlist)';
+
+    return (
+      <div
+        key={`${prefix}-${act.action}-${idx}`}
+        className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-2"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusBadge
+              label={act.priority}
+              variant={act.priority === 'IMMEDIATE' ? 'danger' : act.priority === 'SOON' ? 'warning' : 'info'}
+            />
+            <StatusBadge
+              label={surfaceBadgeLabel}
+              variant={
+                surfaceDomain === 'external'
+                  ? 'info'
+                  : surfaceDomain === 'internal'
+                  ? 'accent'
+                  : 'neutral'
+              }
+            />
+            <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+              {act.action}
+            </span>
+          </div>
+
+          <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
+            {act.wafRuleSnippet && (
+              <button
+                type="button"
+                onClick={() => void handleCopyText(copyKey, act.wafRuleSnippet || '')}
+                className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+              >
+                {copiedKey === copyKey ? (
+                  <Check className="w-3.5 h-3.5 text-emerald-500" />
+                ) : (
+                  <Copy className="w-3.5 h-3.5" />
+                )}
+                <span>{copiedKey === copyKey ? 'Copied!' : 'Copy WAF Rule'}</span>
+              </button>
+            )}
+            {isCrossover ? (
+              <button
+                type="button"
+                onClick={() => setSubView('allowlist')}
+                className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+              >
+                <Sliders className="w-3.5 h-3.5" />
+                <span>Open Allowlist &amp; Controls</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void handleOpenExternal(deepUrl)}
+                className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span>
+                  {isUnifi
+                    ? 'Open UniFi Console'
+                    : isZt
+                    ? 'Open Zero Trust Logs'
+                    : 'Open Cloudflare Events'}
+                </span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        <p className="text-xs text-slate-600 dark:text-slate-400">{act.rationale}</p>
+
+        {act.wafRuleSnippet && (
+          <pre className="overflow-x-auto px-3 py-2 rounded-lg bg-white dark:bg-[#050b14] border border-slate-200/90 dark:border-slate-800 text-emerald-900 dark:text-emerald-400 font-mono text-xs">
+            {act.wafRuleSnippet}
+          </pre>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -474,7 +768,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
               className="btn-primary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isRunningAudit ? 'animate-spin' : ''}`} />
-              <span>{isRunningAudit ? 'Auditing...' : 'Run Audit Now'}</span>
+              <span>{isRunningAudit ? `Auditing (${auditElapsedSec}s)...` : 'Run Audit Now'}</span>
             </button>
 
             <button
@@ -496,13 +790,67 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
               type="button"
               onClick={onNavigateToSettings}
               className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-              title="Configure Cloudflare, Gemini 4, and UniFi keys"
+              title="Configure & test Cloudflare, Gemini 4, UniFi, and WSH connections"
             >
               <Sliders className="w-3.5 h-3.5" />
-              <span>Keys</span>
+              <span>Settings</span>
             </button>
           </div>
         </div>
+
+        {/* Live Audit Progress Feedback Banner */}
+        {isRunningAudit && (
+          <div className="rounded-xl border border-[var(--color-brand-ring)] bg-slate-50 dark:bg-slate-950 p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2.5 min-w-0">
+                <RefreshCw className="w-4 h-4 animate-spin text-[var(--color-brand-text)] shrink-0" />
+                <span className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+                  {auditProgress?.label || 'Running 360° Security Audit'}
+                </span>
+                <span className="px-2 py-0.5 rounded-full text-[11px] font-mono bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 tabular-nums">
+                  Elapsed: {auditElapsedSec}s
+                </span>
+              </div>
+
+              <button
+                type="button"
+                onClick={scrollToSecurityStream}
+                className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+              >
+                <Terminal className="w-3.5 h-3.5" />
+                <span>View Live Stream ↓</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+              {AUDIT_PIPELINE_STEPS.map((step, idx) => {
+                const isDone = idx < activeStepIdx;
+                const isCurrent = idx === activeStepIdx;
+                return (
+                  <div
+                    key={step.key}
+                    className={`px-3 py-1.5 rounded-lg border text-[11px] font-mono flex items-center justify-between gap-1.5 ${
+                      isDone
+                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-800 dark:text-emerald-300'
+                        : isCurrent
+                        ? 'bg-white dark:bg-slate-900 border-[var(--color-brand)] text-slate-900 dark:text-slate-100 font-semibold'
+                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-500'
+                    }`}
+                  >
+                    <span className="truncate">{step.label}</span>
+                    {isDone && <Check className="w-3 h-3 shrink-0" />}
+                    {isCurrent && <RefreshCw className="w-3 h-3 animate-spin shrink-0" />}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="text-xs font-mono text-slate-700 dark:text-slate-300 break-words">
+              {auditProgress?.message ||
+                'Collecting Cloudflare Perimeter, UniFi CloudKey, and WSH SSH telemetry...'}
+            </div>
+          </div>
+        )}
 
         {/* Degraded / Missing Keys Notice */}
         {activeRun?.errorMessage && (
@@ -522,7 +870,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
             <div className="flex items-center gap-2 text-slate-700 dark:text-slate-300">
               <Lock className="w-4 h-4 text-[var(--color-brand-text)] shrink-0" />
               <span>
-                Configure your read-only Cloudflare API Token, Gemini 4 API Key, and optional UniFi X-API-Key in Settings to begin autonomous 6-hour 360° audits.
+                Verify your Cloudflare, Gemini 4, UniFi, and WSH connections in Settings to begin autonomous 6-hour 360° audits.
               </span>
             </div>
             <button
@@ -530,12 +878,12 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
               onClick={onNavigateToSettings}
               className="btn-tonal text-xs whitespace-nowrap flex-shrink-0"
             >
-              Configure Keys in Settings
+              Open Settings &amp; Test Connections
             </button>
           </div>
         )}
 
-        {/* Sub-View Switcher */}
+        {/* Domain-Separated Sub-View Switcher */}
         <div className="pt-1 flex flex-wrap items-center justify-between gap-3">
           <SegmentedControl<SubViewTab>
             activeVariant="brand"
@@ -544,11 +892,33 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
             options={[
               { value: 'overview', label: 'Overview & Brief' },
               {
-                value: 'actors',
-                label: 'Threat Actors',
-                badge: actors.length > 0 ? <span className="tabular-nums font-mono">{actors.length}</span> : undefined,
+                value: 'external',
+                label: 'External (Cloudflare)',
+                badge:
+                  actors.length + externalFindings.length > 0 ? (
+                    <span className="tabular-nums font-mono">
+                      {actors.length + externalFindings.length}
+                    </span>
+                  ) : undefined,
               },
-              { value: 'sources', label: '360° Sources & Allowlist' },
+              {
+                value: 'internal',
+                label: 'Internal (UniFi & WSH)',
+                badge:
+                  internalFindings.length + internalSummary.newUnknownLanMacs.length > 0 ? (
+                    <span className="tabular-nums font-mono">
+                      {internalFindings.length + internalSummary.newUnknownLanMacs.length}
+                    </span>
+                  ) : undefined,
+              },
+              {
+                value: 'allowlist',
+                label: 'Allowlist & Controls',
+                badge:
+                  allowlist.length > 0 ? (
+                    <span className="tabular-nums font-mono">{allowlist.length}</span>
+                  ) : undefined,
+              },
             ]}
           />
 
@@ -575,92 +945,236 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
       {/* =================================================================== */}
       {subView === 'overview' && (
         <div className="space-y-6">
-          {/* 4-Card 360° Telemetry Strip */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 tabular-nums">
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-mono font-semibold text-slate-600 dark:text-slate-400">
-                  panoramadr.com
-                </span>
-                <StatusBadge label="Strict Private" variant="brand" />
+          {/* Separated External vs Internal Surface Overview Cards */}
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 tabular-nums">
+            {/* External Surface Card */}
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <Globe className="w-4 h-4 text-sky-600 dark:text-sky-400 shrink-0" />
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                      Out-of-LAN External Perimeter (Cloudflare)
+                    </h3>
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Edge HTTP/WAF, Zero Trust Access &amp; Tunnel • Actions taken in Cloudflare
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSubView('external')}
+                  className="btn-tonal text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+                >
+                  <span>External Tab</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
               </div>
-              <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">
-                {panoramaZone ? panoramaZone.totalRequests.toLocaleString() : '—'}{' '}
-                <span className="text-xs font-normal text-slate-500">reqs</span>
-              </div>
-              <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] font-mono text-slate-600 dark:text-slate-400">
-                <span>4xx/5xx: {panoramaZone?.error4xx5xx ?? 0}</span>
-                <span>WAF hits: {panoramaZone?.firewallEventsCount ?? 0}</span>
-                <span className={(panoramaZone?.untrustedOrigin200s ?? 0) > 0 ? 'text-rose-600 dark:text-rose-400 font-bold' : ''}>
-                  Origin 200s: {panoramaZone?.untrustedOrigin200s ?? 0}
-                </span>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="text-[11px] font-mono font-semibold text-slate-700 dark:text-slate-300 truncate">
+                      panoramadr.com
+                    </span>
+                    <StatusBadge label="Private" variant="brand" />
+                  </div>
+                  <div className="text-xl font-bold text-slate-900 dark:text-slate-100">
+                    {panoramaZone ? panoramaZone.totalRequests.toLocaleString() : '—'}{' '}
+                    <span className="text-[11px] font-normal text-slate-500">reqs</span>
+                  </div>
+                  <div className="text-[11px] font-mono text-slate-600 dark:text-slate-400 space-y-0.5">
+                    <div>4xx/5xx: {panoramaZone?.error4xx5xx ?? 0} • WAF: {panoramaZone?.firewallEventsCount ?? 0}</div>
+                    <div className={(panoramaZone?.untrustedOrigin200s ?? 0) > 0 ? 'text-rose-600 dark:text-rose-400 font-bold' : ''}>
+                      Origin 200s: {panoramaZone?.untrustedOrigin200s ?? 0}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="text-[11px] font-mono font-semibold text-slate-700 dark:text-slate-300 truncate">
+                      parakith.com
+                    </span>
+                    <StatusBadge label="Public" variant="info" />
+                  </div>
+                  <div className="text-xl font-bold text-slate-900 dark:text-slate-100">
+                    {parakithZone ? parakithZone.totalRequests.toLocaleString() : '—'}{' '}
+                    <span className="text-[11px] font-normal text-slate-500">reqs</span>
+                  </div>
+                  <div className="text-[11px] font-mono text-slate-600 dark:text-slate-400 space-y-0.5">
+                    <div>4xx/5xx: {parakithZone?.error4xx5xx ?? 0} • WAF: {parakithZone?.firewallEventsCount ?? 0}</div>
+                    <div>BW: {formatCompactBytes(parakithZone?.totalBytes ?? 0)}</div>
+                  </div>
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="text-[11px] font-mono font-semibold text-slate-700 dark:text-slate-300 truncate">
+                      Zero Trust
+                    </span>
+                    <StatusBadge
+                      label={`${zeroTrustSummary.accessAppCount} App`}
+                      variant={zeroTrustSummary.accessDenied > 0 ? 'warning' : 'success'}
+                    />
+                  </div>
+                  <div className="text-xl font-bold text-slate-900 dark:text-slate-100">
+                    {zeroTrustSummary.accessAllowed}
+                    <span className="text-xs font-normal text-slate-400"> / </span>
+                    <span className={zeroTrustSummary.accessDenied > 0 ? 'text-amber-600 dark:text-amber-400' : ''}>
+                      {zeroTrustSummary.accessDenied}
+                    </span>
+                    <span className="text-[11px] font-normal text-slate-500 ml-1">allow/deny</span>
+                  </div>
+                  <div className="text-[11px] font-mono text-slate-600 dark:text-slate-400 space-y-0.5">
+                    <div>Tunnels: {healthyTunnelsCount}/{zeroTrustSummary.tunnels.length} healthy</div>
+                    <div>Mutations: {zeroTrustSummary.auditMutations}</div>
+                  </div>
+                </div>
               </div>
             </div>
 
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-mono font-semibold text-slate-600 dark:text-slate-400">
-                  parakith.com
+            {/* Internal Surface Card */}
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <Wifi className="w-4 h-4 text-[var(--color-brand-text)] shrink-0" />
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                      Internal LAN &amp; Host (UniFi + WSH)
+                    </h3>
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    LAN Hardware, Trusted Baseline, WSH SSH &amp; Auth • Actions in UniFi / WSH
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSubView('internal')}
+                  className="btn-tonal text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+                >
+                  <span>Internal Tab</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-mono font-semibold text-slate-700 dark:text-slate-300">
+                      UniFi Network Fleet
+                    </span>
+                    <StatusBadge
+                      label={`${trustedLanCount}/${lanClients.length} Trusted`}
+                      variant={
+                        internalSummary.newUnknownLanMacs.length > 0
+                          ? 'danger'
+                          : trustedLanCount > 0
+                          ? 'success'
+                          : 'neutral'
+                      }
+                    />
+                  </div>
+                  <div className="text-xl font-bold text-slate-900 dark:text-slate-100">
+                    {internalSummary.unifiClientsTotal}{' '}
+                    <span className="text-[11px] font-normal text-slate-500">LAN clients</span>
+                  </div>
+                  <div className="text-[11px] font-mono text-slate-600 dark:text-slate-400 space-y-0.5">
+                    <div>Infra Devices: {internalSummary.unifiDevicesTotal} ({internalSummary.unifiOfflineDevices.length} offline)</div>
+                    <div className={internalSummary.newUnknownLanMacs.length > 0 ? 'text-rose-600 dark:text-rose-400 font-bold' : ''}>
+                      Unknown MACs: {internalSummary.newUnknownLanMacs.length} • Policies: {internalSummary.unifiPoliciesTotal}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-mono font-semibold text-slate-700 dark:text-slate-300">
+                      WSH Origin &amp; PanoramaAuth
+                    </span>
+                    <StatusBadge
+                      label={internalSummary.panoramaAuthAvailable ? 'Auth RO Active' : 'SSH Standby'}
+                      variant={
+                        internalSummary.panoramaAuthAnomalies > 0 || internalSummary.sshAnomalyCount > 0
+                          ? 'danger'
+                          : 'success'
+                      }
+                    />
+                  </div>
+                  <div className="text-xl font-bold text-slate-900 dark:text-slate-100">
+                    {internalSummary.unifiSiemCefEvents}{' '}
+                    <span className="text-[11px] font-normal text-slate-500">CEF events</span>
+                  </div>
+                  <div className="text-[11px] font-mono text-slate-600 dark:text-slate-400 space-y-0.5">
+                    <div>Auth Anomalies: {internalSummary.panoramaAuthAnomalies} • SSH Flagged: {internalSummary.sshAnomalyCount}</div>
+                    <div>
+                      SIEM Container:{' '}
+                      {siemContainer
+                        ? siemContainer.State?.toLowerCase() === 'running'
+                          ? 'Running'
+                          : siemContainer.State
+                        : 'Not Deployed'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Perimeter <-> Internal Cross-Over Bridge Card */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <ArrowLeftRight className="w-4 h-4 text-[var(--color-accent-text)] shrink-0" />
+                <span className="text-xs font-mono font-bold uppercase tracking-wider text-slate-800 dark:text-slate-200">
+                  Perimeter ↔ Internal Cross-Over Boundaries
                 </span>
-                <StatusBadge label="Public Web" variant="info" />
               </div>
-              <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">
-                {parakithZone ? parakithZone.totalRequests.toLocaleString() : '—'}{' '}
-                <span className="text-xs font-normal text-slate-500">reqs</span>
-              </div>
-              <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] font-mono text-slate-600 dark:text-slate-400">
-                <span>4xx/5xx: {parakithZone?.error4xx5xx ?? 0}</span>
-                <span>WAF hits: {parakithZone?.firewallEventsCount ?? 0}</span>
-                <span>Bandwidth: {formatCompactBytes(parakithZone?.totalBytes ?? 0)}</span>
+              <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                <span>External Findings: {externalFindings.length}</span>
+                <span>•</span>
+                <span>Internal Findings: {internalFindings.length}</span>
               </div>
             </div>
 
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-mono font-semibold text-slate-600 dark:text-slate-400">
-                  Zero Trust &amp; Tunnel
-                </span>
-                <StatusBadge
-                  label={`${zeroTrustSummary.accessAppCount} App(s)`}
-                  variant={zeroTrustSummary.accessDenied > 0 ? 'warning' : 'success'}
-                />
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1">
+                <div className="font-mono font-semibold text-slate-800 dark:text-slate-200">
+                  1. Cloudflare Tunnel → WSH Lighttpd
+                </div>
+                <p className="text-[11px] text-slate-600 dark:text-slate-400">
+                  Edge requests cross <code className="font-mono">panorama-tunnel</code> (<code className="font-mono">cf-egress-net</code>) into WSH <code className="font-mono">:443</code>.
+                </p>
+                <div className="text-[11px] font-mono tabular-nums pt-0.5">
+                  Tunnels: {healthyTunnelsCount}/{zeroTrustSummary.tunnels.length} •{' '}
+                  <span className={totalOrigin200Breaches > 0 ? 'text-rose-600 dark:text-rose-400 font-bold' : 'text-emerald-700 dark:text-emerald-400'}>
+                    Private Origin 200s: {totalOrigin200Breaches}
+                  </span>
+                </div>
               </div>
-              <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">
-                {zeroTrustSummary.accessAllowed} <span className="text-xs font-normal text-slate-500">allowed</span>{' '}
-                <span className="text-sm font-mono text-slate-400">/</span>{' '}
-                <span className={zeroTrustSummary.accessDenied > 0 ? 'text-amber-600 dark:text-amber-400' : ''}>
-                  {zeroTrustSummary.accessDenied}
-                </span>{' '}
-                <span className="text-xs font-normal text-slate-500">denied</span>
-              </div>
-              <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] font-mono text-slate-600 dark:text-slate-400">
-                <span>
-                  Tunnels: {zeroTrustSummary.tunnels.filter((t) => t.status.toLowerCase() === 'healthy').length}/
-                  {zeroTrustSummary.tunnels.length} healthy
-                </span>
-                <span>Control Mutations: {zeroTrustSummary.auditMutations}</span>
-              </div>
-            </div>
 
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-mono font-semibold text-slate-600 dark:text-slate-400">
-                  UniFi &amp; WSH / Auth
-                </span>
-                <StatusBadge
-                  label={internalSummary.panoramaAuthAvailable ? 'Auth RO Active' : 'SSH Standby'}
-                  variant={internalSummary.newUnknownLanMacs.length > 0 || internalSummary.panoramaAuthAnomalies > 0 ? 'danger' : 'success'}
-                />
+              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1">
+                <div className="font-mono font-semibold text-slate-800 dark:text-slate-200">
+                  2. Zero Trust Access ↔ PanoramaAuth
+                </div>
+                <p className="text-[11px] text-slate-600 dark:text-slate-400">
+                  Cloudflare Google OIDC Access gates SSO sessions before reaching internal <code className="font-mono">PanoramaAuth</code>.
+                </p>
+                <div className="text-[11px] font-mono tabular-nums pt-0.5 text-slate-700 dark:text-slate-300">
+                  ZT Denied: {zeroTrustSummary.accessDenied} • Auth Anomalies: {internalSummary.panoramaAuthAnomalies}
+                </div>
               </div>
-              <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">
-                {internalSummary.unifiClientsTotal}{' '}
-                <span className="text-xs font-normal text-slate-500">LAN clients</span>
-              </div>
-              <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] font-mono text-slate-600 dark:text-slate-400">
-                <span>Unknown MACs: {internalSummary.newUnknownLanMacs.length}</span>
-                <span>Auth Anom: {internalSummary.panoramaAuthAnomalies}</span>
-                <span>SSH Flagged: {internalSummary.sshAnomalyCount}</span>
-                <span>CEF Events: {internalSummary.unifiSiemCefEvents}</span>
+
+              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1">
+                <div className="font-mono font-semibold text-slate-800 dark:text-slate-200">
+                  3. Edge WAF ↔ UniFi CyberSecure IPS
+                </div>
+                <p className="text-[11px] text-slate-600 dark:text-slate-400">
+                  Edge WAF filters proxied HTTPS; UniFi Gateway IPS inspects direct WAN/LAN packets to <code className="font-mono">unifi-siem</code>.
+                </p>
+                <div className="text-[11px] font-mono tabular-nums pt-0.5 text-slate-700 dark:text-slate-300">
+                  CF WAF Hits: {totalWafHits} • CEF Alerts: {internalSummary.unifiCefSecurityAlerts}
+                </div>
               </div>
             </div>
           </div>
@@ -700,8 +1214,9 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
                   {geminiBrief.zeroTrustAssessment && (
                     <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1">
-                      <div className="font-mono font-semibold text-slate-700 dark:text-slate-300">
-                        Zero Trust &amp; Access Assessment
+                      <div className="flex items-center justify-between gap-2 font-mono font-semibold text-slate-700 dark:text-slate-300">
+                        <span>External: Zero Trust &amp; Access</span>
+                        <StatusBadge label="Cloudflare" variant="info" />
                       </div>
                       <p className="text-slate-600 dark:text-slate-400 leading-relaxed">
                         {geminiBrief.zeroTrustAssessment}
@@ -710,8 +1225,9 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                   )}
                   {geminiBrief.internalNetworkAssessment && (
                     <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1">
-                      <div className="font-mono font-semibold text-slate-700 dark:text-slate-300">
-                        UniFi LAN &amp; WSH Origin Assessment
+                      <div className="flex items-center justify-between gap-2 font-mono font-semibold text-slate-700 dark:text-slate-300">
+                        <span>Internal: UniFi LAN &amp; WSH Origin</span>
+                        <StatusBadge label="UniFi / WSH" variant="accent" />
                       </div>
                       <p className="text-slate-600 dark:text-slate-400 leading-relaxed">
                         {geminiBrief.internalNetworkAssessment}
@@ -721,15 +1237,217 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                 </div>
               </div>
 
-              {/* Attack Campaigns */}
-              {geminiBrief.attackCampaigns.length > 0 && (
+              {geminiBrief.recommendedActions.length > 0 && (
                 <div className="space-y-3 pt-2 border-t border-slate-200 dark:border-slate-800">
                   <div className="text-xs font-mono font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
-                    Identified Attack Campaigns ({geminiBrief.attackCampaigns.length})
+                    Recommended Actions by Surface ({geminiBrief.recommendedActions.length})
+                  </div>
+                  <div className="space-y-2.5">
+                    {geminiBrief.recommendedActions.map((act, idx) =>
+                      renderActionRow(act, idx, 'ov-act')
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Quick Surface Findings Jump Summary */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 text-xs">
+              <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+              <span className="text-slate-700 dark:text-slate-300">
+                {activeRun
+                  ? `Deterministic Stage 0 evaluated ${activeFindings.length} finding(s): ${externalFindings.length} External (Cloudflare), ${internalFindings.length} Internal (UniFi & WSH).`
+                  : 'Run your first 360° audit to populate External and Internal findings.'}
+              </span>
+            </div>
+            <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setSubView('external')}
+                className="btn-secondary text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+              >
+                <span>External ({externalFindings.length} findings • {actors.length} actors)</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setSubView('internal')}
+                className="btn-secondary text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+              >
+                <span>Internal ({internalFindings.length} findings • {lanClients.length} LAN)</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =================================================================== */}
+      {/* SUB-VIEW 2: EXTERNAL PERIMETER (CLOUDFLARE)                         */}
+      {/* =================================================================== */}
+      {subView === 'external' && (
+        <div className="space-y-6">
+          {/* External Action Header */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+              <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Globe className="w-5 h-5 text-sky-600 dark:text-sky-400 shrink-0" />
+                  <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
+                    Out-of-LAN External Perimeter (Cloudflare Edge, WAF &amp; Zero Trust)
+                  </h3>
+                  <StatusBadge
+                    label={collectorStatuses.cloudflare}
+                    variant={collectorStatusToBadgeVariant(collectorStatuses.cloudflare)}
+                  />
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-400">
+                  Monitors external internet traffic targeting <code className="font-mono">panoramadr.com</code> and <code className="font-mono">parakith.com</code>, Cloudflare Access OIDC logins, and <code className="font-mono">panorama-tunnel</code>. Mitigations apply in Cloudflare WAF or Zero Trust.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => void handleOpenExternal(buildCloudflareSecurityEventsUrl(cfAccountId, 'panoramadr.com'))}
+                  className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>CF Events (panoramadr)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleOpenExternal(buildCloudflareSecurityEventsUrl(cfAccountId, 'parakith.com'))}
+                  className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>CF Events (parakith)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleOpenExternal(buildCloudflareZeroTrustLogsUrl(cfAccountId))}
+                  className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Zero Trust Logs</span>
+                </button>
+              </div>
+            </div>
+
+            {/* External Telemetry Detail Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 tabular-nums pt-2 border-t border-slate-200 dark:border-slate-800">
+              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-mono font-semibold text-slate-700 dark:text-slate-300">
+                    panoramadr.com
+                  </span>
+                  <StatusBadge label="Strict Private" variant="brand" />
+                </div>
+                <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">
+                  {panoramaZone ? panoramaZone.totalRequests.toLocaleString() : '—'}{' '}
+                  <span className="text-xs font-normal text-slate-500">reqs</span>
+                </div>
+                <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] font-mono text-slate-600 dark:text-slate-400">
+                  <span>4xx/5xx: {panoramaZone?.error4xx5xx ?? 0}</span>
+                  <span>WAF hits: {panoramaZone?.firewallEventsCount ?? 0}</span>
+                  <span className={(panoramaZone?.untrustedOrigin200s ?? 0) > 0 ? 'text-rose-600 dark:text-rose-400 font-bold' : ''}>
+                    Origin 200s: {panoramaZone?.untrustedOrigin200s ?? 0}
+                  </span>
+                </div>
+              </div>
+
+              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-mono font-semibold text-slate-700 dark:text-slate-300">
+                    parakith.com
+                  </span>
+                  <StatusBadge label="Public Web" variant="info" />
+                </div>
+                <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">
+                  {parakithZone ? parakithZone.totalRequests.toLocaleString() : '—'}{' '}
+                  <span className="text-xs font-normal text-slate-500">reqs</span>
+                </div>
+                <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] font-mono text-slate-600 dark:text-slate-400">
+                  <span>4xx/5xx: {parakithZone?.error4xx5xx ?? 0}</span>
+                  <span>WAF hits: {parakithZone?.firewallEventsCount ?? 0}</span>
+                  <span>Bandwidth: {formatCompactBytes(parakithZone?.totalBytes ?? 0)}</span>
+                </div>
+              </div>
+
+              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-mono font-semibold text-slate-700 dark:text-slate-300">
+                    Zero Trust &amp; Account
+                  </span>
+                  <StatusBadge
+                    label={`${healthyTunnelsCount}/${zeroTrustSummary.tunnels.length} Tunnels`}
+                    variant={zeroTrustSummary.accessDenied > 0 ? 'warning' : 'success'}
+                  />
+                </div>
+                <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">
+                  {zeroTrustSummary.accessAllowed} <span className="text-xs font-normal text-slate-500">allow</span>{' '}
+                  <span className="text-slate-400">/</span>{' '}
+                  <span className={zeroTrustSummary.accessDenied > 0 ? 'text-amber-600 dark:text-amber-400' : ''}>
+                    {zeroTrustSummary.accessDenied}
+                  </span>{' '}
+                  <span className="text-xs font-normal text-slate-500">deny</span>
+                </div>
+                <div className="text-[11px] font-mono text-slate-600 dark:text-slate-400 truncate">
+                  Acct: {cfAccountId || 'auto'} • Mutations: {zeroTrustSummary.auditMutations}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Explicit Cross-Over Note: External -> Internal */}
+          <div className="bg-white dark:bg-slate-900 border border-[var(--color-accent)]/40 rounded-2xl p-4 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2 text-xs font-mono font-bold text-slate-900 dark:text-slate-100 uppercase tracking-wider">
+                <ArrowLeftRight className="w-4 h-4 text-[var(--color-accent-text)] shrink-0" />
+                <span>Cross-Over Note: External Cloudflare → Internal LAN &amp; WSH</span>
+              </div>
+              <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                External HTTP/HTTPS requests traverse <code className="font-mono">panorama-tunnel</code> across <code className="font-mono">cf-egress-net</code> directly into host Lighttpd <code className="font-mono">:443</code> and <code className="font-mono">PanoramaAuth</code> SSO. Any non-zero Private Origin <code className="font-mono">200</code> or Access breach here must be correlated inside <strong>Internal (UniFi &amp; WSH)</strong>.
+              </p>
+              <div className="flex flex-wrap gap-2 text-[11px] font-mono tabular-nums">
+                <StatusBadge
+                  label={`Private Origin 200s: ${totalOrigin200Breaches}`}
+                  variant={totalOrigin200Breaches > 0 ? 'danger' : 'success'}
+                />
+                <StatusBadge
+                  label={`PanoramaAuth Anomalies: ${internalSummary.panoramaAuthAnomalies}`}
+                  variant={internalSummary.panoramaAuthAnomalies > 0 ? 'danger' : 'success'}
+                />
+                <StatusBadge
+                  label={`UniFi CEF Alerts: ${internalSummary.unifiCefSecurityAlerts}`}
+                  variant={internalSummary.unifiCefSecurityAlerts > 0 ? 'warning' : 'neutral'}
+                />
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setSubView('internal')}
+              className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+            >
+              <span>Inspect Internal LAN &amp; WSH</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {/* External Gemini Attack Campaigns & Mitigations */}
+          {geminiBrief && (geminiBrief.attackCampaigns.length > 0 || externalActions.length > 0) && (
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
+              {geminiBrief.attackCampaigns.length > 0 && (
+                <div className="space-y-3">
+                  <div className="text-xs font-mono font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
+                    External Attack Campaigns ({geminiBrief.attackCampaigns.length})
                   </div>
                   <div className="space-y-3">
                     {geminiBrief.attackCampaigns.map((camp, idx) => {
-                      const copyId = `camp-waf-${idx}`;
+                      const copyId = `ext-camp-waf-${idx}`;
                       return (
                         <div
                           key={`${camp.name}-${idx}`}
@@ -794,7 +1512,11 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                                 onClick={() => void handleCopyText(copyId, camp.suggestedWafExpression || '')}
                                 className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
                               >
-                                {copiedKey === copyId ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+                                {copiedKey === copyId ? (
+                                  <Check className="w-3.5 h-3.5 text-emerald-500" />
+                                ) : (
+                                  <Copy className="w-3.5 h-3.5" />
+                                )}
                                 <span>{copiedKey === copyId ? 'Copied!' : 'Copy WAF Rule'}</span>
                               </button>
                             </div>
@@ -806,176 +1528,236 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                 </div>
               )}
 
-              {/* Recommended Actions */}
-              {geminiBrief.recommendedActions.length > 0 && (
-                <div className="space-y-3 pt-2 border-t border-slate-200 dark:border-slate-800">
+              {externalActions.length > 0 && (
+                <div className="space-y-2.5 pt-2 border-t border-slate-200 dark:border-slate-800">
                   <div className="text-xs font-mono font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
-                    Recommended Read-Only Mitigations ({geminiBrief.recommendedActions.length})
+                    External Cloudflare Actions ({externalActions.length})
                   </div>
-                  <div className="space-y-2.5">
-                    {geminiBrief.recommendedActions.map((act, idx) => {
-                      const copyKey = `act-waf-${idx}`;
-                      const isUnifi = act.surface.toUpperCase().includes('UNIFI');
-                      const isZt = act.surface.toUpperCase().includes('ZERO_TRUST');
-                      const deepUrl = isUnifi
-                        ? buildUnifiConsoleUrl(unifiBaseUrl, 'policies')
-                        : isZt
-                        ? buildCloudflareZeroTrustLogsUrl(cfAccountId)
-                        : buildCloudflareSecurityEventsUrl(cfAccountId, deepLinkZoneForAction(act.surface));
-
-                      return (
-                        <div
-                          key={`${act.action}-${idx}`}
-                          className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-2"
-                        >
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <StatusBadge
-                                label={act.priority}
-                                variant={act.priority === 'IMMEDIATE' ? 'danger' : act.priority === 'SOON' ? 'warning' : 'info'}
-                              />
-                              <StatusBadge label={act.surface} variant="neutral" />
-                              <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                                {act.action}
-                              </span>
-                            </div>
-
-                            <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
-                              {act.wafRuleSnippet && (
-                                <button
-                                  type="button"
-                                  onClick={() => void handleCopyText(copyKey, act.wafRuleSnippet || '')}
-                                  className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-                                >
-                                  {copiedKey === copyKey ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
-                                  <span>{copiedKey === copyKey ? 'Copied!' : 'Copy WAF Rule'}</span>
-                                </button>
-                              )}
-                              <button
-                                type="button"
-                                onClick={() => void handleOpenExternal(deepUrl)}
-                                className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-                              >
-                                <ExternalLink className="w-3.5 h-3.5" />
-                                <span>
-                                  {isUnifi ? 'Open UniFi Console' : isZt ? 'Open Zero Trust Logs' : 'Open Cloudflare Security Events'}
-                                </span>
-                              </button>
-                            </div>
-                          </div>
-
-                          <p className="text-xs text-slate-600 dark:text-slate-400">{act.rationale}</p>
-
-                          {act.wafRuleSnippet && (
-                            <pre className="overflow-x-auto px-3 py-2 rounded-lg bg-white dark:bg-[#050b14] border border-slate-200/90 dark:border-slate-800 text-emerald-900 dark:text-emerald-400 font-mono text-xs">
-                              {act.wafRuleSnippet}
-                            </pre>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
+                  {externalActions.map((act, idx) => renderActionRow(act, idx, 'ext-act'))}
                 </div>
               )}
             </div>
           )}
 
-          {/* Deterministic Stage 0 Findings Matrix */}
+          {/* External Deterministic Findings */}
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <ShieldCheck className="w-5 h-5 text-[var(--color-brand-text)]" />
                 <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
-                  Deterministic Stage 0 Findings ({activeFindings.length})
+                  External Perimeter Findings ({externalFindings.length})
                 </h3>
               </div>
               <span className="text-xs font-mono text-slate-500 dark:text-slate-400">
-                Rule-based invariants across Cloudflare, UniFi LAN, PanoramaAuth &amp; WSH
+                Cloudflare HTTP/WAF, IP Threat Intel, Zero Trust Access &amp; Tunnel rules
               </span>
             </div>
 
-            {activeFindings.length === 0 ? (
+            {externalFindings.length === 0 ? (
               <div className="p-6 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-center space-y-1">
                 <CheckCircle2 className="w-6 h-6 text-emerald-500 mx-auto" />
                 <div className="text-sm font-semibold text-slate-800 dark:text-slate-200">
-                  {activeRun ? 'No Deterministic Anomalies Flagged in This Window' : 'Run Your First Audit to Inspect Telemetry'}
-                </div>
-                <div className="text-xs text-slate-500 dark:text-slate-400">
-                  Stage 0 checks split sensitivity rules across strict-private and public routes without spending LLM tokens when traffic is clean.
+                  No External Deterministic Anomalies Flagged in This Window
                 </div>
               </div>
             ) : (
+              <div className="space-y-3">{externalFindings.map(renderFindingRow)}</div>
+            )}
+          </div>
+
+          {/* Recurring External Threat Actors Ledger */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
+                  Recurring External Threat Actors ({filteredActors.length})
+                </h3>
+                <p className="text-xs text-slate-600 dark:text-slate-400">
+                  Cross-run external IP/ASN tracking with origin-reach cross-over alerts and 1-click Cloudflare WAF rules.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
+                <div className="relative flex-1 sm:w-64">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={actorSearch}
+                    onChange={(e) => setActorSearch(e.target.value)}
+                    placeholder="Filter IP, ASN, org, host..."
+                    className="w-full pl-8 pr-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
+                  />
+                </div>
+
+                <div className="w-40">
+                  <CustomSelect
+                    value={actorDispositionFilter}
+                    onChange={setActorDispositionFilter}
+                    options={[
+                      { value: 'ACTIVE', label: 'Active' },
+                      { value: 'ALLOWLISTED', label: 'Allowlisted' },
+                      { value: 'RESOLVED', label: 'Resolved' },
+                      { value: 'ALL', label: 'All Actors' },
+                    ]}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {sourceFeedback && (
+              <div
+                className={`text-xs font-mono px-3 py-2 rounded-xl border ${
+                  sourceFeedback.tone === 'ok'
+                    ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
+                    : 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border-rose-500/30'
+                }`}
+              >
+                {sourceFeedback.text}
+              </div>
+            )}
+
+            {isLoadingActors ? (
+              <div className="p-8 text-center text-xs font-mono text-slate-500">Loading threat actors...</div>
+            ) : filteredActors.length === 0 ? (
+              <div className="p-8 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-center text-xs text-slate-500">
+                No threat actors match the selected disposition filter.
+              </div>
+            ) : (
               <div className="space-y-3">
-                {activeFindings.map((f) => {
-                  const rayIds = safeParseJson<string[]>(f.rayIdsJson, []);
+                {filteredActors.map((actor) => {
+                  const hosts = safeParseJson<string[]>(actor.targetHostsJson, []);
+                  const paths = safeParseJson<string[]>(actor.samplePathsJson, []);
+                  const tags = safeParseJson<string[]>(actor.intelTagsJson, []);
                   const wafExpr = buildWafRuleExpression(
-                    f.actorIp ? [f.actorIp] : [],
-                    f.actorAsn ? [f.actorAsn] : []
+                    actor.ipAddress ? [actor.ipAddress] : [],
+                    actor.asn ? [actor.asn] : []
                   );
-                  const copyWafKey = `find-waf-${f.id}`;
-                  const zoneForLink = f.host?.includes('parakith') ? 'parakith.com' : 'panoramadr.com';
+                  const copyKey = `actor-waf-${actor.id}`;
+                  const cfZone = hosts.some((h) => h.includes('parakith')) ? 'parakith.com' : 'panoramadr.com';
 
                   return (
                     <div
-                      key={f.id}
-                      className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-2"
+                      key={actor.id}
+                      className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-2.5"
                     >
-                      <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
                         <div className="flex flex-wrap items-center gap-2">
-                          <StatusBadge label={f.severity} variant={severityToBadgeVariant(f.severity)} />
-                          <StatusBadge label={f.sourceLayer} variant="neutral" />
-                          <span className="text-[11px] font-mono text-slate-500">{f.ruleId}</span>
-                          <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                            {f.title}
+                          <StatusBadge
+                            label={actor.highestSeverity}
+                            variant={severityToBadgeVariant(actor.highestSeverity)}
+                          />
+                          <span className="text-sm font-mono font-bold text-slate-900 dark:text-slate-100">
+                            {actor.ipAddress || actor.id}
                           </span>
+                          {actor.country && (
+                            <span className="px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-[11px] font-mono text-slate-700 dark:text-slate-300">
+                              {actor.country}
+                            </span>
+                          )}
+                          {(actor.asn || actor.asOrg) && (
+                            <span className="text-xs font-mono text-slate-600 dark:text-slate-400">
+                              {actor.asn ? `AS${actor.asn.replace(/^AS/i, '')}` : ''} {actor.asOrg || ''}
+                            </span>
+                          )}
+                          {actor.latestClassification && (
+                            <StatusBadge label={actor.latestClassification} variant="accent" />
+                          )}
+                          <StatusBadge
+                            label={actor.disposition}
+                            variant={actor.disposition === 'ACTIVE' ? 'warning' : 'neutral'}
+                          />
+                          {actor.totalOrigin200s > 0 && (
+                            <StatusBadge
+                              label={`CROSS-OVER: ${actor.totalOrigin200s} Origin 200s`}
+                              variant="danger"
+                            />
+                          )}
                         </div>
 
-                        <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
+                        <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 shrink-0">
                           {wafExpr && (
                             <button
                               type="button"
-                              onClick={() => void handleCopyText(copyWafKey, wafExpr)}
+                              onClick={() => void handleCopyText(copyKey, wafExpr)}
                               className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
                             >
-                              {copiedKey === copyWafKey ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
-                              <span>{copiedKey === copyWafKey ? 'Copied!' : 'Copy WAF Rule'}</span>
+                              {copiedKey === copyKey ? (
+                                <Check className="w-3.5 h-3.5 text-emerald-500" />
+                              ) : (
+                                <Copy className="w-3.5 h-3.5" />
+                              )}
+                              <span>{copiedKey === copyKey ? 'Copied!' : 'Copy WAF Rule'}</span>
                             </button>
                           )}
-                          {f.sourceLayer === 'CLOUDFLARE' && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleOpenExternal(
+                                buildCloudflareSecurityEventsUrl(cfAccountId, cfZone, actor.ipAddress)
+                              )
+                            }
+                            className="btn-ghost text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                            <span>Cloudflare</span>
+                          </button>
+                          {actor.disposition !== 'ALLOWLISTED' && (
                             <button
                               type="button"
-                              onClick={() =>
-                                void handleOpenExternal(
-                                  buildCloudflareSecurityEventsUrl(cfAccountId, zoneForLink, f.actorIp)
-                                )
-                              }
-                              className="btn-ghost text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                              onClick={() => void handleAllowlistActor(actor)}
+                              className="btn-tonal text-xs whitespace-nowrap flex-shrink-0"
                             >
-                              <ExternalLink className="w-3.5 h-3.5" />
-                              <span>Cloudflare Events</span>
+                              Allowlist
                             </button>
                           )}
-                          {f.sourceLayer === 'UNIFI' && (
-                            <button
-                              type="button"
-                              onClick={() => void handleOpenExternal(buildUnifiConsoleUrl(unifiBaseUrl, 'threats'))}
-                              className="btn-ghost text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-                            >
-                              <ExternalLink className="w-3.5 h-3.5" />
-                              <span>UniFi Console</span>
-                            </button>
-                          )}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleSetDisposition(
+                                actor.id,
+                                actor.disposition === 'RESOLVED' ? 'ACTIVE' : 'RESOLVED'
+                              )
+                            }
+                            className="btn-secondary text-xs whitespace-nowrap flex-shrink-0"
+                          >
+                            {actor.disposition === 'RESOLVED' ? 'Reopen' : 'Mark Resolved'}
+                          </button>
                         </div>
                       </div>
 
-                      <p className="text-xs text-slate-700 dark:text-slate-300">{f.summary}</p>
-
-                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] font-mono text-slate-500 dark:text-slate-400">
-                        {f.host && <span>Host: {f.host}</span>}
-                        {f.actorIp && <span>IP: {f.actorIp}</span>}
-                        {f.actorAsn && <span>ASN: {f.actorAsn}</span>}
-                        {rayIds.length > 0 && <span>Rays: {rayIds.slice(0, 4).join(', ')}</span>}
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-mono text-slate-600 dark:text-slate-400 tabular-nums">
+                        <span>Runs seen: {actor.runsSeen}</span>
+                        <span>Requests: {actor.totalRequests}</span>
+                        <span className={actor.totalOrigin200s > 0 ? 'text-rose-600 dark:text-rose-400 font-semibold' : ''}>
+                          Origin 200s: {actor.totalOrigin200s}
+                        </span>
+                        <span title={formatLocalDateTime(actor.lastSeenAt)}>
+                          Last seen: {formatRelativeTime(actor.lastSeenAt)}
+                        </span>
+                        <span title={formatLocalDateTime(actor.firstSeenAt)}>
+                          First seen: {formatRelativeTime(actor.firstSeenAt)}
+                        </span>
                       </div>
+
+                      {(tags.length > 0 || actor.intelSummary) && (
+                        <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                          {tags.map((t) => (
+                            <StatusBadge key={t} label={`Intel: ${t}`} variant="danger" />
+                          ))}
+                          {actor.intelSummary && (
+                            <span className="text-slate-600 dark:text-slate-400 font-mono text-[11px]">
+                              {actor.intelSummary}
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {(hosts.length > 0 || paths.length > 0) && (
+                        <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400 break-all">
+                          {hosts.length > 0 && <span className="mr-3">Hosts: {hosts.join(', ')}</span>}
+                          {paths.length > 0 && <span>Paths: {paths.slice(0, 6).join(', ')}</span>}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -986,203 +1768,9 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
       )}
 
       {/* =================================================================== */}
-      {/* SUB-VIEW 2: THREAT ACTORS LEDGER                                    */}
+      {/* SUB-VIEW 3: INTERNAL LAN & WSH INFRASTRUCTURE (UNIFI + WSH)         */}
       {/* =================================================================== */}
-      {subView === 'actors' && (
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
-              <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
-                Recurring Threat Actors Ledger
-              </h3>
-              <p className="text-xs text-slate-600 dark:text-slate-400">
-                Cross-run actor tracking with Cloudflare IP Intel, origin-reach counts, and 1-click WAF mitigation expressions.
-              </p>
-            </div>
-
-            <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
-              <div className="relative flex-1 sm:w-64">
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                <input
-                  type="text"
-                  value={actorSearch}
-                  onChange={(e) => setActorSearch(e.target.value)}
-                  placeholder="Filter IP, ASN, org, host..."
-                  className="w-full pl-8 pr-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
-                />
-              </div>
-
-              <div className="w-40">
-                <CustomSelect
-                  value={actorDispositionFilter}
-                  onChange={setActorDispositionFilter}
-                  options={[
-                    { value: 'ACTIVE', label: 'Active' },
-                    { value: 'ALLOWLISTED', label: 'Allowlisted' },
-                    { value: 'RESOLVED', label: 'Resolved' },
-                    { value: 'ALL', label: 'All Actors' },
-                  ]}
-                />
-              </div>
-            </div>
-          </div>
-
-          {sourceFeedback && (
-            <div
-              className={`text-xs font-mono px-3 py-2 rounded-xl border ${
-                sourceFeedback.tone === 'ok'
-                  ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
-                  : 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border-rose-500/30'
-              }`}
-            >
-              {sourceFeedback.text}
-            </div>
-          )}
-
-          {isLoadingActors ? (
-            <div className="p-8 text-center text-xs font-mono text-slate-500">Loading threat actors...</div>
-          ) : filteredActors.length === 0 ? (
-            <div className="p-8 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-center text-xs text-slate-500">
-              No threat actors match the selected disposition filter.
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {filteredActors.map((actor) => {
-                const hosts = safeParseJson<string[]>(actor.targetHostsJson, []);
-                const paths = safeParseJson<string[]>(actor.samplePathsJson, []);
-                const tags = safeParseJson<string[]>(actor.intelTagsJson, []);
-                const wafExpr = buildWafRuleExpression(
-                  actor.ipAddress ? [actor.ipAddress] : [],
-                  actor.asn ? [actor.asn] : []
-                );
-                const copyKey = `actor-waf-${actor.id}`;
-                const cfZone = hosts.some((h) => h.includes('parakith')) ? 'parakith.com' : 'panoramadr.com';
-
-                return (
-                  <div
-                    key={actor.id}
-                    className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-2.5"
-                  >
-                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <StatusBadge
-                          label={actor.highestSeverity}
-                          variant={severityToBadgeVariant(actor.highestSeverity)}
-                        />
-                        <span className="text-sm font-mono font-bold text-slate-900 dark:text-slate-100">
-                          {actor.ipAddress || actor.id}
-                        </span>
-                        {actor.country && (
-                          <span className="px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-[11px] font-mono text-slate-700 dark:text-slate-300">
-                            {actor.country}
-                          </span>
-                        )}
-                        {(actor.asn || actor.asOrg) && (
-                          <span className="text-xs font-mono text-slate-600 dark:text-slate-400">
-                            {actor.asn ? `AS${actor.asn.replace(/^AS/i, '')}` : ''} {actor.asOrg || ''}
-                          </span>
-                        )}
-                        {actor.latestClassification && (
-                          <StatusBadge label={actor.latestClassification} variant="accent" />
-                        )}
-                        <StatusBadge
-                          label={actor.disposition}
-                          variant={actor.disposition === 'ACTIVE' ? 'warning' : 'neutral'}
-                        />
-                      </div>
-
-                      <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 shrink-0">
-                        {wafExpr && (
-                          <button
-                            type="button"
-                            onClick={() => void handleCopyText(copyKey, wafExpr)}
-                            className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-                          >
-                            {copiedKey === copyKey ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
-                            <span>{copiedKey === copyKey ? 'Copied!' : 'Copy WAF Rule'}</span>
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() =>
-                            void handleOpenExternal(
-                              buildCloudflareSecurityEventsUrl(cfAccountId, cfZone, actor.ipAddress)
-                            )
-                          }
-                          className="btn-ghost text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-                        >
-                          <ExternalLink className="w-3.5 h-3.5" />
-                          <span>Cloudflare</span>
-                        </button>
-                        {actor.disposition !== 'ALLOWLISTED' && (
-                          <button
-                            type="button"
-                            onClick={() => void handleAllowlistActor(actor)}
-                            className="btn-tonal text-xs whitespace-nowrap flex-shrink-0"
-                          >
-                            Allowlist
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() =>
-                            void handleSetDisposition(
-                              actor.id,
-                              actor.disposition === 'RESOLVED' ? 'ACTIVE' : 'RESOLVED'
-                            )
-                          }
-                          className="btn-secondary text-xs whitespace-nowrap flex-shrink-0"
-                        >
-                          {actor.disposition === 'RESOLVED' ? 'Reopen' : 'Mark Resolved'}
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-mono text-slate-600 dark:text-slate-400 tabular-nums">
-                      <span>Runs seen: {actor.runsSeen}</span>
-                      <span>Requests: {actor.totalRequests}</span>
-                      <span className={actor.totalOrigin200s > 0 ? 'text-rose-600 dark:text-rose-400 font-semibold' : ''}>
-                        Origin 200s: {actor.totalOrigin200s}
-                      </span>
-                      <span title={formatLocalDateTime(actor.lastSeenAt)}>
-                        Last seen: {formatRelativeTime(actor.lastSeenAt)}
-                      </span>
-                      <span title={formatLocalDateTime(actor.firstSeenAt)}>
-                        First seen: {formatRelativeTime(actor.firstSeenAt)}
-                      </span>
-                    </div>
-
-                    {(tags.length > 0 || actor.intelSummary) && (
-                      <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                        {tags.map((t) => (
-                          <StatusBadge key={t} label={`Intel: ${t}`} variant="danger" />
-                        ))}
-                        {actor.intelSummary && (
-                          <span className="text-slate-600 dark:text-slate-400 font-mono text-[11px]">
-                            {actor.intelSummary}
-                          </span>
-                        )}
-                      </div>
-                    )}
-
-                    {(hosts.length > 0 || paths.length > 0) && (
-                      <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400 break-all">
-                        {hosts.length > 0 && <span className="mr-3">Hosts: {hosts.join(', ')}</span>}
-                        {paths.length > 0 && <span>Paths: {paths.slice(0, 6).join(', ')}</span>}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* =================================================================== */}
-      {/* SUB-VIEW 3: 360° SOURCES, LAN BASELINE & ALLOWLIST                  */}
-      {/* =================================================================== */}
-      {subView === 'sources' && (
+      {subView === 'internal' && (
         <div className="space-y-6">
           {sourceFeedback && (
             <div
@@ -1196,89 +1784,180 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
             </div>
           )}
 
-          {/* Collector Health & CEF Detection */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-mono font-semibold text-slate-700 dark:text-slate-300">
-                  Cloudflare Perimeter &amp; ZT
-                </span>
-                <StatusBadge
-                  label={collectorStatuses.cloudflare}
-                  variant={collectorStatusToBadgeVariant(collectorStatuses.cloudflare)}
-                />
+          {/* Internal Action Header & Hardware Telemetry */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+              <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Wifi className="w-5 h-5 text-[var(--color-brand-text)] shrink-0" />
+                  <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
+                    Internal LAN, UniFi Network &amp; WSH Origin Host
+                  </h3>
+                  <StatusBadge
+                    label={`UniFi: ${collectorStatuses.unifi}`}
+                    variant={collectorStatusToBadgeVariant(collectorStatuses.unifi)}
+                  />
+                  <StatusBadge
+                    label={`WSH: ${collectorStatuses.wshAuth}`}
+                    variant={collectorStatusToBadgeVariant(collectorStatuses.wshAuth)}
+                  />
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-400">
+                  Monitors your private LAN hardware (<code className="font-mono">{unifiBaseUrl}</code>), device MAC baseline, UniFi CyberSecure IPS/CEF alerts, WSH SSH auth, and <code className="font-mono">PanoramaAuth</code>. Actions apply in UniFi Console, WSH Firewall, or the `unifi-siem` collector.
+                </p>
               </div>
-              <div className="text-xs font-mono text-slate-500 dark:text-slate-400 space-y-1">
-                <div>Account ID: {cfAccountId || 'Auto-detect on test'}</div>
-                <div>Token: {settings?.cfConfigured ? `${settings.cfSource} • ${settings.maskedCfToken}` : 'Not configured'}</div>
+
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => void handleOpenExternal(buildUnifiConsoleUrl(unifiBaseUrl, 'clients'))}
+                  className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>UniFi Clients</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleOpenExternal(buildUnifiConsoleUrl(unifiBaseUrl, 'threats'))}
+                  className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>UniFi Threats / IPS</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleOpenExternal(buildUnifiConsoleUrl(unifiBaseUrl, 'policies'))}
+                  className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>UniFi Firewall</span>
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => void handleOpenExternal(buildCloudflareSecurityEventsUrl(cfAccountId, 'panoramadr.com'))}
-                className="btn-ghost text-xs flex items-center gap-1.5"
-              >
-                <ExternalLink className="w-3.5 h-3.5" />
-                <span>Open Cloudflare Dashboard</span>
-              </button>
             </div>
 
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-mono font-semibold text-slate-700 dark:text-slate-300">
-                  UniFi CloudKey &amp; CEF Syslog
-                </span>
-                <StatusBadge
-                  label={collectorStatuses.unifi}
-                  variant={collectorStatusToBadgeVariant(collectorStatuses.unifi)}
-                />
-              </div>
-              <div className="text-xs font-mono text-slate-500 dark:text-slate-400 space-y-1">
-                <div>Endpoint: {unifiBaseUrl}</div>
-                <div>
-                  Optional WSH CEF Syslog:{' '}
-                  {internalSummary.unifiSiemCefEvents > 0
-                    ? `${internalSummary.unifiSiemCefEvents} recent events`
-                    : 'Not active / 0 recent events'}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 tabular-nums pt-2 border-t border-slate-200 dark:border-slate-800">
+              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-mono font-semibold text-slate-700 dark:text-slate-300">
+                    UniFi Network Fleet
+                  </span>
+                  <StatusBadge
+                    label={`${internalSummary.unifiDevicesTotal} Devices`}
+                    variant={internalSummary.unifiOfflineDevices.length > 0 ? 'warning' : 'success'}
+                  />
+                </div>
+                <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">
+                  {internalSummary.unifiClientsTotal}{' '}
+                  <span className="text-xs font-normal text-slate-500">LAN clients</span>
+                </div>
+                <div className="text-[11px] font-mono text-slate-600 dark:text-slate-400">
+                  Trusted: {trustedLanCount}/{lanClients.length} • Unknown MACs: {internalSummary.newUnknownLanMacs.length} • ZBF Policies: {internalSummary.unifiPoliciesTotal}
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => void handleOpenExternal(buildUnifiConsoleUrl(unifiBaseUrl, 'clients'))}
-                className="btn-ghost text-xs flex items-center gap-1.5"
-              >
-                <ExternalLink className="w-3.5 h-3.5" />
-                <span>Open UniFi Console</span>
-              </button>
-            </div>
 
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-mono font-semibold text-slate-700 dark:text-slate-300">
-                  WSH Origin &amp; PanoramaAuth
-                </span>
-                <StatusBadge
-                  label={collectorStatuses.wshAuth}
-                  variant={collectorStatusToBadgeVariant(collectorStatuses.wshAuth)}
-                />
-              </div>
-              <div className="text-xs font-mono text-slate-500 dark:text-slate-400 space-y-1">
-                <div>Probe: Read-only SSH SQLite (?mode=ro)</div>
-                <div>
-                  Auth Watchdog: {internalSummary.panoramaAuthAvailable ? 'Available' : 'Unavailable / Standby'}
+              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-mono font-semibold text-slate-700 dark:text-slate-300">
+                    WSH &amp; PanoramaAuth
+                  </span>
+                  <StatusBadge
+                    label={internalSummary.panoramaAuthAvailable ? 'Auth RO Active' : 'SSH Standby'}
+                    variant={internalSummary.panoramaAuthAnomalies > 0 || internalSummary.sshAnomalyCount > 0 ? 'danger' : 'success'}
+                  />
+                </div>
+                <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">
+                  {internalSummary.panoramaAuthAnomalies}{' '}
+                  <span className="text-xs font-normal text-slate-500">auth anomalies</span>
+                </div>
+                <div className="text-[11px] font-mono text-slate-600 dark:text-slate-400">
+                  SSH Flagged Lines: {internalSummary.sshAnomalyCount} • Read-only <code className="font-mono">?mode=ro</code> SQLite
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={onNavigateToSettings}
-                className="btn-ghost text-xs flex items-center gap-1.5"
-              >
-                <Sliders className="w-3.5 h-3.5" />
-                <span>Test Connections in Settings</span>
-              </button>
+
+              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-mono font-semibold text-slate-700 dark:text-slate-300">
+                    UniFi SIEM CEF Syslog
+                  </span>
+                  <StatusBadge
+                    label={
+                      siemContainer
+                        ? siemContainer.State?.toLowerCase() === 'running'
+                          ? 'Running'
+                          : siemContainer.State
+                        : 'Not Deployed'
+                    }
+                    variant={siemContainer?.State?.toLowerCase() === 'running' ? 'success' : 'neutral'}
+                  />
+                </div>
+                <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">
+                  {internalSummary.unifiSiemCefEvents}{' '}
+                  <span className="text-xs font-normal text-slate-500">CEF events</span>
+                </div>
+                <div className="text-[11px] font-mono text-slate-600 dark:text-slate-400">
+                  IPS / High Firewall Alerts: {internalSummary.unifiCefSecurityAlerts}
+                </div>
+              </div>
             </div>
           </div>
 
-          {/* UniFi SIEM CEF Collector Deployment Card */}
+          {/* Explicit Cross-Over Note: Internal <- External */}
+          <div className="bg-white dark:bg-slate-900 border border-[var(--color-brand)]/40 rounded-2xl p-4 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2 text-xs font-mono font-bold text-slate-900 dark:text-slate-100 uppercase tracking-wider">
+                <ArrowLeftRight className="w-4 h-4 text-[var(--color-brand-text)] shrink-0" />
+                <span>Cross-Over Note: Internal LAN &amp; WSH ← External Cloudflare</span>
+              </div>
+              <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                External requests cross <code className="font-mono">panorama-tunnel</code> (<code className="font-mono">cf-egress-net</code>) into WSH Lighttpd <code className="font-mono">:443</code> and authenticate through <code className="font-mono">PanoramaAuth</code> SSO. Meanwhile, UniFi Gateway CyberSecure inspects WAN-to-LAN traffic and forwards CEF events to WSH <code className="font-mono">172.25.25.5:5514/udp</code>. Compare with <strong>External (Cloudflare)</strong> if an anomaly traces back to a WAN client.
+              </p>
+              <div className="flex flex-wrap gap-2 text-[11px] font-mono tabular-nums">
+                <StatusBadge label={`CF WAF Hits: ${totalWafHits}`} variant="info" />
+                <StatusBadge
+                  label={`Private Origin 200s: ${totalOrigin200Breaches}`}
+                  variant={totalOrigin200Breaches > 0 ? 'danger' : 'success'}
+                />
+                <StatusBadge
+                  label={`ZT Access Denied: ${zeroTrustSummary.accessDenied}`}
+                  variant={zeroTrustSummary.accessDenied > 0 ? 'warning' : 'neutral'}
+                />
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setSubView('external')}
+              className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+            >
+              <span>Inspect External Perimeter</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {/* Internal Deterministic Findings & Actions */}
+          {(internalFindings.length > 0 || internalActions.length > 0) && (
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-5 h-5 text-[var(--color-brand-text)]" />
+                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
+                  Internal LAN &amp; Host Findings ({internalFindings.length})
+                </h3>
+              </div>
+              {internalFindings.length > 0 && (
+                <div className="space-y-3">{internalFindings.map(renderFindingRow)}</div>
+              )}
+              {internalActions.length > 0 && (
+                <div className="space-y-2.5 pt-2 border-t border-slate-200 dark:border-slate-800">
+                  <div className="text-xs font-mono font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
+                    Recommended Internal Actions ({internalActions.length})
+                  </div>
+                  {internalActions.map((act, idx) => renderActionRow(act, idx, 'int-act'))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Optional UniFi SIEM CEF Collector Deployment Card */}
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="space-y-1">
@@ -1427,11 +2106,11 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
+                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 tabular-nums">
                   UniFi LAN Device Baseline ({trustedLanCount} / {lanClients.length} Trusted)
                 </h3>
                 <p className="text-xs text-slate-600 dark:text-slate-400">
-                  Any new MAC address appearing on the LAN outside your trusted baseline triggers a HIGH Unknown-Device finding.
+                  Tracks known hardware MACs on your private LAN. Brand-new MACs appearing after your baseline trigger a <code className="font-mono">HIGH</code> Unknown LAN Device alert.
                 </p>
               </div>
               <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
@@ -1456,9 +2135,55 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
               </div>
             </div>
 
+            {/* Clear Explanation of What Trusting a Device Means */}
+            <div className="flex items-start gap-2.5 p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs text-slate-700 dark:text-slate-300">
+              <Info className="w-4 h-4 text-[var(--color-accent-text)] shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <div className="font-semibold text-slate-900 dark:text-slate-100">
+                  What does trusting a device mean?
+                </div>
+                <p className="leading-relaxed text-slate-600 dark:text-slate-400">
+                  Trusting a device is <strong>100% local and read-only inside PanoramaSRE</strong> — it never modifies your UniFi Wi-Fi, VLANs, or firewall rules. It marks a MAC address as <em>owner-verified hardware inventory</em> so you can quickly filter reviewed vs. unreviewed devices and clear Gemini&apos;s initial-baseline review reminder. Whenever an unrecognized MAC address first joins the LAN outside this baseline, Stage 0 still flags a <code className="font-mono">HIGH</code> Unknown LAN Device alert until you inspect or allowlist it.
+                </p>
+              </div>
+            </div>
+
+            {/* Search & Trust Filter */}
+            {lanClients.length > 0 && (
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                <div className="relative flex-1">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={lanSearch}
+                    onChange={(e) => setLanSearch(e.target.value)}
+                    placeholder="Filter hostname, MAC, IP, VLAN, vendor..."
+                    className="w-full pl-8 pr-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
+                  />
+                </div>
+                <div className="w-full sm:w-52">
+                  <CustomSelect
+                    value={lanTrustFilter}
+                    onChange={(val) =>
+                      setLanTrustFilter((val as 'ALL' | 'UNREVIEWED' | 'TRUSTED') || 'ALL')
+                    }
+                    options={[
+                      { value: 'ALL', label: `All (${lanClients.length})` },
+                      { value: 'UNREVIEWED', label: `Unreviewed (${lanClients.length - trustedLanCount})` },
+                      { value: 'TRUSTED', label: `Trusted (${trustedLanCount})` },
+                    ]}
+                  />
+                </div>
+              </div>
+            )}
+
             {lanClients.length === 0 ? (
               <div className="p-6 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-center text-xs text-slate-500">
-                No UniFi LAN clients captured yet. Configure your UniFi X-API-Key in Settings and run an audit.
+                No UniFi LAN clients captured yet. Run an audit in PanoramaSRE to discover your LAN baseline.
+              </div>
+            ) : filteredLanClients.length === 0 ? (
+              <div className="p-6 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-center text-xs text-slate-500">
+                No LAN devices match your current search or trust filter.
               </div>
             ) : (
               <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
@@ -1470,11 +2195,11 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                       <th className="py-2.5 px-3">IP Address</th>
                       <th className="py-2.5 px-3">VLAN / Vendor</th>
                       <th className="py-2.5 px-3">Last Seen</th>
-                      <th className="py-2.5 px-3 text-right">Trusted</th>
+                      <th className="py-2.5 px-3 text-right">Owner-Verified</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-mono tabular-nums">
-                    {lanClients.map((cli) => (
+                    {filteredLanClients.map((cli) => (
                       <tr key={cli.macAddress} className="hover:bg-slate-50/70 dark:hover:bg-slate-950/60">
                         <td className="py-2.5 px-3 font-sans font-medium text-slate-900 dark:text-slate-100">
                           {cli.label || cli.hostname || 'Unnamed Device'}
@@ -1504,16 +2229,45 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
               </div>
             )}
           </div>
+        </div>
+      )}
 
-          {/* Allowlist Rules Manager */}
+      {/* =================================================================== */}
+      {/* SUB-VIEW 4: ALLOWLIST & CONTROLS                                    */}
+      {/* =================================================================== */}
+      {subView === 'allowlist' && (
+        <div className="space-y-6">
+          {sourceFeedback && (
+            <div
+              className={`text-xs font-mono px-3 py-2 rounded-xl border ${
+                sourceFeedback.tone === 'ok'
+                  ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
+                  : 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border-rose-500/30'
+              }`}
+            >
+              {sourceFeedback.text}
+            </div>
+          )}
+
+          {/* Cross-Surface Allowlist Rules Manager */}
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
-            <div>
-              <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
-                Threat Suppression Allowlist ({allowlist.length})
-              </h3>
-              <p className="text-xs text-slate-600 dark:text-slate-400">
-                Suppress expected operators, home/office IPs, CIDRs, ASNs, Access emails, LAN MACs, or SSH fingerprints from future findings.
-              </p>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
+                  Cross-Surface Threat Suppression Allowlist ({allowlist.length})
+                </h3>
+                <p className="text-xs text-slate-600 dark:text-slate-400">
+                  Suppress expected operators, home/office IPs, CIDRs, ASNs, Zero Trust emails (External Cloudflare), LAN MACs, or SSH fingerprints (Internal UniFi / WSH) from future findings.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={onNavigateToSettings}
+                className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+              >
+                <Sliders className="w-3.5 h-3.5" />
+                <span>Test Connections in Settings</span>
+              </button>
             </div>
 
             <form onSubmit={(e) => void handleAddAllowlistRule(e)} className="grid grid-cols-1 md:grid-cols-12 gap-2.5 items-end">
@@ -1523,12 +2277,12 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                   value={newRuleType}
                   onChange={setNewRuleType}
                   options={[
-                    { value: 'IP', label: 'IP Address' },
-                    { value: 'CIDR', label: 'IPv4 CIDR' },
-                    { value: 'ASN', label: 'ASN' },
-                    { value: 'EMAIL', label: 'Zero Trust Email' },
-                    { value: 'LAN_MAC', label: 'LAN MAC Address' },
-                    { value: 'SSH_KEY', label: 'SSH Key Fingerprint' },
+                    { value: 'IP', label: 'IP Address (External / Both)' },
+                    { value: 'CIDR', label: 'IPv4 CIDR (External)' },
+                    { value: 'ASN', label: 'ASN (External)' },
+                    { value: 'EMAIL', label: 'Zero Trust Email (External)' },
+                    { value: 'LAN_MAC', label: 'LAN MAC Address (Internal)' },
+                    { value: 'SSH_KEY', label: 'SSH Key Fingerprint (Internal)' },
                   ]}
                 />
               </div>
@@ -1567,47 +2321,60 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
               </div>
             </form>
 
-            {allowlist.length > 0 && (
+            {allowlist.length === 0 ? (
+              <div className="p-6 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-center text-xs text-slate-500">
+                No suppression allowlist rules configured yet.
+              </div>
+            ) : (
               <div className="divide-y divide-slate-200 dark:divide-slate-800 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
-                {allowlist.map((rule) => (
-                  <div
-                    key={rule.id}
-                    className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 px-3.5 py-2.5 bg-slate-50/70 dark:bg-slate-950/60 text-xs"
-                  >
-                    <div className="flex flex-wrap items-center gap-2.5 min-w-0">
-                      <StatusBadge label={rule.entryType} variant="neutral" />
-                      <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">
-                        {rule.value}
-                      </span>
-                      <span className="text-slate-600 dark:text-slate-400 truncate">{rule.label}</span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => void handleDeleteAllowlistRule(rule.id)}
-                      className="btn-danger text-xs px-2.5 py-1.5 min-h-[36px] flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+                {allowlist.map((rule) => {
+                  const surface = classifyAllowlistSurface(rule.entryType);
+                  return (
+                    <div
+                      key={rule.id}
+                      className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 px-3.5 py-2.5 bg-slate-50 dark:bg-slate-950 text-xs"
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>Remove</span>
-                    </button>
-                  </div>
-                ))}
+                      <div className="flex flex-wrap items-center gap-2 min-w-0">
+                        <StatusBadge
+                          label={surface === 'external' ? 'External (CF)' : 'Internal (LAN/WSH)'}
+                          variant={surface === 'external' ? 'info' : 'accent'}
+                        />
+                        <StatusBadge label={rule.entryType} variant="neutral" />
+                        <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">
+                          {rule.value}
+                        </span>
+                        <span className="text-slate-600 dark:text-slate-400 truncate">{rule.label}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void handleDeleteAllowlistRule(rule.id)}
+                        className="btn-danger text-xs px-2.5 py-1.5 min-h-[36px] flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Remove</span>
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
         </div>
       )}
 
-      {/* Security, Threat Intel & UniFi SIEM Execution Stream */}
-      <WorkStreamContainer
-        pageScope="security"
-        tabs={terminalTabs}
-        title="Security, Threat Intel &amp; UniFi SIEM Execution Stream"
-        description="Streams unifi-siem local verification, dry-runs, WSH deployments, container status probes, and host firewall hardening runs."
-        emptyHint="Use the UniFi SIEM Collector actions under 360° Sources & Allowlist to stream build and deployment output here."
-        onOpenInBottomConsole={onOpenInBottomConsole}
-        onAbortJob={onAbortJob}
-        onClearTab={onClearTab}
-      />
+      {/* Security, Live Threat Audit & UniFi SIEM Execution Stream */}
+      <div id="security-work-stream">
+        <WorkStreamContainer
+          pageScope="security"
+          tabs={terminalTabs}
+          title="Security, 360° Threat Audits &amp; UniFi SIEM Execution Stream"
+          description="Live pipeline telemetry for manual and scheduled 360° Threat Audits plus unifi-siem local verification, dry-runs, WSH deployments, and firewall hardening runs."
+          emptyHint="Click Run Audit Now, Deep Investigate (Carbon), or trigger UniFi SIEM Collector actions to stream live execution logs here."
+          onOpenInBottomConsole={onOpenInBottomConsole}
+          onAbortJob={onAbortJob}
+          onClearTab={onClearTab}
+        />
+      </div>
     </div>
   );
 };

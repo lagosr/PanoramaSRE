@@ -1150,4 +1150,23 @@ export interface UnifiSiemEnvConfigDto {
   suggestedIps: string;
 }
 
+export interface ThreatAuditProgressEvent {
+  runId: string;
+  stage:
+    | 'init'
+    | 'collectors'
+    | 'stage0'
+    | 'stage1'
+    | 'forensics'
+    | 'stage2'
+    | 'persist'
+    | 'done'
+    | 'error'
+    | string;
+  label: string;
+  message: string;
+  level: 'INFO' | 'PASS' | 'WARN' | 'ERROR' | string;
+  timestamp: string;
+}
+
 

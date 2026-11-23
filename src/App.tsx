@@ -55,6 +55,7 @@ import {
   ThreatAuditRunRow,
   ThreatRunDetailDto,
   ThreatActorRow,
+  ThreatAuditProgressEvent,
 } from './lib/types';
 import { computeThreatSidebarBadge } from './lib/threat-utils';
 import { inferPageScopeFromJob } from './lib/stream-utils';
@@ -137,6 +138,16 @@ export const App: React.FC = () => {
   const [selectedThreatDetail, setSelectedThreatDetail] = useState<ThreatRunDetailDto | null>(null);
   const [activeThreatActorsCount, setActiveThreatActorsCount] = useState<number>(0);
   const [isRunningThreatAudit, setIsRunningThreatAudit] = useState<boolean>(false);
+  const [threatAuditProgress, setThreatAuditProgress] = useState<{
+    runId: string;
+    stage: string;
+    label: string;
+    message: string;
+    level: string;
+    startedAtMs: number;
+  } | null>(null);
+  const activeThreatAuditTabIdRef = useRef<string | null>(null);
+  const threatAuditLazyTabCreatedRef = useRef<boolean>(false);
   const haltDeploymentsRef = useRef<boolean>(false);
   const currentRunningDeployJobIdRef = useRef<string | null>(null);
   const lastOptInSyncMsRef = useRef<number>(0);
@@ -865,66 +876,6 @@ export const App: React.FC = () => {
       console.warn('[PanoramaSRE] Failed refreshing 360 Threat Intel state:', err);
     }
   }, []);
-
-  const handleRunThreatAuditNow = useCallback(
-    async (windowHours: number, forceCarbon = false) => {
-      if (isRunningThreatAudit) return;
-      setIsRunningThreatAudit(true);
-      showActionFeedback(
-        forceCarbon
-          ? `Running 72h Deep Carbon threat audit (${windowHours}h window)...`
-          : `Running 360° Threat & Zero Trust audit (${windowHours}h window)...`,
-        'pending'
-      );
-      try {
-        const detail = await invoke<ThreatRunDetailDto>('run_threat_audit_now', {
-          windowHours,
-          forceCarbon,
-        });
-        setSelectedThreatDetail(detail);
-        await refreshThreatIntelState(detail.run.id);
-        showActionFeedback(
-          `360° Threat Audit finished: ${detail.run.overallSeverity} (${detail.run.intrusionVerdict})`,
-          detail.run.overallSeverity === 'HIGH' || detail.run.overallSeverity === 'CRITICAL'
-            ? 'error'
-            : 'success',
-          6000
-        );
-      } catch (err) {
-        showActionFeedback(`360° Threat Audit failed: ${String(err)}`, 'error', 7000);
-      } finally {
-        setIsRunningThreatAudit(false);
-      }
-    },
-    [isRunningThreatAudit, refreshThreatIntelState, showActionFeedback]
-  );
-
-  const handleEscalateThreatRunToCarbon = useCallback(
-    async (runId: string) => {
-      if (isRunningThreatAudit) return;
-      setIsRunningThreatAudit(true);
-      showActionFeedback('Escalating to 72h Deep Gemini 4 Carbon investigation...', 'pending');
-      try {
-        const detail = await invoke<ThreatRunDetailDto>('escalate_threat_run_to_carbon', {
-          runId,
-        });
-        setSelectedThreatDetail(detail);
-        await refreshThreatIntelState(detail.run.id);
-        showActionFeedback(
-          `Carbon Deep Investigation complete: ${detail.run.overallSeverity} (${detail.run.intrusionVerdict})`,
-          detail.run.overallSeverity === 'HIGH' || detail.run.overallSeverity === 'CRITICAL'
-            ? 'error'
-            : 'success',
-          6000
-        );
-      } catch (err) {
-        showActionFeedback(`Carbon escalation failed: ${String(err)}`, 'error', 7000);
-      } finally {
-        setIsRunningThreatAudit(false);
-      }
-    },
-    [isRunningThreatAudit, refreshThreatIntelState, showActionFeedback]
-  );
 
   const handleSelectThreatRunId = useCallback(async (runId: string) => {
     try {
@@ -2554,6 +2505,223 @@ export const App: React.FC = () => {
     return 'c:\\Users\\rodrigo\\Documents\\AG Projects';
   }, [apps]);
 
+  const handleRunThreatAuditNow = useCallback(
+    async (windowHours: number, forceCarbon = false) => {
+      if (isRunningThreatAudit) return;
+      const tabId = `threat-audit-${Date.now()}`;
+      const startMs = Date.now();
+      const title = forceCarbon
+        ? `360° Deep Investigate (Gemini 4 Carbon • ${windowHours}h)`
+        : `360° Threat & Zero Trust Audit (${windowHours}h)`;
+      const newTab: TerminalTab = {
+        id: tabId,
+        title,
+        lines: [
+          `[PanoramaSRE] Starting ${title}...`,
+          `[${new Date().toLocaleTimeString()}] [INFO] [INIT] Dispatching 3-layer collection (Cloudflare, UniFi CloudKey, WSH SSH)...`,
+        ],
+        isRunning: true,
+        createdAt: new Date().toISOString(),
+        pageScope: 'security',
+        source: 'ui',
+        abortable: false,
+      };
+      activeThreatAuditTabIdRef.current = tabId;
+      threatAuditLazyTabCreatedRef.current = false;
+      setTerminalTabs((prev) => [...prev, newTab]);
+      setActiveTerminalTabId(tabId);
+      saveTabToDb(newTab);
+      setIsRunningThreatAudit(true);
+      setThreatAuditProgress({
+        runId: tabId,
+        stage: 'init',
+        label: 'Initializing Audit',
+        message: 'Dispatching parallel collectors (Cloudflare, UniFi CloudKey, WSH SSH)...',
+        level: 'INFO',
+        startedAtMs: startMs,
+      });
+      showActionFeedback(
+        forceCarbon
+          ? `Running 72h Deep Carbon threat audit (${windowHours}h window)...`
+          : `Running 360° Threat & Zero Trust audit (${windowHours}h window)...`,
+        'pending'
+      );
+      try {
+        const detail = await invoke<ThreatRunDetailDto>('run_threat_audit_now', {
+          windowHours,
+          forceCarbon,
+        });
+        if (detail.run.errorMessage) {
+          appendTerminalLine(tabId, `[WARN] ${detail.run.errorMessage}`);
+        }
+        finalizeTerminalJob(tabId, detail.run.status === 'FAILED' ? 1 : 0);
+        setSelectedThreatDetail(detail);
+        await refreshThreatIntelState(detail.run.id);
+        showActionFeedback(
+          `360° Threat Audit finished: ${detail.run.overallSeverity} (${detail.run.intrusionVerdict})`,
+          detail.run.overallSeverity === 'HIGH' || detail.run.overallSeverity === 'CRITICAL'
+            ? 'error'
+            : 'success',
+          6000
+        );
+      } catch (err) {
+        failTerminalJob(tabId, `360° Threat Audit failed: ${String(err)}`);
+        showActionFeedback(`360° Threat Audit failed: ${String(err)}`, 'error', 7000);
+      } finally {
+        if (activeThreatAuditTabIdRef.current === tabId) {
+          activeThreatAuditTabIdRef.current = null;
+        }
+        setThreatAuditProgress(null);
+        setIsRunningThreatAudit(false);
+      }
+    },
+    [
+      appendTerminalLine,
+      failTerminalJob,
+      finalizeTerminalJob,
+      isRunningThreatAudit,
+      refreshThreatIntelState,
+      saveTabToDb,
+      showActionFeedback,
+    ]
+  );
+
+  const handleEscalateThreatRunToCarbon = useCallback(
+    async (runId: string) => {
+      if (isRunningThreatAudit) return;
+      const tabId = `threat-carbon-${Date.now()}`;
+      const startMs = Date.now();
+      const title = '360° Deep Investigate (Gemini 4 Carbon)';
+      const newTab: TerminalTab = {
+        id: tabId,
+        title,
+        lines: [
+          `[PanoramaSRE] Starting ${title} for run ${runId}...`,
+          `[${new Date().toLocaleTimeString()}] [INFO] [INIT] Fetching 72h forensic timeline & invoking Gemini 4 Carbon...`,
+        ],
+        isRunning: true,
+        createdAt: new Date().toISOString(),
+        pageScope: 'security',
+        source: 'ui',
+        abortable: false,
+      };
+      activeThreatAuditTabIdRef.current = tabId;
+      threatAuditLazyTabCreatedRef.current = false;
+      setTerminalTabs((prev) => [...prev, newTab]);
+      setActiveTerminalTabId(tabId);
+      saveTabToDb(newTab);
+      setIsRunningThreatAudit(true);
+      setThreatAuditProgress({
+        runId: tabId,
+        stage: 'init',
+        label: 'Deep Carbon Investigation',
+        message: 'Preparing 72h forensic fetch & Gemini 4 Carbon deep escalation...',
+        level: 'INFO',
+        startedAtMs: startMs,
+      });
+      showActionFeedback('Escalating to 72h Deep Gemini 4 Carbon investigation...', 'pending');
+      try {
+        const detail = await invoke<ThreatRunDetailDto>('escalate_threat_run_to_carbon', {
+          runId,
+        });
+        if (detail.run.errorMessage) {
+          appendTerminalLine(tabId, `[WARN] ${detail.run.errorMessage}`);
+        }
+        finalizeTerminalJob(tabId, detail.run.status === 'FAILED' ? 1 : 0);
+        setSelectedThreatDetail(detail);
+        await refreshThreatIntelState(detail.run.id);
+        showActionFeedback(
+          `Carbon Deep Investigation complete: ${detail.run.overallSeverity} (${detail.run.intrusionVerdict})`,
+          detail.run.overallSeverity === 'HIGH' || detail.run.overallSeverity === 'CRITICAL'
+            ? 'error'
+            : 'success',
+          6000
+        );
+      } catch (err) {
+        failTerminalJob(tabId, `Carbon escalation failed: ${String(err)}`);
+        showActionFeedback(`Carbon escalation failed: ${String(err)}`, 'error', 7000);
+      } finally {
+        if (activeThreatAuditTabIdRef.current === tabId) {
+          activeThreatAuditTabIdRef.current = null;
+        }
+        setThreatAuditProgress(null);
+        setIsRunningThreatAudit(false);
+      }
+    },
+    [
+      appendTerminalLine,
+      failTerminalJob,
+      finalizeTerminalJob,
+      isRunningThreatAudit,
+      refreshThreatIntelState,
+      saveTabToDb,
+      showActionFeedback,
+    ]
+  );
+
+  useEffect(() => {
+    let unlistenProgress: (() => void) | undefined;
+    listen<ThreatAuditProgressEvent>('sre://threat-audit-progress', (event) => {
+      const payload = event.payload;
+      if (!payload) return;
+
+      setThreatAuditProgress((prev) => ({
+        runId: payload.runId,
+        stage: payload.stage,
+        label: payload.label,
+        message: payload.message,
+        level: payload.level,
+        startedAtMs:
+          prev && (prev.runId === payload.runId || prev.stage === 'init')
+            ? prev.startedAtMs
+            : Date.now(),
+      }));
+
+      const ts = payload.timestamp
+        ? new Date(payload.timestamp).toLocaleTimeString()
+        : new Date().toLocaleTimeString();
+      const line = `[${ts}] [${payload.level}] [${payload.stage.toUpperCase()}] ${payload.message}`;
+      let targetTabId = activeThreatAuditTabIdRef.current;
+
+      if (!targetTabId) {
+        targetTabId = `threat-audit-${payload.runId}`;
+        activeThreatAuditTabIdRef.current = targetTabId;
+        threatAuditLazyTabCreatedRef.current = true;
+        const bgTab: TerminalTab = {
+          id: targetTabId,
+          title: '360° Threat & Zero Trust Audit (Scheduled)',
+          lines: [`[PanoramaSRE] Streaming scheduled threat audit ${payload.runId}...`, line],
+          isRunning: payload.stage !== 'done' && payload.stage !== 'error',
+          createdAt: new Date().toISOString(),
+          pageScope: 'security',
+          source: 'scheduled',
+          abortable: false,
+        };
+        setTerminalTabs((prev) =>
+          prev.some((t) => t.id === targetTabId) ? prev : [...prev, bgTab]
+        );
+        saveTabToDb(bgTab);
+      } else {
+        appendTerminalLine(targetTabId, line);
+      }
+
+      if (payload.stage === 'done' || payload.stage === 'error') {
+        if (threatAuditLazyTabCreatedRef.current && targetTabId) {
+          finalizeTerminalJob(targetTabId, payload.stage === 'error' ? 1 : 0);
+          activeThreatAuditTabIdRef.current = null;
+          threatAuditLazyTabCreatedRef.current = false;
+          setThreatAuditProgress(null);
+        }
+      }
+    }).then((unsub) => {
+      unlistenProgress = unsub;
+    });
+
+    return () => {
+      if (unlistenProgress) unlistenProgress();
+    };
+  }, [appendTerminalLine, finalizeTerminalJob, saveTabToDb]);
+
   const handleTriggerUnifiSiemAction = useCallback(
     async (action: UnifiSiemAction) => {
       if (action === 'deploy' || action === 'stop') {
@@ -3519,6 +3687,7 @@ export const App: React.FC = () => {
               runs={threatRuns}
               settings={threatSettings}
               isRunningAudit={isRunningThreatAudit}
+              auditProgress={threatAuditProgress}
               onRunAuditNow={handleRunThreatAuditNow}
               onEscalateRunToCarbon={handleEscalateThreatRunToCarbon}
               onSelectRunId={handleSelectThreatRunId}

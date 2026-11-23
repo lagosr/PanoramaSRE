@@ -42,6 +42,52 @@ import {
 } from '../../lib/types';
 import { useTheme } from '../../context/ThemeContext';
 
+type ConnectorCheckStatus = 'idle' | 'testing' | 'pass' | 'fail';
+
+interface ConnectorDiagnosticRow {
+  id: 'cloudflare' | 'gemini' | 'unifi' | 'wsh';
+  label: string;
+  surface:
+    | 'External (Cloudflare)'
+    | 'AI Engine (Gemini 4)'
+    | 'Internal LAN (UniFi)'
+    | 'Internal Host (WSH)';
+  status: ConnectorCheckStatus;
+  durationMs?: number;
+  detail: string;
+}
+
+const INITIAL_CONNECTOR_DIAGNOSTICS: ConnectorDiagnosticRow[] = [
+  {
+    id: 'cloudflare',
+    label: 'Cloudflare Perimeter & Zero Trust',
+    surface: 'External (Cloudflare)',
+    status: 'idle',
+    detail: 'Ready — verifies token scope, account, zones, Tunnels, IP Intel, and Audit logs.',
+  },
+  {
+    id: 'gemini',
+    label: 'Gemini 4 Security AI Engine',
+    surface: 'AI Engine (Gemini 4)',
+    status: 'idle',
+    detail: 'Ready — tests structured JSON brief schema handshake on the configured Tier 1 model.',
+  },
+  {
+    id: 'unifi',
+    label: 'UniFi CloudKey Integration API',
+    surface: 'Internal LAN (UniFi)',
+    status: 'idle',
+    detail: 'Ready — verifies X-API-Key against local UniFi Network sites, devices, and clients.',
+  },
+  {
+    id: 'wsh',
+    label: 'WSH Origin & PanoramaAuth SSH',
+    surface: 'Internal Host (WSH)',
+    status: 'idle',
+    detail: 'Ready — runs read-only SSH probe for containers, PanoramaAuth SQLite, and UniFi CEF.',
+  },
+];
+
 interface SettingsViewProps {
   terminalTabs?: TerminalTab[];
   onWorkspaceChanged?: () => void;
@@ -154,7 +200,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   });
   const [windowsAutostart, setWindowsAutostart] = useState<boolean>(false);
   const [isSavingThreat, setIsSavingThreat] = useState<boolean>(false);
-  const [threatTestingTarget, setThreatTestingTarget] = useState<string | null>(null);
+  const [isTestingAllConnectors, setIsTestingAllConnectors] = useState<boolean>(false);
+  const [connectorResults, setConnectorResults] = useState<ConnectorDiagnosticRow[]>(
+    INITIAL_CONNECTOR_DIAGNOSTICS
+  );
+  const [lastConnectorTestAt, setLastConnectorTestAt] = useState<string | null>(null);
   const [threatFeedback, setThreatFeedback] = useState<{
     text: string;
     tone: 'ok' | 'err';
@@ -232,90 +282,142 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
   };
 
-  const handleTestThreatConnector = async (target: 'cloudflare' | 'gemini' | 'unifi' | 'wsh') => {
-    setThreatTestingTarget(target);
-    try {
-      if (target === 'cloudflare') {
-        const res = await invoke<{
-          accountId: string;
-          zones: Array<{ name: string; plan: string }>;
-          tunnelsOk: boolean;
-          intelOk: boolean;
-          auditOk: boolean;
-        }>('test_cloudflare_threat_connection', {
-          tokenOverride: null,
-          accountIdOverride: null,
-        });
-        if (res.accountId) {
-          setThreatDto((prev) => (prev ? { ...prev, cfAccountId: res.accountId } : prev));
-        }
-        const zoneNames = res.zones.map((z) => `${z.name} (${z.plan})`).join(', ');
-        setThreatFeedback({
-          text: `Cloudflare OK: ${zoneNames || res.accountId}`,
-          tone: 'ok',
-        });
-        onEmitSettingsStream?.('Test Cloudflare Threat Connection', [
-          `[PASS] Cloudflare Account ${res.accountId} verified. Zones: ${zoneNames}`,
-          `[INFO] Tunnels=${res.tunnelsOk} | IP Intel=${res.intelOk} | Audit Logs=${res.auditOk}`,
-        ]);
-      } else if (target === 'gemini') {
-        const res = await invoke<{ model: string; severity: string }>(
-          'test_gemini_connection',
-          { apiKeyOverride: null }
-        );
-        setThreatFeedback({
-          text: `Gemini OK (${res.model})`,
-          tone: 'ok',
-        });
-        onEmitSettingsStream?.('Test Gemini 4 Security API', [
-          `[PASS] Gemini API verified cleanly with structured schema on model=${res.model}.`,
-        ]);
-      } else if (target === 'unifi') {
-        const res = await invoke<{
-          siteCount?: number;
-          deviceCount?: number;
-          clientCount?: number;
-        }>('test_unifi_connection', {
-          baseUrlOverride: threatPrefs.unifiBaseUrl.trim() || null,
-          apiKeyOverride: null,
-        });
-        setThreatFeedback({
-          text: `UniFi OK (${res.deviceCount ?? 0} devices, ${res.clientCount ?? 0} clients)`,
-          tone: 'ok',
-        });
-        onEmitSettingsStream?.('Test UniFi CloudKey Integration API', [
-          `[PASS] UniFi ${threatPrefs.unifiBaseUrl} responded: ${res.siteCount ?? 1} site(s), ${res.deviceCount ?? 0} devices, ${res.clientCount ?? 0} clients.`,
-        ]);
-      } else {
-        const res = await invoke<{
-          hostname: string;
-          panoramaAuthAvailable: boolean;
-          anomaliesCount: number;
-          auditLogsCount: number;
-          containersCount: number;
-          unifiSiemPresent: boolean;
-          unifiCefCount: number;
-        }>('test_wsh_security_probe');
-        setThreatFeedback({
-          text: `WSH SSH Probe OK (host=${res.hostname}, containers=${res.containersCount})`,
-          tone: 'ok',
-        });
-        onEmitSettingsStream?.('Test WSH Security SSH Probe', [
-          `[PASS] Read-only probe on ${res.hostname}: PanoramaAuth=${res.panoramaAuthAvailable} (anomalies=${res.anomaliesCount}, auditLogs=${res.auditLogsCount}), containers=${res.containersCount}, UniFi CEF=${res.unifiSiemPresent} (${res.unifiCefCount} events).`,
-        ]);
-      }
-      setTimeout(() => setThreatFeedback(null), 5000);
-    } catch (err) {
-      const msg = String(err);
-      setThreatFeedback({ text: `${target.toUpperCase()} test failed: ${msg}`, tone: 'err' });
-      onEmitSettingsStream?.(
-        `Test ${target.toUpperCase()} Connection`,
-        [`[ERROR] ${msg}`],
-        1
+  const handleTestAllThreatConnectors = async () => {
+    if (isTestingAllConnectors) return;
+    setIsTestingAllConnectors(true);
+    setThreatFeedback(null);
+
+    setConnectorResults(
+      INITIAL_CONNECTOR_DIAGNOSTICS.map((item) => ({
+        ...item,
+        status: 'testing',
+        durationMs: undefined,
+        detail: 'Probing connector...',
+      }))
+    );
+
+    const updateRow = (
+      id: ConnectorDiagnosticRow['id'],
+      patch: Partial<ConnectorDiagnosticRow>
+    ) => {
+      setConnectorResults((prev) =>
+        prev.map((row) => (row.id === id ? { ...row, ...patch } : row))
       );
-    } finally {
-      setThreatTestingTarget(null);
-    }
+    };
+
+    const runOne = async <T,>(
+      id: ConnectorDiagnosticRow['id'],
+      label: string,
+      fn: () => Promise<T>,
+      formatSuccess: (res: T) => string
+    ): Promise<{ id: ConnectorDiagnosticRow['id']; label: string; ok: boolean; durationMs: number; detail: string }> => {
+      const t0 = performance.now();
+      try {
+        const res = await fn();
+        const durationMs = Math.round(performance.now() - t0);
+        const detail = formatSuccess(res);
+        updateRow(id, { status: 'pass', durationMs, detail });
+        return { id, label, ok: true, durationMs, detail };
+      } catch (err) {
+        const durationMs = Math.round(performance.now() - t0);
+        const detail = String(err);
+        updateRow(id, { status: 'fail', durationMs, detail });
+        return { id, label, ok: false, durationMs, detail };
+      }
+    };
+
+    const baseUrl = threatPrefs.unifiBaseUrl.trim() || 'https://ui.panoramadr.com';
+
+    const results = await Promise.all([
+      runOne(
+        'cloudflare',
+        'Cloudflare Perimeter & Zero Trust',
+        async () => {
+          const res = await invoke<{
+            accountId: string;
+            zones: Array<{ name: string; plan: string }>;
+            tunnelsOk: boolean;
+            intelOk: boolean;
+            auditOk: boolean;
+          }>('test_cloudflare_threat_connection', {
+            tokenOverride: null,
+            accountIdOverride: null,
+          });
+          if (res.accountId) {
+            setThreatDto((prev) => (prev ? { ...prev, cfAccountId: res.accountId } : prev));
+          }
+          return res;
+        },
+        (res) => {
+          const zoneNames = res.zones.map((z) => `${z.name} (${z.plan})`).join(', ');
+          return `Account ${res.accountId} • Zones: ${zoneNames || 'none'} • Tunnels=${res.tunnelsOk ? 'OK' : 'WARN'} • IP Intel=${res.intelOk ? 'OK' : 'WARN'} • Audit=${res.auditOk ? 'OK' : 'WARN'}`;
+        }
+      ),
+      runOne(
+        'gemini',
+        'Gemini 4 Security AI Engine',
+        () =>
+          invoke<{ model: string; severity: string }>('test_gemini_connection', {
+            apiKeyOverride: null,
+          }),
+        (res) =>
+          `Structured JSON schema handshake passed on model=${res.model} (baseline check=${res.severity || 'OK'}).`
+      ),
+      runOne(
+        'unifi',
+        'UniFi CloudKey Integration API',
+        () =>
+          invoke<{
+            siteCount?: number;
+            deviceCount?: number;
+            clientCount?: number;
+          }>('test_unifi_connection', {
+            baseUrlOverride: baseUrl,
+            apiKeyOverride: null,
+          }),
+        (res) =>
+          `${baseUrl} • ${res.siteCount ?? 1} site(s), ${res.deviceCount ?? 0} device(s), ${res.clientCount ?? 0} LAN client(s).`
+      ),
+      runOne(
+        'wsh',
+        'WSH Origin & PanoramaAuth SSH',
+        () =>
+          invoke<{
+            hostname: string;
+            panoramaAuthAvailable: boolean;
+            anomaliesCount: number;
+            auditLogsCount: number;
+            containersCount: number;
+            unifiSiemPresent: boolean;
+            unifiCefCount: number;
+          }>('test_wsh_security_probe'),
+        (res) =>
+          `Host ${res.hostname} • Containers=${res.containersCount} • PanoramaAuth=${res.panoramaAuthAvailable ? 'RO Active' : 'Unavailable'} (anom=${res.anomaliesCount}, logs=${res.auditLogsCount}) • UniFi CEF=${res.unifiSiemPresent ? `${res.unifiCefCount} events` : 'Not Deployed'}.`
+      ),
+    ]);
+
+    const passCount = results.filter((r) => r.ok).length;
+    const failCount = results.length - passCount;
+    setLastConnectorTestAt(new Date().toLocaleTimeString());
+    setThreatFeedback({
+      text:
+        failCount === 0
+          ? `All ${passCount} / 4 connectors verified cleanly`
+          : `${passCount} / 4 passed • ${failCount} failed (see Connector Verification Output)`,
+      tone: failCount === 0 ? 'ok' : 'err',
+    });
+
+    onEmitSettingsStream?.(
+      'Test All 360° Threat Connectors',
+      results.map(
+        (r) =>
+          `[${r.ok ? 'PASS' : 'ERROR'}] ${r.label} (${r.durationMs}ms): ${r.detail}`
+      ),
+      failCount > 0 ? 1 : 0
+    );
+
+    setTimeout(() => setThreatFeedback(null), 6000);
+    setIsTestingAllConnectors(false);
   };
 
   const loadPushoverSettings = useCallback(async () => {
@@ -946,23 +1048,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         : 'Not configured'}
                     </span>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <div
-                      aria-readonly="true"
-                      className="flex-1 min-w-0 truncate px-3 py-2.5 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 cursor-default select-all"
-                    >
-                      {threatDto?.cfConfigured
-                        ? threatDto.maskedCfToken
-                        : 'Not configured in .env.local.keys'}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => void handleTestThreatConnector('cloudflare')}
-                      disabled={threatTestingTarget !== null}
-                      className="btn-secondary text-xs whitespace-nowrap flex-shrink-0"
-                    >
-                      {threatTestingTarget === 'cloudflare' ? 'Testing...' : 'Test CF'}
-                    </button>
+                  <div
+                    aria-readonly="true"
+                    className="w-full truncate px-3 py-2.5 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 cursor-default select-all"
+                  >
+                    {threatDto?.cfConfigured
+                      ? threatDto.maskedCfToken
+                      : 'Not configured in .env.local.keys'}
                   </div>
                 </div>
 
@@ -974,7 +1066,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     aria-readonly="true"
                     className="w-full truncate px-3 py-2.5 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 cursor-default select-all tabular-nums"
                   >
-                    {threatDto?.cfAccountId || 'Auto-detected on Test CF'}
+                    {threatDto?.cfAccountId || 'Auto-detected on Test'}
                   </div>
                 </div>
 
@@ -991,23 +1083,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         : 'Not configured'}
                     </span>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <div
-                      aria-readonly="true"
-                      className="flex-1 min-w-0 truncate px-3 py-2.5 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 cursor-default select-all"
-                    >
-                      {threatDto?.geminiConfigured
-                        ? threatDto.maskedGeminiKey
-                        : 'Not configured in .env.local.keys'}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => void handleTestThreatConnector('gemini')}
-                      disabled={threatTestingTarget !== null}
-                      className="btn-secondary text-xs whitespace-nowrap flex-shrink-0"
-                    >
-                      {threatTestingTarget === 'gemini' ? 'Testing...' : 'Test Gemini'}
-                    </button>
+                  <div
+                    aria-readonly="true"
+                    className="w-full truncate px-3 py-2.5 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 cursor-default select-all"
+                  >
+                    {threatDto?.geminiConfigured
+                      ? threatDto.maskedGeminiKey
+                      : 'Not configured in .env.local.keys'}
                   </div>
                 </div>
 
@@ -1024,23 +1106,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         : 'Optional'}
                     </span>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <div
-                      aria-readonly="true"
-                      className="flex-1 min-w-0 truncate px-3 py-2.5 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 cursor-default select-all"
-                    >
-                      {threatDto?.unifiConfigured
-                        ? threatDto.maskedUnifiKey
-                        : 'Not configured in .env.local.keys'}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => void handleTestThreatConnector('unifi')}
-                      disabled={threatTestingTarget !== null}
-                      className="btn-secondary text-xs whitespace-nowrap flex-shrink-0"
-                    >
-                      {threatTestingTarget === 'unifi' ? 'Testing...' : 'Test UniFi'}
-                    </button>
+                  <div
+                    aria-readonly="true"
+                    className="w-full truncate px-3 py-2.5 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 cursor-default select-all"
+                  >
+                    {threatDto?.unifiConfigured
+                      ? threatDto.maskedUnifiKey
+                      : 'Not configured in .env.local.keys'}
                   </div>
                   <div
                     aria-readonly="true"
@@ -1147,6 +1219,98 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
               </div>
 
+              {/* Dedicated Connector Verification Results Output */}
+              {(() => {
+                const passCount = connectorResults.filter((r) => r.status === 'pass').length;
+                const failCount = connectorResults.filter((r) => r.status === 'fail').length;
+                const completedCount = passCount + failCount;
+                const badgeLabel = isTestingAllConnectors
+                  ? `Testing (${completedCount}/4)`
+                  : completedCount === 0
+                  ? 'Ready to Test'
+                  : failCount === 0
+                  ? `${passCount} / 4 Passed`
+                  : `${passCount} / 4 Passed • ${failCount} Failed`;
+                const badgeVariant = isTestingAllConnectors
+                  ? 'info'
+                  : completedCount === 0
+                  ? 'neutral'
+                  : failCount === 0
+                  ? 'success'
+                  : 'danger';
+
+                return (
+                  <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 p-4 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <Terminal className="w-4 h-4 text-[var(--color-brand-text)] shrink-0" />
+                        <span className="text-xs font-mono font-semibold text-slate-800 dark:text-slate-200 uppercase tracking-wider">
+                          Connector Verification Output
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 text-xs font-mono tabular-nums">
+                        {lastConnectorTestAt && (
+                          <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                            Last tested: {lastConnectorTestAt}
+                          </span>
+                        )}
+                        <StatusBadge label={badgeLabel} variant={badgeVariant} />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {connectorResults.map((row) => (
+                        <div
+                          key={row.id}
+                          className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1.5"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+                                {row.label}
+                              </div>
+                              <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                                {row.surface}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1.5 shrink-0 tabular-nums">
+                              {row.durationMs !== undefined && (
+                                <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                                  {row.durationMs}ms
+                                </span>
+                              )}
+                              <StatusBadge
+                                label={row.status.toUpperCase()}
+                                variant={
+                                  row.status === 'pass'
+                                    ? 'success'
+                                    : row.status === 'fail'
+                                    ? 'danger'
+                                    : row.status === 'testing'
+                                    ? 'info'
+                                    : 'neutral'
+                                }
+                              />
+                            </div>
+                          </div>
+                          <p
+                            className={`text-[11px] font-mono leading-relaxed break-words ${
+                              row.status === 'fail'
+                                ? 'text-rose-700 dark:text-rose-300'
+                                : row.status === 'pass'
+                                ? 'text-emerald-800 dark:text-emerald-300'
+                                : 'text-slate-600 dark:text-slate-400'
+                            }`}
+                          >
+                            {row.detail}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+
               {/* Footer */}
               <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex flex-wrap sm:flex-nowrap items-center justify-between gap-2">
                 <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
@@ -1162,12 +1326,18 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
                   <button
                     type="button"
-                    onClick={() => void handleTestThreatConnector('wsh')}
-                    disabled={threatTestingTarget !== null}
-                    className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                    onClick={() => void handleTestAllThreatConnectors()}
+                    disabled={isTestingAllConnectors}
+                    className="btn-accent text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
                   >
-                    <Terminal className="w-3.5 h-3.5" />
-                    <span>{threatTestingTarget === 'wsh' ? 'Probing WSH...' : 'Test WSH SSH Probe'}</span>
+                    <RefreshCw
+                      className={`w-3.5 h-3.5 ${isTestingAllConnectors ? 'animate-spin' : ''}`}
+                    />
+                    <span>
+                      {isTestingAllConnectors
+                        ? `Testing All (${connectorResults.filter((r) => r.status === 'pass' || r.status === 'fail').length}/4)...`
+                        : 'Test All Connections'}
+                    </span>
                   </button>
                 </div>
 

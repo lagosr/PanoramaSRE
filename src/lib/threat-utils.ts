@@ -1,7 +1,10 @@
 import type {
+  LanClientBaselineRow,
   ThreatActorRow,
   ThreatAuditRunRow,
 } from './types';
+
+export type ThreatSurfaceDomain = 'external' | 'internal' | 'crossover';
 
 export type BadgeVariant = 'danger' | 'warning' | 'info' | 'success' | 'neutral';
 
@@ -200,4 +203,55 @@ export function formatCompactBytes(bytes: number): string {
     idx += 1;
   }
   return `${val >= 10 || idx === 0 ? val.toFixed(0) : val.toFixed(1)} ${units[idx]}`;
+}
+
+export function classifyFindingSurface(sourceLayer: string): 'external' | 'internal' {
+  const s = (sourceLayer || '').trim().toUpperCase();
+  if (s === 'CLOUDFLARE' || s === 'ZERO_TRUST' || s.includes('CLOUDFLARE')) {
+    return 'external';
+  }
+  return 'internal';
+}
+
+export function classifyActionSurface(surface: string): ThreatSurfaceDomain {
+  const s = (surface || '').trim().toUpperCase();
+  if (s.includes('CLOUDFLARE') || s.includes('ZERO_TRUST')) {
+    return 'external';
+  }
+  if (s.includes('UNIFI') || s.includes('WSH') || s.includes('ORIGIN') || s.includes('AUTH')) {
+    return 'internal';
+  }
+  return 'crossover';
+}
+
+export function classifyAllowlistSurface(entryType: string): 'external' | 'internal' {
+  const t = (entryType || '').trim().toUpperCase();
+  if (t === 'LAN_MAC' || t === 'SSH_KEY') {
+    return 'internal';
+  }
+  return 'external';
+}
+
+export function filterLanClients(
+  clients: LanClientBaselineRow[],
+  search: string,
+  trustFilter: 'ALL' | 'TRUSTED' | 'UNREVIEWED'
+): LanClientBaselineRow[] {
+  const q = search.trim().toLowerCase();
+  return clients.filter((cli) => {
+    if (trustFilter === 'TRUSTED' && !cli.isTrusted) return false;
+    if (trustFilter === 'UNREVIEWED' && cli.isTrusted) return false;
+    if (!q) return true;
+    const hay = [
+      cli.label,
+      cli.hostname ?? '',
+      cli.macAddress,
+      cli.ipAddress ?? '',
+      cli.networkVlan ?? '',
+      cli.ouiVendor ?? '',
+    ]
+      .join(' ')
+      .toLowerCase();
+    return hay.includes(q);
+  });
 }

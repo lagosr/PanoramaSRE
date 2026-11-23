@@ -245,8 +245,8 @@ fn shared_gemini_client() -> Option<&'static reqwest::Client> {
     CLIENT
         .get_or_init(|| {
             reqwest::Client::builder()
-                .connect_timeout(Duration::from_secs(8))
-                .timeout(Duration::from_secs(50))
+                .connect_timeout(Duration::from_secs(10))
+                .timeout(Duration::from_secs(120))
                 .pool_idle_timeout(Duration::from_secs(60))
                 .user_agent("PanoramaSRE-Gemini/1.0")
                 .build()
@@ -2571,10 +2571,12 @@ async fn call_gemini_structured(
         }
     });
 
+    let timeout_secs = if thinking_level == "high" { 115 } else { 55 };
     let mut last_err = String::new();
     for attempt in 0..3 {
         let resp = client
             .post(&url)
+            .timeout(Duration::from_secs(timeout_secs))
             .header("x-goog-api-key", api_key.trim())
             .json(&body)
             .send()
@@ -2610,11 +2612,19 @@ async fn call_gemini_structured(
                 return Err(last_err);
             }
             Err(err) => {
-                last_err = format!("Gemini transport error ({}): {}", clean_model, err);
-                if attempt < 2 {
+                let is_timeout = err.is_timeout();
+                last_err = if is_timeout {
+                    format!("Gemini {} timed out after {}s", clean_model, timeout_secs)
+                } else {
+                    format!("Gemini transport error ({}): {}", clean_model, err)
+                };
+                // Cap timeout retries to at most 1 retry so slow deep-thinking calls don't stall silently
+                let can_retry = if is_timeout { attempt < 1 } else { attempt < 2 };
+                if can_retry {
                     tokio::time::sleep(Duration::from_secs(2)).await;
                     continue;
                 }
+                return Err(last_err);
             }
         }
     }
@@ -2801,6 +2811,36 @@ async fn notify_threat_audit(
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreatAuditProgressEvent {
+    pub run_id: String,
+    pub stage: String,
+    pub label: String,
+    pub message: String,
+    pub level: String,
+    pub timestamp: String,
+}
+
+fn emit_audit_progress(
+    app: &AppHandle,
+    run_id: &str,
+    stage: &str,
+    label: &str,
+    level: &str,
+    message: impl Into<String>,
+) {
+    let payload = ThreatAuditProgressEvent {
+        run_id: run_id.to_string(),
+        stage: stage.to_string(),
+        label: label.to_string(),
+        message: message.into(),
+        level: level.to_string(),
+        timestamp: Utc::now().to_rfc3339(),
+    };
+    let _ = app.emit("sre://threat-audit-progress", payload);
+}
+
 pub async fn execute_threat_audit_pipeline(
     app: &AppHandle,
     db: &Arc<Mutex<SreDatabase>>,
@@ -2809,11 +2849,25 @@ pub async fn execute_threat_audit_pipeline(
     force_carbon: bool,
 ) -> Result<ThreatRunDetailDto, String> {
     let _guard = audit_execution_mutex().lock().await;
+    let pipeline_start = Instant::now();
 
     let started_at = Utc::now();
     let window_hrs = window_hours.clamp(1, 168);
     let window_start = started_at - ChronoDuration::hours(window_hrs as i64);
     let run_id = format!("threat-{}", uuid::Uuid::new_v4());
+    let run_id_ref = &run_id;
+
+    emit_audit_progress(
+        app,
+        run_id_ref,
+        "init",
+        "Initializing Audit",
+        "INFO",
+        format!(
+            "Starting 360° Threat & Zero Trust audit (window={}h, trigger={}, forceCarbon={})...",
+            window_hrs, trigger_source, force_carbon
+        ),
+    );
 
     let (prefs, cf_token, cf_acct, gemini_key, unifi_key, allowlist, prior_lan, prior_actors, carbon_used_24h) = {
         let guard = db.lock().map_err(|e| format!("DB mutex poisoned: {}", e))?;
@@ -2831,28 +2885,137 @@ pub async fn execute_threat_audit_pipeline(
     };
 
     // Parallel 3-layer collection
+    emit_audit_progress(
+        app,
+        run_id_ref,
+        "collectors",
+        "Collecting 3-Layer Telemetry",
+        "INFO",
+        "Querying Cloudflare Perimeter, UniFi CloudKey, and WSH SSH in parallel...",
+    );
+
     let cf_fut = async {
         match cf_token.as_ref() {
             Some(tok) => {
-                collect_cloudflare_snapshot(db, &tok.value, cf_acct.as_deref(), window_start, started_at)
-                    .await
-                    .map(Some)
-                    .map_err(|e| e)
+                let res = collect_cloudflare_snapshot(
+                    db,
+                    &tok.value,
+                    cf_acct.as_deref(),
+                    window_start,
+                    started_at,
+                )
+                .await;
+                match &res {
+                    Ok(snap) => emit_audit_progress(
+                        app,
+                        run_id_ref,
+                        "collectors",
+                        "Collecting 3-Layer Telemetry",
+                        "PASS",
+                        format!(
+                            "Cloudflare collected: {} zone(s), {} HTTP events, {} WAF events, {} Access logs, {} tunnel(s).",
+                            snap.zones.len(),
+                            snap.http_events.len(),
+                            snap.firewall_events.len(),
+                            snap.access_logs.len(),
+                            snap.tunnels.len()
+                        ),
+                    ),
+                    Err(e) => emit_audit_progress(
+                        app,
+                        run_id_ref,
+                        "collectors",
+                        "Collecting 3-Layer Telemetry",
+                        "WARN",
+                        format!("Cloudflare collection warning: {}", e),
+                    ),
+                }
+                res.map(Some)
             }
-            None => Ok(None),
+            None => {
+                emit_audit_progress(
+                    app,
+                    run_id_ref,
+                    "collectors",
+                    "Collecting 3-Layer Telemetry",
+                    "WARN",
+                    "Cloudflare token not configured — skipping External Perimeter collection.",
+                );
+                Ok(None)
+            }
         }
     };
 
     let unifi_fut = async {
         match unifi_key.as_ref() {
-            Some(k) => collect_unifi_snapshot(&prefs.unifi_base_url, &k.value)
-                .await
-                .map(Some),
-            None => Ok(None),
+            Some(k) => {
+                let res = collect_unifi_snapshot(&prefs.unifi_base_url, &k.value).await;
+                match &res {
+                    Ok(snap) => emit_audit_progress(
+                        app,
+                        run_id_ref,
+                        "collectors",
+                        "Collecting 3-Layer Telemetry",
+                        "PASS",
+                        format!(
+                            "UniFi CloudKey collected: {} device(s), {} LAN client(s), {} firewall policies.",
+                            snap.devices.len(),
+                            snap.clients.len(),
+                            snap.policies.len()
+                        ),
+                    ),
+                    Err(e) => emit_audit_progress(
+                        app,
+                        run_id_ref,
+                        "collectors",
+                        "Collecting 3-Layer Telemetry",
+                        "WARN",
+                        format!("UniFi collection warning: {}", e),
+                    ),
+                }
+                res.map(Some)
+            }
+            None => {
+                emit_audit_progress(
+                    app,
+                    run_id_ref,
+                    "collectors",
+                    "Collecting 3-Layer Telemetry",
+                    "WARN",
+                    "UniFi X-API-Key not configured — skipping Internal LAN API collection.",
+                );
+                Ok(None)
+            }
         }
     };
 
-    let wsh_fut = async { collect_wsh_security_probe(window_hrs, trigger_source == "manual").await };
+    let wsh_fut = async {
+        let res = collect_wsh_security_probe(window_hrs, trigger_source == "manual").await;
+        match &res {
+            Ok(snap) => emit_audit_progress(
+                app,
+                run_id_ref,
+                "collectors",
+                "Collecting 3-Layer Telemetry",
+                "PASS",
+                format!(
+                    "WSH SSH probe collected: {} container(s), PanoramaAuth anomalies={}, UniFi CEF events={}.",
+                    snap.containers.len(),
+                    snap.panorama_auth.anomalies.len(),
+                    snap.unifi_cef_events.len()
+                ),
+            ),
+            Err(e) => emit_audit_progress(
+                app,
+                run_id_ref,
+                "collectors",
+                "Collecting 3-Layer Telemetry",
+                "WARN",
+                format!("WSH SSH probe warning: {}", e),
+            ),
+        }
+        res
+    };
 
     let (cf_res, unifi_res, wsh_res) = tokio::join!(cf_fut, unifi_fut, wsh_fut);
 
@@ -2921,6 +3084,21 @@ pub async fn execute_threat_audit_pipeline(
         &prior_actors,
     );
 
+    emit_audit_progress(
+        app,
+        run_id_ref,
+        "stage0",
+        "Stage 0 Deterministic Triage",
+        "PASS",
+        format!(
+            "Stage 0 deterministic triage complete: severity={}, findings={}, suspect IPs={}, hard_hit={}.",
+            stage0.overall_severity,
+            stage0.findings.len(),
+            stage0.suspect_ips.len(),
+            stage0.hard_hit
+        ),
+    );
+
     let mut final_sev = stage0.overall_severity.clone();
     let mut intrusion_verdict = if stage0.hard_hit {
         "SUSPICIOUS_ACTIVITY".to_string()
@@ -2950,6 +3128,15 @@ pub async fn execute_threat_audit_pipeline(
 
     if let Some(ref gem) = gemini_key {
         tier1_model_used = Some(prefs.tier1_model.clone());
+        emit_audit_progress(
+            app,
+            run_id_ref,
+            "stage1",
+            "Stage 1 Gemini Triage",
+            "INFO",
+            format!("Running Stage 1 Gemini triage ({}, thinking=medium)...", prefs.tier1_model),
+        );
+        let stage1_start = Instant::now();
         match call_gemini_structured(
             &gem.value,
             &prefs.tier1_model,
@@ -2974,6 +3161,21 @@ pub async fn execute_threat_audit_pipeline(
                 );
                 escalation_reasons = reasons;
 
+                emit_audit_progress(
+                    app,
+                    run_id_ref,
+                    "stage1",
+                    "Stage 1 Gemini Triage",
+                    "PASS",
+                    format!(
+                        "Stage 1 complete in {:.1}s: severity={}, verdict={}, escalate={}.",
+                        stage1_start.elapsed().as_secs_f32(),
+                        stage1_brief.overall_severity,
+                        stage1_brief.intrusion_verdict,
+                        do_esc
+                    ),
+                );
+
                 if do_esc {
                     // Forensic 72h Deep-Fetch before invoking Carbon
                     let mut all_suspects: BTreeSet<String> = stage0.suspect_ips.iter().cloned().collect();
@@ -2986,11 +3188,33 @@ pub async fn execute_threat_audit_pipeline(
                         .map(|c| c.zones.iter().map(|z| z.id.clone()).collect())
                         .unwrap_or_default();
 
+                    emit_audit_progress(
+                        app,
+                        run_id_ref,
+                        "forensics",
+                        "Deep 72h Forensic Fetch",
+                        "INFO",
+                        format!(
+                            "Escalating to Tier 2 ({}) — fetching 72h forensic timeline for {} suspect IP(s)...",
+                            escalation_reasons.join("; "),
+                            suspect_vec.len()
+                        ),
+                    );
+
                     let timeline = if let Some(ref tok) = cf_token {
                         fetch_forensic_timeline_for_ips(&tok.value, &zone_ids, &suspect_vec).await
                     } else {
                         Vec::new()
                     };
+
+                    emit_audit_progress(
+                        app,
+                        run_id_ref,
+                        "forensics",
+                        "Deep 72h Forensic Fetch",
+                        "PASS",
+                        format!("Retrieved {} 72h forensic timeline event(s).", timeline.len()),
+                    );
 
                     let forensic_payload = json!({
                         "stage0Dossier": stage0.dossier,
@@ -3005,6 +3229,18 @@ pub async fn execute_threat_audit_pipeline(
                     });
 
                     tier2_model_used = Some(prefs.tier2_model.clone());
+                    emit_audit_progress(
+                        app,
+                        run_id_ref,
+                        "stage2",
+                        "Stage 2 Gemini Carbon Forensics",
+                        "INFO",
+                        format!(
+                            "Running Stage 2 Gemini Carbon deep forensics ({}, thinking=high — up to 115s)...",
+                            prefs.tier2_model
+                        ),
+                    );
+                    let stage2_start = Instant::now();
                     match call_gemini_structured(
                         &gem.value,
                         &prefs.tier2_model,
@@ -3019,11 +3255,36 @@ pub async fn execute_threat_audit_pipeline(
                             total_usage = json!({ "stage1": usage1, "stage2": usage2 });
                             final_sev = max_severity(&final_sev, &stage2_brief.overall_severity).to_string();
                             intrusion_verdict = stage2_brief.intrusion_verdict.clone();
+                            emit_audit_progress(
+                                app,
+                                run_id_ref,
+                                "stage2",
+                                "Stage 2 Gemini Carbon Forensics",
+                                "PASS",
+                                format!(
+                                    "Stage 2 Carbon complete in {:.1}s: severity={}, verdict={}.",
+                                    stage2_start.elapsed().as_secs_f32(),
+                                    stage2_brief.overall_severity,
+                                    stage2_brief.intrusion_verdict
+                                ),
+                            );
                             brief_final = Some(stage2_brief);
                         }
                         Err(e2) => {
                             run_status = "DEGRADED".to_string();
                             err_msg = Some(format!("Stage 2 Carbon failed (Stage 1 retained): {}", e2));
+                            emit_audit_progress(
+                                app,
+                                run_id_ref,
+                                "stage2",
+                                "Stage 2 Gemini Carbon Forensics",
+                                "WARN",
+                                format!(
+                                    "Stage 2 Carbon failed after {:.1}s (Stage 1 retained): {}",
+                                    stage2_start.elapsed().as_secs_f32(),
+                                    e2
+                                ),
+                            );
                             brief_final = Some(stage1_brief);
                         }
                     }
@@ -3034,17 +3295,46 @@ pub async fn execute_threat_audit_pipeline(
             Err(e1) => {
                 run_status = "DEGRADED".to_string();
                 err_msg = Some(format!("Gemini Stage 1 unavailable (Stage 0 deterministic retained): {}", e1));
+                emit_audit_progress(
+                    app,
+                    run_id_ref,
+                    "stage1",
+                    "Stage 1 Gemini Triage",
+                    "WARN",
+                    format!(
+                        "Stage 1 failed after {:.1}s (Stage 0 retained): {}",
+                        stage1_start.elapsed().as_secs_f32(),
+                        e1
+                    ),
+                );
             }
         }
     } else {
         run_status = "DEGRADED".to_string();
         err_msg = Some("Gemini API key not configured — deterministic Stage 0 triage completed.".to_string());
+        emit_audit_progress(
+            app,
+            run_id_ref,
+            "stage1",
+            "Stage 1 Gemini Triage",
+            "WARN",
+            "Gemini API key not configured — retaining Stage 0 deterministic findings.",
+        );
     }
 
     if cf_opt.is_none() && unifi_opt.is_none() && wsh_opt.is_none() {
         run_status = "FAILED".to_string();
         collector_statuses.cloudflare = collector_statuses.cloudflare.clone();
     }
+
+    emit_audit_progress(
+        app,
+        run_id_ref,
+        "persist",
+        "Persisting Audit Ledger",
+        "INFO",
+        "Persisting audit run, findings, and threat actor ledger to SQLite...",
+    );
 
     let completed_at = Utc::now().to_rfc3339();
     let run_row = ThreatAuditRunRow {
@@ -3129,6 +3419,26 @@ pub async fn execute_threat_audit_pipeline(
     };
 
     let _ = app.emit("sre://threat-audit-updated", &detail);
+    emit_audit_progress(
+        app,
+        run_id_ref,
+        "done",
+        "Audit Complete",
+        if run_row.status == "FAILED" {
+            "ERROR"
+        } else if run_row.status == "DEGRADED" {
+            "WARN"
+        } else {
+            "PASS"
+        },
+        format!(
+            "360° Threat Audit finished in {:.1}s — Posture: {}, Verdict: {}, Status: {}",
+            pipeline_start.elapsed().as_secs_f32(),
+            run_row.overall_severity,
+            run_row.intrusion_verdict,
+            run_row.status
+        ),
+    );
     notify_threat_audit(app, db, &run_row, &stage0.findings, brief_final.as_ref(), &prefs).await;
 
     Ok(detail)

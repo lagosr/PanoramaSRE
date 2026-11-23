@@ -93,6 +93,13 @@ export function inferPageScopeFromJob(
   ) {
     return 'topology';
   }
+  if (
+    lowerTitle.includes('threat') ||
+    lowerTitle.includes('carbon') ||
+    lowerTitle.includes('zero trust')
+  ) {
+    return 'security';
+  }
   if (lowerTitle.includes('workspace') || lowerTitle.includes('settings')) return 'settings';
 
   return 'hud';
@@ -103,6 +110,9 @@ export function getTabCategory(title: string): string {
   if (lower.includes('dev server')) return 'Dev Supervisor';
   if (lower.includes('deploy')) return 'Deployments';
   if (lower.includes('rollback')) return 'Rollbacks';
+  if (lower.includes('threat') || lower.includes('carbon') || lower.includes('zero trust')) {
+    return 'Threat Audit';
+  }
   if (lower.includes('tunnel') || lower.includes('cloudflare')) return 'Cloudflare Tunnel';
   if (lower.includes('unifi siem')) return 'UniFi SIEM';
   if (lower.includes('ssl') || lower.includes('cert') || lower.includes('pki') || lower.includes('renew')) {
