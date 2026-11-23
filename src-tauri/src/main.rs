@@ -24,10 +24,10 @@ mod tests {
     };
     use panorama_sre_lib::commands::threat_intel_ops::{
         build_waf_rule_expression, classify_host_sensitivity, evaluate_stage0_triage,
-        is_allowlisted, parse_gemini_threat_brief, parse_unifi_cef_ndjson,
-        should_escalate_to_tier2, validate_ipv4_list, CfAuditLogEntry, CfHttpEvent, CfIpIntelInfo,
-        CfWafRuleDto, CloudflareSecuritySnapshot, DomainProfile, PanoramaAuthTelemetry,
-        WshSecuritySnapshot,
+        find_active_non_us_waf_rule, is_allowlisted, parse_gemini_threat_brief,
+        parse_unifi_cef_ndjson, should_escalate_to_tier2, validate_ipv4_list, CfAuditLogEntry,
+        CfHttpEvent, CfIpIntelInfo, CfWafRuleDto, CloudflareSecuritySnapshot, DomainProfile,
+        PanoramaAuthTelemetry, WshSecuritySnapshot,
     };
     use panorama_sre_lib::commands::unifi_ops::{
         enrich_unifi_topology, merge_unifi_network_detail, parse_unifi_clients_json,
@@ -1630,5 +1630,100 @@ mod tests {
         assert!(validate_ipv4_list("   , ;  ").is_err());
         assert!(validate_ipv4_list("172.25.25.1, not-an-ip").is_err());
         assert!(validate_ipv4_list("172.25.25.0/24").is_err());
+    }
+
+    fn sample_waf_rule(description: &str, action: &str, expression: &str, enabled: bool) -> CfWafRuleDto {
+        CfWafRuleDto {
+            id: "r1".to_string(),
+            zone_id: "74b3d27d58ba9772b12df33fcd42401c".to_string(),
+            zone_name: "panoramadr.com".to_string(),
+            description: description.to_string(),
+            action: action.to_string(),
+            expression: expression.to_string(),
+            enabled,
+            source: "cloudflare_live".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_non_us_waf_rule_respects_explicit_http_host_scoping() {
+        use std::collections::BTreeSet;
+        let wsh_rule = vec![sample_waf_rule(
+            "Block non US from WSH",
+            "block",
+            r#"(http.host eq "wsh.panoramadr.com" and ip.geoip.country ne "US")"#,
+            true,
+        )];
+
+        let mut wsh_hosts = BTreeSet::new();
+        wsh_hosts.insert("wsh.panoramadr.com".to_string());
+        assert_eq!(
+            find_active_non_us_waf_rule(&wsh_rule, &wsh_hosts),
+            Some("Block non US from WSH")
+        );
+
+        let mut apex_hosts = BTreeSet::new();
+        apex_hosts.insert("panoramadr.com".to_string());
+        assert_eq!(find_active_non_us_waf_rule(&wsh_rule, &apex_hosts), None);
+
+        let mut auth_hosts = BTreeSet::new();
+        auth_hosts.insert("auth.panoramadr.com".to_string());
+        assert_eq!(find_active_non_us_waf_rule(&wsh_rule, &auth_hosts), None);
+    }
+
+    #[test]
+    fn test_non_us_zone_wide_rule_covers_zone_and_subdomains() {
+        use std::collections::BTreeSet;
+        let zone_rule = vec![sample_waf_rule(
+            "Zone Geo Challenge",
+            "managed_challenge",
+            r#"(not ip.src.country in {"US"})"#,
+            true,
+        )];
+
+        let mut apex = BTreeSet::new();
+        apex.insert("panoramadr.com".to_string());
+        assert_eq!(
+            find_active_non_us_waf_rule(&zone_rule, &apex),
+            Some("Zone Geo Challenge")
+        );
+
+        let mut sub = BTreeSet::new();
+        sub.insert("wsh.panoramadr.com".to_string());
+        assert_eq!(
+            find_active_non_us_waf_rule(&zone_rule, &sub),
+            Some("Zone Geo Challenge")
+        );
+    }
+
+    #[test]
+    fn test_non_us_rule_ignores_disabled_or_non_mitigating_actions() {
+        use std::collections::BTreeSet;
+        let mut hosts = BTreeSet::new();
+        hosts.insert("wsh.panoramadr.com".to_string());
+
+        let disabled = vec![sample_waf_rule(
+            "Disabled Rule",
+            "block",
+            r#"(http.host eq "wsh.panoramadr.com" and ip.geoip.country ne "US")"#,
+            false,
+        )];
+        assert_eq!(find_active_non_us_waf_rule(&disabled, &hosts), None);
+
+        let skip_rule = vec![sample_waf_rule(
+            "Skip Log Rule",
+            "skip",
+            r#"(http.host eq "wsh.panoramadr.com" and ip.geoip.country ne "US")"#,
+            true,
+        )];
+        assert_eq!(find_active_non_us_waf_rule(&skip_rule, &hosts), None);
+
+        let log_rule = vec![sample_waf_rule(
+            "Log Only Rule",
+            "log",
+            r#"(http.host eq "wsh.panoramadr.com" and ip.geoip.country ne "US")"#,
+            true,
+        )];
+        assert_eq!(find_active_non_us_waf_rule(&log_rule, &hosts), None);
     }
 }

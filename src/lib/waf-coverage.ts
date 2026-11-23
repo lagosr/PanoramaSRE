@@ -334,8 +334,38 @@ export function evaluateCampaignWafCoverage(
   const blobLower = blob.toLowerCase();
   const isNonUsCampaign =
     blobLower.includes('non-us') ||
+    blobLower.includes('foreign') ||
+    blobLower.includes('outside the us') ||
     blobLower.includes('country ne "us"') ||
     blobLower.includes("country ne 'us'");
+
+  if (isNonUsCampaign) {
+    const wholeHostGeoRules = hostScoped.filter(
+      (p) => (p.requiresNonUs || p.isCatchAllHostBlock) && p.pathPredicates.length === 0
+    );
+    if (wholeHostGeoRules.length > 0) {
+      const coveredHosts = targetHosts.filter((h) =>
+        wholeHostGeoRules.some((p) => ruleAppliesToHost(p, [h]))
+      );
+      const uncoveredHosts = targetHosts.filter(
+        (h) => !wholeHostGeoRules.some((p) => ruleAppliesToHost(p, [h]))
+      );
+      const rulesList = wholeHostGeoRules.map((p) => p.rule);
+      if (uncoveredHosts.length === 0) {
+        return buildResult(
+          rulesList,
+          [],
+          'All non-US paths on target host(s) are covered by active geo WAF rule.'
+        );
+      }
+      return buildResult(
+        rulesList,
+        [],
+        `Covered on ${coveredHosts.join(', ')}; no non-US geo WAF rule on ${uncoveredHosts.join(', ')}.`,
+        true
+      );
+    }
+  }
 
   const candidatePaths = Array.from(
     new Set([
@@ -497,45 +527,70 @@ export function evaluateActorWafCoverage(
   const asnDigits = normalizeAsnDigits(actor.asn || '');
   const countryUpper = (actor.country || '').trim().toUpperCase();
 
-  const matchedRules: CfWafRuleDto[] = [];
+  const fullMatches: CfWafRuleDto[] = [];
+  const partialGeoMatches: Array<{ rule: CfWafRuleDto; reason: string }> = [];
   for (const p of hostScoped) {
-    if (ipLower && p.ips.has(ipLower)) matchedRules.push(p.rule);
-    if (asnDigits && p.asns.has(asnDigits)) matchedRules.push(p.rule);
-    if (p.isCatchAllHostBlock) matchedRules.push(p.rule);
-    if (p.requiresNonUs && countryUpper && countryUpper !== 'US') {
-      // Only full non-US coverage when actor didn't also target a zone without that geo rule
-      if (hosts.length > 0 && hosts.every((h) => ruleAppliesToHost(p, [h]))) {
-        matchedRules.push(p.rule);
+    if (ipLower && p.ips.has(ipLower)) fullMatches.push(p.rule);
+    if (asnDigits && p.asns.has(asnDigits)) fullMatches.push(p.rule);
+    if (p.isCatchAllHostBlock) fullMatches.push(p.rule);
+  }
+
+  const nonUsWholeHostRules = hostScoped.filter(
+    (p) => p.requiresNonUs && countryUpper && countryUpper !== 'US' && p.pathPredicates.length === 0
+  );
+  if (nonUsWholeHostRules.length > 0 && hosts.length > 0) {
+    const coveredHosts = hosts.filter((h) =>
+      nonUsWholeHostRules.some((p) => ruleAppliesToHost(p, [h]))
+    );
+    const uncoveredHosts = hosts.filter(
+      (h) => !nonUsWholeHostRules.some((p) => ruleAppliesToHost(p, [h]))
+    );
+    if (uncoveredHosts.length === 0) {
+      for (const p of nonUsWholeHostRules) fullMatches.push(p.rule);
+    } else if (coveredHosts.length > 0) {
+      const reason = `Covered on ${coveredHosts.join(', ')}; uncovered on ${uncoveredHosts.join(', ')}.`;
+      for (const p of nonUsWholeHostRules) {
+        partialGeoMatches.push({ rule: p.rule, reason });
       }
     }
   }
 
-  if (matchedRules.length > 0) {
-    return buildResult(matchedRules, [], 'Actor matched by active IP, ASN, or geo WAF rule.');
+  if (fullMatches.length > 0) {
+    return buildResult(fullMatches, [], 'Actor matched by active IP, ASN, or geo WAF rule.');
   }
 
   const rawPaths = safeParseJson<string[]>(actor.samplePathsJson, []).filter(
     (p) => p && p.trim() !== '/'
   );
   if (rawPaths.length > 0) {
+    const pathMatchedRules: CfWafRuleDto[] = [];
     const uncovered: string[] = [];
     for (const path of rawPaths) {
       const covering = hostScoped.filter((p) => ruleMatchesPath(p, path));
       if (covering.length > 0) {
-        for (const c of covering) matchedRules.push(c.rule);
+        for (const c of covering) pathMatchedRules.push(c.rule);
       } else {
         uncovered.push(path);
       }
     }
-    if (matchedRules.length > 0) {
+    if (pathMatchedRules.length > 0) {
       return buildResult(
-        matchedRules,
+        pathMatchedRules,
         uncovered,
         uncovered.length === 0
           ? 'All observed probe paths are covered by active WAF rules.'
           : `${uncovered.length} actor probe path(s) remain uncovered.`
       );
     }
+  }
+
+  if (partialGeoMatches.length > 0) {
+    return buildResult(
+      partialGeoMatches.map((m) => m.rule),
+      [],
+      partialGeoMatches[0].reason,
+      true
+    );
   }
 
   return buildResult([], [], 'Actor not covered by active WAF rules.');

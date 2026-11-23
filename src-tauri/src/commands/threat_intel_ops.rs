@@ -1748,26 +1748,86 @@ pub fn is_high_risk_intel_tag(tag: &str) -> bool {
     .any(|kw| t.contains(kw))
 }
 
-fn find_active_non_us_waf_rule<'a>(
+fn is_mitigating_waf_action(action: &str) -> bool {
+    matches!(
+        action.trim().to_ascii_lowercase().as_str(),
+        "block" | "managed_challenge" | "js_challenge" | "challenge" | "interactive_challenge" | "drop"
+    )
+}
+
+fn extract_wirefilter_hosts(expr_lower: &str) -> Vec<String> {
+    static HOST_OP_RE: OnceLock<regex::Regex> = OnceLock::new();
+    static HOST_IN_RE: OnceLock<regex::Regex> = OnceLock::new();
+    let op_re = HOST_OP_RE.get_or_init(|| {
+        regex::Regex::new(r#"http\.host\s+(?:eq|contains|starts_with)\s+["']([^"']+)["']"#)
+            .expect("valid host op regex")
+    });
+    let in_re = HOST_IN_RE.get_or_init(|| {
+        regex::Regex::new(r#"http\.host\s+in\s+\{([^}]+)\}"#).expect("valid host in regex")
+    });
+
+    let mut out = Vec::new();
+    for cap in op_re.captures_iter(expr_lower) {
+        if let Some(m) = cap.get(1) {
+            let h = m.as_str().trim().trim_end_matches('.').to_string();
+            if !h.is_empty() && !out.contains(&h) {
+                out.push(h);
+            }
+        }
+    }
+    for cap in in_re.captures_iter(expr_lower) {
+        if let Some(m) = cap.get(1) {
+            for raw_tok in m.as_str().split_whitespace() {
+                let h = raw_tok
+                    .trim_matches(|c| c == '"' || c == '\'' || c == ',')
+                    .trim_end_matches('.')
+                    .to_string();
+                if !h.is_empty() && !out.contains(&h) {
+                    out.push(h);
+                }
+            }
+        }
+    }
+    out
+}
+
+pub fn find_active_non_us_waf_rule<'a>(
     rules: &'a [CfWafRuleDto],
     hosts: &BTreeSet<String>,
 ) -> Option<&'a str> {
+    static NON_US_RE: OnceLock<regex::Regex> = OnceLock::new();
+    let non_us_re = NON_US_RE.get_or_init(|| {
+        regex::Regex::new(
+            r#"(?i)(?:ip\.(?:geoip|src)\.country\s+ne\s+["']us["']|not\s+ip\.(?:geoip|src)\.country\s+in\s+\{[^}]*["']?us["']?[^}]*\})"#,
+        )
+        .expect("valid non-US regex")
+    });
+
     for rule in rules {
-        if !rule.enabled {
+        if !rule.enabled || !is_mitigating_waf_action(&rule.action) {
             continue;
         }
         let expr_l = rule.expression.to_ascii_lowercase();
-        let has_non_us = expr_l.contains("ip.geoip.country ne \"us\"")
-            || expr_l.contains("ip.geoip.country ne 'us'")
-            || (expr_l.contains("ip.geoip.country") && expr_l.contains("not ") && expr_l.contains("\"us\""));
-        if !has_non_us {
+        if !non_us_re.is_match(&expr_l) {
             continue;
         }
-        let zone_l = rule.zone_name.to_ascii_lowercase();
-        let host_matches = hosts.iter().any(|h| {
-            let hl = h.to_ascii_lowercase();
-            expr_l.contains(&hl) || (!zone_l.is_empty() && (hl == zone_l || hl.ends_with(&format!(".{}", zone_l))))
-        });
+        let host_matches = if expr_l.contains("http.host") {
+            let scoped_hosts = extract_wirefilter_hosts(&expr_l);
+            !scoped_hosts.is_empty()
+                && hosts.iter().any(|h| {
+                    let hl = h.trim().to_ascii_lowercase();
+                    scoped_hosts
+                        .iter()
+                        .any(|rh| hl == *rh || hl.ends_with(&format!(".{}", rh)))
+                })
+        } else {
+            let zone_l = rule.zone_name.trim().to_ascii_lowercase();
+            !zone_l.is_empty()
+                && hosts.iter().any(|h| {
+                    let hl = h.trim().to_ascii_lowercase();
+                    hl == zone_l || hl.ends_with(&format!(".{}", zone_l))
+                })
+        };
         if host_matches {
             return Some(rule.description.as_str());
         }

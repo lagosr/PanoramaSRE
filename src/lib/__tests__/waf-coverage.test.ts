@@ -188,4 +188,96 @@ describe('waf-coverage', () => {
     expect(evaluateActorWafCoverage(wpActor, [broadWpRule]).status).toBe('COVERED');
     expect(evaluateFindingWafCoverage(finding, [manualGeo]).status).toBe('PARTIAL');
   });
+
+  it('keeps whole-host non-US geo rules COVERED despite observed paths and marks mixed-host geo campaigns/actors PARTIAL', () => {
+    const wshLiveRule = makeRule({
+      id: '57d45a8510194bccac3f381ef2ed1a45',
+      zoneName: 'panoramadr.com',
+      description: 'Block non US from WSH',
+      expression: '(http.host eq "wsh.panoramadr.com" and ip.geoip.country ne "US")',
+    });
+
+    const foreignWshCampaign: GeminiCampaignDto = {
+      name: 'Foreign Probing of Strict-Private Host',
+      severity: 'MEDIUM',
+      sourceLayers: ['CLOUDFLARE'],
+      targetHosts: ['wsh.panoramadr.com'],
+      pattern: 'Non-US requests from Tencent Cloud (SG and BR) to root path (/) on strict-private host wsh.panoramadr.com.',
+      countEstimate: 5,
+      sampleRayIds: [],
+      suggestedWafExpression: '(http.host eq "wsh.panoramadr.com" and ip.geoip.country ne "US")',
+    };
+    const foreignCov = evaluateCampaignWafCoverage(
+      foreignWshCampaign,
+      [wshLiveRule],
+      ['/', '/cdn-cgi/l/email-protection']
+    );
+    expect(foreignCov.status).toBe('COVERED');
+    expect(foreignCov.primaryRuleName).toBe('Block non US from WSH');
+    expect(foreignCov.uncoveredPaths).toEqual([]);
+
+    const mixedHostCampaign: GeminiCampaignDto = {
+      name: 'Non-US Recon Against Strict Private Host',
+      severity: 'MEDIUM',
+      sourceLayers: ['CLOUDFLARE'],
+      targetHosts: ['wsh.panoramadr.com', 'parakith.com'],
+      pattern: 'Foreign ASN (AS132203 Tencent, BR) issued requests including strict-private wsh.panoramadr.com.',
+      countEstimate: 3,
+      sampleRayIds: [],
+    };
+    const mixedCov = evaluateCampaignWafCoverage(
+      mixedHostCampaign,
+      [wshLiveRule],
+      ['//2019/wp-includes/wlwmanifest.xml', '//xmlrpc.php', '/cdn-cgi/l/email-protection']
+    );
+    expect(mixedCov.status).toBe('PARTIAL');
+    expect(mixedCov.uncoveredPaths).toEqual([]);
+    expect(mixedCov.reason).toContain('wsh.panoramadr.com');
+    expect(mixedCov.reason).toContain('parakith.com');
+
+    const baseActor: ThreatActorRow = {
+      id: 'actor',
+      actorType: 'IP',
+      ipAddress: '43.157.175.122',
+      asn: '132203',
+      asOrg: 'Tencent',
+      country: 'BR',
+      intelTagsJson: '[]',
+      firstSeenAt: '2026-11-23T02:39:28Z',
+      lastSeenAt: '2026-11-23T09:07:57Z',
+      runsSeen: 3,
+      totalRequests: 9,
+      totalOrigin200s: 0,
+      highestSeverity: 'MEDIUM',
+      latestClassification: 'TARGETED_RECON',
+      targetHostsJson: '["parakith.com","wsh.panoramadr.com"]',
+      samplePathsJson: '["/","/cdn-cgi/l/email-protection"]',
+      disposition: 'ACTIVE',
+    };
+    const multiHostCov = evaluateActorWafCoverage(baseActor, [wshLiveRule]);
+    expect(multiHostCov.status).toBe('PARTIAL');
+    expect(multiHostCov.primaryRuleName).toBe('Block non US from WSH');
+    expect(multiHostCov.reason).toContain('wsh.panoramadr.com');
+    expect(multiHostCov.reason).toContain('parakith.com');
+
+    const usWshActor: ThreatActorRow = {
+      ...baseActor,
+      id: '54.211.224.47',
+      ipAddress: '54.211.224.47',
+      country: 'US',
+      targetHostsJson: '["wsh.panoramadr.com"]',
+      samplePathsJson: '["/"]',
+    };
+    expect(evaluateActorWafCoverage(usWshActor, [wshLiveRule]).status).toBe('UNCOVERED');
+
+    const apexNonUsActor: ThreatActorRow = {
+      ...baseActor,
+      id: '78.135.96.195',
+      ipAddress: '78.135.96.195',
+      country: 'TR',
+      targetHostsJson: '["panoramadr.com"]',
+      samplePathsJson: '["/"]',
+    };
+    expect(evaluateActorWafCoverage(apexNonUsActor, [wshLiveRule]).status).toBe('UNCOVERED');
+  });
 });
