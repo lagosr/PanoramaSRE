@@ -3,7 +3,6 @@ import { WshSnapshot, SslFleetSummary, TerminalTab } from '../../lib/types';
 import { SslDualProbeTable } from './SslDualProbeTable';
 import { ConfirmDangerModal } from '../ui/ConfirmDangerModal';
 import { SslProgressInline } from './SslProgressInline';
-import { WorkStreamContainer } from '../ui/WorkStreamContainer';
 import {
   ShieldCheck,
   KeyRound,
@@ -14,6 +13,7 @@ import {
   CheckCircle2,
   FolderOpen,
   ExternalLink,
+  Terminal,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -44,15 +44,16 @@ export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
   onRefreshSsl,
   onTriggerRenewal,
   onOpenInBottomConsole,
-  onAbortJob,
-  onClearTab,
 }) => {
   const [isForceModalOpen, setIsForceModalOpen] = useState(false);
 
-  // Detect active SSL renewal/deploy background job for DualProbeTable badge highlighting
+  // Detect active or latest SSL renewal/deploy background job for inline stage telemetry
   const activeSslJob = terminalTabs.find(
     (t) => t.id.startsWith('ssl-renew-') && t.isRunning
   );
+  const latestSslRenewJob =
+    activeSslJob ??
+    [...terminalTabs].reverse().find((t) => t.id.startsWith('ssl-renew-'));
 
   const totalDomains = sslFleet?.total_domains ?? 7;
   const healthyCount = sslFleet?.healthy_count ?? 0;
@@ -265,6 +266,32 @@ export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
         </div>
       </div>
 
+      {/* Specialized 4-Stage ACME / SMB PKI Progress Surface (decoupled from output stream) */}
+      {latestSslRenewJob && (
+        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-xs font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+              <KeyRound className="w-3.5 h-3.5 text-[var(--color-brand-text)]" />
+              <span>{latestSslRenewJob.title}</span>
+              <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400 tabular-nums">
+                ({latestSslRenewJob.lines.length} lines)
+              </span>
+            </div>
+            {onOpenInBottomConsole && (
+              <button
+                type="button"
+                onClick={() => onOpenInBottomConsole(latestSslRenewJob.id)}
+                className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+              >
+                <Terminal className="w-3.5 h-3.5 text-[var(--color-brand-text)]" />
+                <span>View ACME Log ▴</span>
+              </button>
+            )}
+          </div>
+          <SslProgressInline activeJob={latestSslRenewJob} />
+        </div>
+      )}
+
       {/* 7-Domain SSL Certificate Matrix with Live Dual-Probe (Devices Table) */}
       <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4">
         <div className="flex items-center justify-between">
@@ -288,23 +315,6 @@ export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
           onRenewAndDeploy={handleRenewAndDeploySingle}
         />
       </div>
-
-      {/* Position 4: Standardized PKI & SSL Work Stream Container */}
-      <WorkStreamContainer
-        pageScope="edge"
-        tabs={terminalTabs}
-        title="PKI Certificate Issuance & Fleet Deployment Stream"
-        description="Streams 4-stage ACME DNS-01 renewals, SSH/SMB staging, service reloads, and fleet dual-probe runs."
-        emptyHint="Run Re-probe Fleet, Renew Due, Force Renew All, or a device action above to stream live PKI progress here."
-        progressSlot={(activeTab) =>
-          activeTab && activeTab.id.startsWith('ssl-renew-') ? (
-            <SslProgressInline activeJob={activeTab} />
-          ) : null
-        }
-        onOpenInBottomConsole={onOpenInBottomConsole}
-        onAbortJob={onAbortJob}
-        onClearTab={onClearTab}
-      />
 
       {/* Confirmation Modal for Force Renew All */}
       <ConfirmDangerModal

@@ -3,13 +3,16 @@ import { NavSectionId, TerminalTab } from './types';
 
 export const PAGE_SCOPE_BADGE_LABELS: Record<NavSectionId, string> = {
   hud: 'HUD',
+  agent: 'AGENT',
   'local-dev': 'DEV',
   releases: 'REL',
   telemetry: 'BUILD',
   topology: 'TOPO',
+  'unifi-zbf': 'ZBF',
   dietpi: 'HOST',
   edge: 'SSL',
   security: 'SEC',
+  hardening: 'HARD',
   backups: 'DR',
   smoke: 'SMOKE',
   'opt-ins': 'OPTIN',
@@ -32,6 +35,7 @@ export function inferPageScopeFromJob(
 
   const lowerId = (id || '').toLowerCase();
   if (lowerId.startsWith('hud-')) return 'hud';
+  if (lowerId.startsWith('agent-')) return 'agent';
   if (lowerId.startsWith('dev-') || lowerId.startsWith('local-dev-')) return 'local-dev';
   if (
     lowerId.startsWith('deploy-') ||
@@ -41,6 +45,8 @@ export function inferPageScopeFromJob(
     return 'releases';
   }
   if (lowerId.startsWith('prune-buildkit') || lowerId.startsWith('telemetry-')) return 'telemetry';
+  if (lowerId.startsWith('hardening-')) return 'hardening';
+  if (lowerId.startsWith('unifi-zbf-') || lowerId.startsWith('zbf-')) return 'unifi-zbf';
   if (
     lowerId.startsWith('cf-tunnel-') ||
     lowerId.startsWith('audit-') ||

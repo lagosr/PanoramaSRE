@@ -1,8 +1,6 @@
-import { useState } from 'react';
 import { DiscoveredApp, McpBridgeStatus, TerminalTab } from '../../lib/types';
 import { DevServerCard } from './DevServerCard';
 import { McpBridgeBanner } from './McpBridgeBanner';
-import { WorkStreamContainer } from '../ui/WorkStreamContainer';
 import { Play, Square, Loader2 } from 'lucide-react';
 
 interface LocalDevViewProps {
@@ -25,20 +23,15 @@ interface LocalDevViewProps {
 export function LocalDevView({
   apps,
   mcpStatus,
-  terminalTabs = [],
   onStart,
   onStartAuthAndApp,
   onStop,
   onRestart,
   onStartAll,
   onStopAll,
-  onOpenInBottomConsole,
-  onAbortJob,
-  onClearTab,
   isActionPending = false,
   actionMessage = null,
 }: LocalDevViewProps) {
-  const [appSlugFilter, setAppSlugFilter] = useState<string>('all');
   const devApps = apps.filter(
     (a) =>
       a.manifest.hostingTarget !== 'wsh-docker-service' &&
@@ -118,51 +111,6 @@ export function LocalDevView({
           />
         ))}
       </div>
-
-      {/* Position 4: Boot-Until-Ready Local Dev Stream Container */}
-      <WorkStreamContainer
-        pageScope="local-dev"
-        tabs={terminalTabs}
-        appSlugFilter={appSlugFilter}
-        title="Local Dev Startup & Stop Work Stream"
-        description="Captures boot stdout/stderr until the Next.js server reports Ready/listening (steady-state runtime logs discarded thereafter)."
-        emptyHint="Start, restart, or stop any managed dev server (via UI or MCP) to inspect startup diagnostics here."
-        headerExtra={
-          <div className="flex flex-wrap items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => setAppSlugFilter('all')}
-              className={`px-2.5 py-1 min-h-[32px] rounded-lg text-[11px] font-mono font-semibold border transition-colors whitespace-nowrap flex-shrink-0 cursor-pointer ${
-                appSlugFilter === 'all'
-                  ? 'bg-[var(--color-brand-subtle)] text-[var(--color-brand-text)] border-[var(--color-brand-ring)]'
-                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-700'
-              }`}
-            >
-              All Apps
-            </button>
-            {devApps.map((app) => {
-              const selected = appSlugFilter === app.manifest.appId;
-              return (
-                <button
-                  key={app.manifest.appId}
-                  type="button"
-                  onClick={() => setAppSlugFilter(app.manifest.appId)}
-                  className={`px-2.5 py-1 min-h-[32px] rounded-lg text-[11px] font-mono font-semibold border transition-colors whitespace-nowrap flex-shrink-0 cursor-pointer ${
-                    selected
-                      ? 'bg-[var(--color-brand-subtle)] text-[var(--color-brand-text)] border-[var(--color-brand-ring)]'
-                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-700'
-                  }`}
-                >
-                  {app.manifest.displayName}
-                </button>
-              );
-            })}
-          </div>
-        }
-        onOpenInBottomConsole={onOpenInBottomConsole}
-        onAbortJob={onAbortJob}
-        onClearTab={onClearTab}
-      />
     </div>
   );
 }

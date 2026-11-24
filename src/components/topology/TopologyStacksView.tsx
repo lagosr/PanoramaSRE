@@ -22,7 +22,6 @@ import { DietPiHardwareNetworkCard } from './DietPiHardwareNetworkCard';
 import { CloudflareTunnelTopologyCard } from './CloudflareTunnelTopologyCard';
 import { DockerNetworkRulesAdvisor } from './DockerNetworkRulesAdvisor';
 import { DockerNetworkInspectorDrawer } from './DockerNetworkInspectorDrawer';
-import { WorkStreamContainer } from '../ui/WorkStreamContainer';
 
 interface TopologyStacksViewProps {
   snapshot: WshSnapshot | null;
@@ -44,7 +43,6 @@ interface TopologyStacksViewProps {
 export function TopologyStacksView({
   snapshot,
   apps = [],
-  terminalTabs = [],
   tunnelVersionStatus = null,
   isCheckingTunnelVersion = false,
   isLoading = false,
@@ -53,9 +51,6 @@ export function TopologyStacksView({
   onTriggerTunnelAction,
   onRunPenetrationAudit,
   onReapplyHardening,
-  onOpenInBottomConsole,
-  onAbortJob,
-  onClearTab,
 }: TopologyStacksViewProps) {
   const [activeTab, setActiveTab] = useState<'visual' | 'matrix' | 'hardware' | 'tunnel' | 'rules'>('visual');
   const [selectedRouteSlug, setSelectedRouteSlug] = useState<string | null>(null);
@@ -246,18 +241,6 @@ export function TopologyStacksView({
           onReapplyHardening={onReapplyHardening}
         />
       )}
-
-      {/* Position 3: Standardized Network Topology, Tunnel & Security Stream Container */}
-      <WorkStreamContainer
-        pageScope="topology"
-        tabs={terminalTabs}
-        title="Network Topology, Tunnel & Firewall Execution Stream"
-        description="Streams Test Hop diagnostics, Cloudflare Tunnel updates/checks, penetration audits, hardening runs, and manual host refreshes."
-        emptyHint="Run Test Hop, Cloudflare Tunnel actions, Penetration Audit, Re-Apply Hardening, or Refresh Snapshot above to stream output here."
-        onOpenInBottomConsole={onOpenInBottomConsole}
-        onAbortJob={onAbortJob}
-        onClearTab={onClearTab}
-      />
 
       {/* Inspector Slide-Out Drawer */}
       <DockerNetworkInspectorDrawer

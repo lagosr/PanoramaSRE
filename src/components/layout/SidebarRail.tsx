@@ -1,17 +1,22 @@
 import React from 'react';
-import { 
-  Activity, 
-  Terminal, 
-  GitBranch, 
+import {
+  Activity,
+  Terminal,
+  GitBranch,
   BarChart3,
-  Network, 
-  Server, 
-  ShieldCheck, 
+  Network,
+  Server,
+  ShieldCheck,
   ShieldAlert,
+  Shield,
   MessageSquare,
-  HardDrive, 
+  HardDrive,
   FlaskConical,
-  Settings as SettingsIcon
+  Settings as SettingsIcon,
+  Waypoints,
+  Bot,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from 'lucide-react';
 import { APP_VERSION_INFO } from '../../lib/version';
 import { NavSectionId } from '../../lib/types';
@@ -29,13 +34,39 @@ interface SidebarRailProps {
   dietpiAlertCount?: number;
   dietpiAlertSeverity?: 'error' | 'warning' | null;
   securityViolationCount?: number;
+  hardeningPassingCount?: number;
+  hardeningTotalCount?: number;
   topologyAlertCount?: number;
   topologyAlertSeverity?: 'error' | 'warning' | null;
   smokeFailureCount?: number;
   unreadOptInsCount?: number;
   threatAlertCount?: number;
   threatAlertSeverity?: 'error' | 'warning' | null;
+  sslAlertCount?: number;
+  sslAlertSeverity?: 'error' | 'warning' | null;
+  sslMinDays?: number | null;
+  devRunningCount?: number;
+  totalAppCount?: number;
+  totalAttentionCount?: number;
+  totalAttentionSeverity?: 'error' | 'warning' | null;
+  isCollapsed?: boolean;
+  onToggleCollapse?: () => void;
+  showAgentNav?: boolean;
   isInitialSyncComplete?: boolean;
+}
+
+interface SidebarNavEntry {
+  id: NavItem;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  badge?: number | string;
+  severity?: 'error' | 'warning' | 'success' | 'info';
+}
+
+interface SidebarGroup {
+  id: string;
+  title: string;
+  items: SidebarNavEntry[];
 }
 
 export const SidebarRail: React.FC<SidebarRailProps> = ({
@@ -49,12 +80,24 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
   dietpiAlertCount,
   dietpiAlertSeverity,
   securityViolationCount = 0,
+  hardeningPassingCount,
+  hardeningTotalCount = 9,
   topologyAlertCount,
   topologyAlertSeverity,
   smokeFailureCount = 0,
   unreadOptInsCount = 0,
   threatAlertCount = 0,
   threatAlertSeverity = null,
+  sslAlertCount = 0,
+  sslAlertSeverity = null,
+  sslMinDays = null,
+  devRunningCount = 0,
+  totalAppCount = 0,
+  totalAttentionCount,
+  totalAttentionSeverity,
+  isCollapsed = false,
+  onToggleCollapse,
+  showAgentNav = false,
   isInitialSyncComplete = true,
 }) => {
   const effectiveTopologyBadge =
@@ -75,152 +118,346 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
       ? 'warning'
       : null;
 
-  const navItems: {
-    id: NavItem;
-    label: string;
-    icon: React.ComponentType<{ className?: string }>;
-    badge?: number;
-    severity?: 'error' | 'warning';
-  }[] = [
+  const effectiveHudBadge =
+    totalAttentionCount !== undefined
+      ? totalAttentionCount
+      : unhealthyCount > 0
+      ? unhealthyCount
+      : securityViolationCount;
+  const effectiveHudSeverity: 'error' | 'warning' =
+    totalAttentionSeverity ||
+    (unhealthyCount > 0 || securityViolationCount > 0 ? 'error' : 'warning');
+
+  const hardeningBadge: SidebarNavEntry['badge'] =
+    securityViolationCount > 0
+      ? securityViolationCount
+      : hardeningPassingCount !== undefined && hardeningTotalCount > 0
+      ? `${hardeningPassingCount}/${hardeningTotalCount}`
+      : undefined;
+  const hardeningSeverity: SidebarNavEntry['severity'] =
+    securityViolationCount > 0 ? 'error' : 'success';
+
+  const sslBadge: SidebarNavEntry['badge'] =
+    sslAlertCount > 0
+      ? sslAlertCount
+      : sslMinDays !== null && Number.isFinite(sslMinDays)
+      ? `${sslMinDays}d`
+      : undefined;
+  const sslSeverity: SidebarNavEntry['severity'] =
+    sslAlertCount > 0 ? sslAlertSeverity || 'warning' : 'success';
+
+  const missionItems: SidebarNavEntry[] = [
     {
       id: 'hud',
       label: 'Command HUD',
       icon: Activity,
-      badge: unhealthyCount > 0 ? unhealthyCount : securityViolationCount > 0 ? securityViolationCount : undefined,
-      severity: 'error',
+      badge: effectiveHudBadge > 0 ? effectiveHudBadge : undefined,
+      severity: effectiveHudSeverity,
     },
-    { id: 'local-dev', label: 'Local Dev Supervisor', icon: Terminal },
-    { id: 'releases', label: 'Releases & Drift', icon: GitBranch, badge: behindReleasesCount, severity: 'warning' },
+  ];
+  if (showAgentNav) {
+    missionItems.push({
+      id: 'agent',
+      label: 'AI Agent SRE',
+      icon: Bot,
+    });
+  }
+
+  const navGroups: SidebarGroup[] = [
     {
-      id: 'telemetry',
-      label: 'Build Telemetry',
-      icon: BarChart3,
-      badge: telemetryWarningCount > 0 ? telemetryWarningCount : undefined,
-      severity: 'warning',
+      id: 'mission',
+      title: 'MISSION CONTROL',
+      items: missionItems,
     },
     {
-      id: 'topology',
-      label: 'Topology & Stacks',
-      icon: Network,
-      badge: effectiveTopologyBadge > 0 ? effectiveTopologyBadge : undefined,
-      severity: effectiveTopologySeverity || 'warning',
+      id: 'delivery',
+      title: 'DELIVERY & VERIFICATION',
+      items: [
+        {
+          id: 'releases',
+          label: 'Releases & Drift',
+          icon: GitBranch,
+          badge: behindReleasesCount > 0 ? behindReleasesCount : undefined,
+          severity: unhealthyCount > 0 ? 'error' : 'warning',
+        },
+        {
+          id: 'telemetry',
+          label: 'Build Telemetry',
+          icon: BarChart3,
+          badge: telemetryWarningCount > 0 ? telemetryWarningCount : undefined,
+          severity: 'warning',
+        },
+        {
+          id: 'smoke',
+          label: 'Smoke Tests',
+          icon: FlaskConical,
+          badge: smokeFailureCount > 0 ? smokeFailureCount : undefined,
+          severity: 'error',
+        },
+      ],
     },
-    {
-      id: 'dietpi',
-      label: 'DietPi Host',
-      icon: Server,
-      badge: effectiveDietPiBadge > 0 ? effectiveDietPiBadge : undefined,
-      severity: effectiveDietPiSeverity || 'warning',
-    },
-    { id: 'edge', label: 'PKI & Certificates', icon: ShieldCheck },
     {
       id: 'security',
-      label: 'Threat & Zero Trust',
-      icon: ShieldAlert,
-      badge: threatAlertCount > 0 ? threatAlertCount : undefined,
-      severity: threatAlertSeverity || 'warning',
+      title: 'SECURITY & GOVERNANCE',
+      items: [
+        {
+          id: 'security',
+          label: 'Threat & Zero Trust',
+          icon: ShieldAlert,
+          badge: threatAlertCount > 0 ? threatAlertCount : undefined,
+          severity: threatAlertSeverity || 'warning',
+        },
+        {
+          id: 'hardening',
+          label: 'WSH Hardening',
+          icon: Shield,
+          badge: hardeningBadge,
+          severity: hardeningSeverity,
+        },
+        {
+          id: 'edge',
+          label: 'PKI & Certificates',
+          icon: ShieldCheck,
+          badge: sslBadge,
+          severity: sslSeverity,
+        },
+        {
+          id: 'opt-ins',
+          label: 'SMS Opt-Ins (10DLC)',
+          icon: MessageSquare,
+          badge: unreadOptInsCount > 0 ? unreadOptInsCount : undefined,
+          severity: 'warning',
+        },
+      ],
     },
     {
-      id: 'opt-ins',
-      label: 'SMS Opt-Ins',
-      icon: MessageSquare,
-      badge: unreadOptInsCount > 0 ? unreadOptInsCount : undefined,
-      severity: 'warning',
+      id: 'infra',
+      title: 'INFRASTRUCTURE & NETWORK',
+      items: [
+        {
+          id: 'topology',
+          label: 'Topology & Ingress',
+          icon: Network,
+          badge: effectiveTopologyBadge > 0 ? effectiveTopologyBadge : undefined,
+          severity: effectiveTopologySeverity || 'warning',
+        },
+        {
+          id: 'unifi-zbf',
+          label: 'UniFi Network & ZBF',
+          icon: Waypoints,
+        },
+        {
+          id: 'dietpi',
+          label: 'DietPi Host & Crons',
+          icon: Server,
+          badge: effectiveDietPiBadge > 0 ? effectiveDietPiBadge : undefined,
+          severity: effectiveDietPiSeverity || 'warning',
+        },
+        {
+          id: 'backups',
+          label: 'Backups & DR',
+          icon: HardDrive,
+          badge: backupFailureCount > 0 ? backupFailureCount : undefined,
+          severity: 'error',
+        },
+      ],
     },
-    { id: 'backups', label: 'Database Backups & DR', icon: HardDrive, badge: backupFailureCount, severity: 'error' },
-    { id: 'smoke', label: 'Smoke Tests', icon: FlaskConical, badge: smokeFailureCount > 0 ? smokeFailureCount : undefined, severity: 'error' },
-    { id: 'settings', label: 'Settings', icon: SettingsIcon },
+    {
+      id: 'workspace',
+      title: 'WORKSPACE & SYSTEM',
+      items: [
+        {
+          id: 'local-dev',
+          label: 'Local Dev',
+          icon: Terminal,
+          badge: totalAppCount > 0 ? `${devRunningCount}/${totalAppCount}` : undefined,
+          severity: devRunningCount > 0 ? 'info' : 'info',
+        },
+        {
+          id: 'settings',
+          label: 'Settings & Logs',
+          icon: SettingsIcon,
+        },
+      ],
+    },
   ];
 
+  const badgePillClass = (severity: SidebarNavEntry['severity']) => {
+    switch (severity) {
+      case 'error':
+        return 'bg-rose-700 dark:bg-rose-600 text-white shadow-[0_0_8px_rgba(244,63,94,0.45)] animate-pulse';
+      case 'warning':
+        return 'bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-500/40 font-bold';
+      case 'success':
+        return 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/35 font-semibold';
+      case 'info':
+      default:
+        return 'bg-cyan-500/15 text-cyan-700 dark:text-cyan-300 border border-cyan-500/35 font-semibold';
+    }
+  };
+
+  const collapsedDotClass = (severity: SidebarNavEntry['severity']) => {
+    switch (severity) {
+      case 'error':
+        return 'bg-rose-500 animate-pulse';
+      case 'warning':
+        return 'bg-amber-400 animate-pulse';
+      case 'success':
+        return 'bg-emerald-500';
+      case 'info':
+      default:
+        return 'bg-cyan-400';
+    }
+  };
+
   return (
-    <aside className="w-16 md:w-64 bg-white dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 flex flex-col min-h-0 overflow-hidden select-none shrink-0">
+    <aside
+      className={`${
+        isCollapsed ? 'w-16' : 'w-16 md:w-64'
+      } bg-white dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 flex flex-col min-h-0 overflow-hidden select-none shrink-0 transition-all duration-150`}
+    >
       <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
-        {/* App Title / Header */}
-        <div className="h-16 flex items-center px-2.5 md:px-4 border-b border-slate-200 dark:border-slate-800 space-x-3 shrink-0">
-          <div className="relative shrink-0">
-            <div className="w-11 h-11 rounded-xl bg-white dark:bg-slate-900 border border-amber-500/40 dark:border-amber-400/40 flex items-center justify-center shadow-md shadow-amber-500/10 overflow-hidden">
-              <img
-                src="/logo-dark.png"
-                alt="PanoramaSRE"
-                className="w-full h-full object-cover hidden dark:block"
-              />
-              <img
-                src="/logo-light.png"
-                alt="PanoramaSRE"
-                className="w-full h-full object-cover block dark:hidden"
+        {/* App Title / Header (h-14 matches TopLiveSyncBar) */}
+        <div className="h-14 flex items-center justify-between px-2.5 md:px-3.5 border-b border-slate-200 dark:border-slate-800 gap-2 shrink-0">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="relative shrink-0">
+              <div className="w-9 h-9 rounded-xl bg-white dark:bg-slate-900 border border-amber-500/40 dark:border-amber-400/40 flex items-center justify-center shadow-sm overflow-hidden">
+                <img
+                  src="/logo-dark.png"
+                  alt="PanoramaSRE"
+                  className="w-full h-full object-cover hidden dark:block"
+                />
+                <img
+                  src="/logo-light.png"
+                  alt="PanoramaSRE"
+                  className="w-full h-full object-cover block dark:hidden"
+                />
+              </div>
+              <span
+                className={`w-2.5 h-2.5 rounded-full absolute -top-0.5 -right-0.5 ring-2 ring-white dark:ring-slate-950 ${
+                  !isInitialSyncComplete
+                    ? 'bg-slate-400 dark:bg-slate-500 animate-pulse'
+                    : unhealthyCount > 0
+                    ? 'bg-rose-500 animate-ping'
+                    : 'bg-emerald-500 dark:bg-emerald-400 animate-pulse'
+                }`}
+                aria-hidden="true"
               />
             </div>
-            <span
-              className={`w-2.5 h-2.5 rounded-full absolute -top-0.5 -right-0.5 ring-2 ring-white dark:ring-slate-950 ${
-                !isInitialSyncComplete
-                  ? 'bg-slate-400 dark:bg-slate-500 animate-pulse'
-                  : unhealthyCount > 0
-                  ? 'bg-rose-500 animate-ping'
-                  : 'bg-emerald-500 dark:bg-emerald-400 animate-pulse'
-              }`}
-              aria-hidden="true"
-            />
+
+            {!isCollapsed && (
+              <div className="hidden md:block min-w-0">
+                <div className="text-sm font-bold tracking-tight bg-gradient-to-r from-orange-500 to-amber-500 dark:from-amber-300 dark:to-orange-400 bg-clip-text text-transparent truncate">
+                  PanoramaSRE
+                </div>
+                <p className="text-[10px] text-slate-600 dark:text-slate-400 font-mono tabular-nums truncate">
+                  v{APP_VERSION_INFO.version} {APP_VERSION_INFO.buildDate ? `(${APP_VERSION_INFO.buildDate})` : ''}
+                </p>
+              </div>
+            )}
           </div>
-          <div className="hidden md:block">
-            <h1 className="text-sm font-bold tracking-tight bg-gradient-to-r from-orange-500 to-amber-500 dark:from-amber-300 dark:to-orange-400 bg-clip-text text-transparent">
-              PanoramaSRE
-            </h1>
-            <p className="text-[10px] text-slate-600 dark:text-slate-400 font-mono tabular-nums">
-              Control Plane v{APP_VERSION_INFO.version} {APP_VERSION_INFO.buildDate ? `(${APP_VERSION_INFO.buildDate})` : ''}
-            </p>
-          </div>
+
+          {onToggleCollapse && (
+            <button
+              type="button"
+              onClick={onToggleCollapse}
+              className="hidden md:flex w-7 h-7 items-center justify-center rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 hover:border-[var(--color-brand)] text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 transition-colors shrink-0 cursor-pointer"
+              title={isCollapsed ? 'Expand Sidebar Rail' : 'Collapse Sidebar to Icons'}
+              aria-label={isCollapsed ? 'Expand Sidebar Rail' : 'Collapse Sidebar to Icons'}
+            >
+              {isCollapsed ? (
+                <PanelLeftOpen className="w-3.5 h-3.5" />
+              ) : (
+                <PanelLeftClose className="w-3.5 h-3.5" />
+              )}
+            </button>
+          )}
         </div>
 
-        {/* Navigation links */}
-        <nav className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = activeTab === item.id;
-            const isAlertTab = isInitialSyncComplete && item.id === 'hud' && unhealthyCount > 0;
+        {/* 5-Group Navigation */}
+        <nav className="flex-1 overflow-y-auto p-2 space-y-3 custom-scrollbar">
+          {navGroups.map((group, groupIndex) => (
+            <div
+              key={group.id}
+              className={
+                groupIndex > 0 && isCollapsed
+                  ? 'pt-2 border-t border-slate-200 dark:border-slate-800 space-y-0.5'
+                  : 'space-y-0.5'
+              }
+            >
+              {!isCollapsed && (
+                <div className="hidden md:block px-2.5 pt-1 pb-0.5 text-[10px] font-mono font-bold tracking-wider uppercase text-slate-500 dark:text-slate-500 truncate">
+                  {group.title}
+                </div>
+              )}
 
-            return (
-              <button
-                key={item.id}
-                onClick={() => onSelectTab(item.id)}
-                className={`w-full flex items-center px-3 py-2.5 min-h-[44px] rounded-xl text-sm font-medium transition-colors group relative cursor-pointer ${
-                  isActive
-                    ? isAlertTab
-                      ? 'bg-rose-500/20 text-rose-800 dark:text-rose-300 border border-rose-500/40 ring-1 ring-rose-500/40 font-semibold'
-                      : 'bg-[var(--color-brand-subtle)] text-[var(--color-brand-text)] border border-[var(--color-brand-ring)] font-semibold shadow-sm'
-                    : isAlertTab
-                    ? 'text-rose-700 dark:text-rose-400 hover:text-rose-800 dark:hover:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/30 border border-rose-500/30'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-900 border border-transparent'
-                }`}
-                title={item.label}
-              >
-                <Icon className={`w-5 h-5 shrink-0 transition-colors ${
-                  isAlertTab ? 'text-rose-600 dark:text-rose-400 animate-pulse' : isActive ? 'text-[var(--color-brand-text)]' : 'text-slate-500 dark:text-slate-400 group-hover:text-slate-700 dark:group-hover:text-slate-200'
-                }`} />
-                <span className="ml-3 hidden md:inline whitespace-nowrap">{item.label}</span>
+              {group.items.map((item) => {
+                const Icon = item.icon;
+                const isActive = activeTab === item.id;
+                const isAlertTab = isInitialSyncComplete && item.id === 'hud' && unhealthyCount > 0;
+                const hasBadge =
+                  item.badge !== undefined &&
+                  (typeof item.badge === 'string' || item.badge > 0) &&
+                  (isInitialSyncComplete || item.id === 'local-dev');
 
-                {isInitialSyncComplete && item.badge !== undefined && item.badge > 0 && (
-                  <>
-                    <span
-                      className={`md:hidden absolute top-2 right-2 w-2 h-2 rounded-full ${
-                        item.severity === 'error'
-                          ? 'bg-rose-500 animate-pulse'
-                          : 'bg-amber-400 animate-pulse'
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => onSelectTab(item.id)}
+                    className={`w-full flex items-center ${
+                      isCollapsed ? 'justify-center px-2' : 'px-2.5'
+                    } py-2 min-h-[40px] rounded-xl text-xs sm:text-[13px] font-medium transition-colors group relative cursor-pointer ${
+                      isActive
+                        ? isAlertTab
+                          ? 'bg-rose-500/20 text-rose-800 dark:text-rose-300 border border-rose-500/40 font-semibold'
+                          : 'bg-[var(--color-brand-subtle)] text-[var(--color-brand-text)] border border-[var(--color-brand-ring)] font-semibold shadow-xs'
+                        : isAlertTab
+                        ? 'text-rose-700 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 border border-rose-500/30'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-900 border border-transparent'
+                    }`}
+                    title={`${group.title}: ${item.label}${hasBadge ? ` (${item.badge})` : ''}`}
+                  >
+                    <Icon
+                      className={`w-4 h-4 shrink-0 transition-colors ${
+                        isAlertTab
+                          ? 'text-rose-600 dark:text-rose-400 animate-pulse'
+                          : isActive
+                          ? 'text-[var(--color-brand-text)]'
+                          : 'text-slate-500 dark:text-slate-400 group-hover:text-slate-700 dark:group-hover:text-slate-200'
                       }`}
                     />
-                    <span
-                      className={`hidden md:inline-flex items-center justify-center ml-auto px-2 py-0.5 rounded-full text-[11px] font-mono font-bold tabular-nums shrink-0 ${
-                        item.severity === 'error'
-                          ? 'bg-rose-700 dark:bg-rose-600 text-white shadow-[0_0_8px_rgba(244,63,94,0.45)] animate-pulse'
-                          : 'bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-500/40 shadow-[0_0_6px_rgba(245,158,11,0.25)] font-bold'
-                      }`}
-                    >
-                      {item.badge}
-                    </span>
-                  </>
-                )}
-              </button>
-            );
-          })}
+                    {!isCollapsed && (
+                      <span className="ml-2.5 hidden md:inline whitespace-nowrap truncate">
+                        {item.label}
+                      </span>
+                    )}
+
+                    {hasBadge && (
+                      <>
+                        <span
+                          className={`${
+                            isCollapsed ? 'block' : 'md:hidden'
+                          } absolute top-1.5 right-1.5 w-2 h-2 rounded-full ${collapsedDotClass(
+                            item.severity
+                          )}`}
+                        />
+                        {!isCollapsed && (
+                          <span
+                            className={`hidden md:inline-flex items-center justify-center ml-auto px-1.5 py-0.2 rounded-full text-[10px] font-mono tabular-nums shrink-0 ${badgePillClass(
+                              item.severity
+                            )}`}
+                          >
+                            {item.badge}
+                          </span>
+                        )}
+                      </>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          ))}
         </nav>
       </div>
     </aside>

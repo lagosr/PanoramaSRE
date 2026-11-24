@@ -13,11 +13,12 @@ import {
   Sparkles,
   ChevronLeft,
   ChevronRight,
+  Terminal,
+  Square,
 } from 'lucide-react';
 import { SmokeTestRun, TerminalTab } from '../../lib/types';
 import { parseUtcDate } from '../../lib/formatters';
 import { filterTabsForScope, getTabFinishedDetails } from '../../lib/stream-utils';
-import { WorkStreamContainer } from '../ui/WorkStreamContainer';
 import { SegmentedControl } from '@lagosr/panorama-ui-kit';
 
 interface SmokeTestsViewProps {
@@ -356,7 +357,6 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
   onRegisterOsSchedule,
   onOpenInBottomConsole,
   onAbortJob,
-  onClearTab,
   scheduleSlots = ['08:00', '13:00', '17:00', '22:00'],
   lastError,
 }) => {
@@ -462,31 +462,6 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
     if (categoryFilter !== 'all' && !run.results.some((r) => r.category === categoryFilter)) {
       setCategoryFilter('all');
     }
-  };
-
-  const handleSelectStreamTab = (tabId: string) => {
-    const matchedRunId = tabToRunId.get(tabId);
-    if (matchedRunId) {
-      const matchedRun = runs.find((r) => r.id === matchedRunId);
-      if (matchedRun) {
-        setSelectedRunId(matchedRun.id);
-        setManualTabOverrideId(null);
-        if (categoryFilter !== 'all' && !matchedRun.results.some((r) => r.category === categoryFilter)) {
-          setCategoryFilter('all');
-        }
-        const nextView = resolveRunSelectionView(runs, matchedRun.id, historyMode, PAGE_SIZE);
-        if (nextView) {
-          if (nextView.historyMode !== historyMode) {
-            setHistoryMode(nextView.historyMode);
-          }
-          if (nextView.currentPage !== currentPage) {
-            setCurrentPage(nextView.currentPage);
-          }
-        }
-        return;
-      }
-    }
-    setManualTabOverrideId(tabId);
   };
 
   const totalPages = Math.max(1, Math.ceil(filteredRuns.length / PAGE_SIZE));
@@ -854,21 +829,64 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
         </div>
       </div>
 
-      {/* Position 4 (Page Bottom): Standardized Work Stream Container */}
-      <WorkStreamContainer
-        pageScope="smoke"
-        title="Smoke Test Execution Stream"
-        description="Live verification output for Production Smoke Tests, OS task scheduling, and MCP-triggered runs."
-        tabs={terminalTabs}
-        selectedTabId={effectiveStream.selectedTabId}
-        onSelectTab={handleSelectStreamTab}
-        unmatchedSelectionMessage={effectiveStream.unmatchedSelectionMessage}
-        unmatchedSelectPlaceholder={effectiveStream.unmatchedSelectPlaceholder}
-        onOpenInBottomConsole={onOpenInBottomConsole}
-        onAbortJob={onAbortJob}
-        onClearTab={onClearTab}
-        emptyHint="Run the Production Smoke Suite, Sync OS Schedule, or Refresh History to inspect output."
-      />
+      {/* Correlated Execution Stream Strip (replaces inline WorkStreamContainer; logs live in unified Bottom Console) */}
+      {(() => {
+        const correlatedTab = effectiveStream.selectedTabId
+          ? scopedSmokeTabs.find((t) => t.id === effectiveStream.selectedTabId) ?? null
+          : null;
+        if (!correlatedTab && !effectiveStream.unmatchedSelectionMessage && scopedSmokeTabs.length === 0) {
+          return null;
+        }
+        return (
+          <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 py-3 shadow-sm flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 min-w-0 flex-1">
+              <Terminal className="w-4 h-4 text-[var(--color-brand-text)] shrink-0" />
+              {correlatedTab ? (
+                <div className="flex flex-wrap items-center gap-2 min-w-0">
+                  <span className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate">
+                    {correlatedTab.title}
+                  </span>
+                  {correlatedTab.source && (
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                      {correlatedTab.source}
+                    </span>
+                  )}
+                  <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400 tabular-nums">
+                    {correlatedTab.isRunning ? 'Running' : `${correlatedTab.lines.length} lines`}
+                  </span>
+                </div>
+              ) : (
+                <span className="text-xs text-slate-600 dark:text-slate-400">
+                  {effectiveStream.unmatchedSelectionMessage ||
+                    'Run the Production Smoke Suite, Sync OS Schedule, or Refresh History to inspect output in the Console Dock.'}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {correlatedTab?.isRunning && correlatedTab.abortable !== false && onAbortJob && (
+                <button
+                  type="button"
+                  onClick={() => onAbortJob(correlatedTab.id)}
+                  className="btn-danger text-xs flex items-center gap-1.5"
+                >
+                  <Square className="w-3 h-3 fill-current" />
+                  <span>Abort</span>
+                </button>
+              )}
+              {onOpenInBottomConsole && (
+                <button
+                  type="button"
+                  onClick={() => onOpenInBottomConsole(correlatedTab?.id ?? scopedSmokeTabs[scopedSmokeTabs.length - 1]?.id)}
+                  className="btn-secondary text-xs flex items-center gap-1.5"
+                >
+                  <Terminal className="w-3.5 h-3.5 text-[var(--color-brand-text)]" />
+                  <span>View Raw Stream ▴</span>
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };

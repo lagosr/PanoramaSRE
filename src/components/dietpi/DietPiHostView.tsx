@@ -3,7 +3,6 @@ import { RefreshCw, Server, Terminal, ShieldAlert, Cpu, Clock } from 'lucide-rea
 import { SegmentedControl } from '@lagosr/panorama-ui-kit';
 import { buildRemoteSshCommand } from '../../lib/script-adapters';
 import { auditFleetCrons, computeDietPiBadges, type DietPiTabBadge } from '../../lib/cron-auditor';
-import { WorkStreamContainer } from '../ui/WorkStreamContainer';
 import { CronManagerPanel, type CronActionRequest } from './CronManagerPanel';
 
 interface DietPiHostViewProps {
@@ -33,14 +32,10 @@ export function DietPiHostView({
   onSelectSubTab,
   isLoading,
   isCronActionBusy = false,
-  terminalTabs = [],
   onRefresh,
   onTriggerAction,
   onTriggerCronAction,
   onTriggerReboot,
-  onOpenInBottomConsole,
-  onAbortJob,
-  onClearTab,
   isRebooting = false,
 }: DietPiHostViewProps) {
   const effectiveCronSummary = cronSummary ?? auditFleetCrons(apps, snapshot);
@@ -293,18 +288,6 @@ export function DietPiHostView({
         )}
       </div>
       )}
-
-      {/* Position 4: DietPi Host Maintenance & Reboot Recovery Stream */}
-      <WorkStreamContainer
-        pageScope="dietpi"
-        tabs={terminalTabs}
-        title="DietPi Host Reboot, APT Upgrade & Telemetry Stream"
-        description="Streams 4-stage graceful reboots, SSH recovery polling, apt-get dist-upgrade runs, and manual snapshot refreshes."
-        emptyHint="Click Refresh Snapshot, Upgrade All Packages, or Reboot Host above to stream host operations here."
-        onOpenInBottomConsole={onOpenInBottomConsole}
-        onAbortJob={onAbortJob}
-        onClearTab={onClearTab}
-      />
     </div>
   );
 }

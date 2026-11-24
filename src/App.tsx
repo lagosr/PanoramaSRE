@@ -6,15 +6,25 @@ import { ask, save } from '@tauri-apps/plugin-dialog';
 import { runStreamJob } from './lib/process-runner';
 import { SidebarRail, NavItem } from './components/layout/SidebarRail';
 import { TopLiveSyncBar } from './components/layout/TopLiveSyncBar';
-import { SreEventsConsolePanel, TerminalTab, SystemEventItem } from './components/layout/SreEventsConsolePanel';
+import { ReturnBreadcrumbPill } from './components/layout/ReturnBreadcrumbPill';
+import { CommandPaletteModal, CommandPaletteEntry } from './components/layout/CommandPaletteModal';
+import { AlertsInboxDrawer, UnifiedAlertItem } from './components/layout/AlertsInboxDrawer';
+import {
+  SreEventsConsolePanel,
+  ConsoleFooterTicker,
+  TerminalTab,
+  SystemEventItem,
+} from './components/layout/SreEventsConsolePanel';
 import { CommandCenterView } from './components/hud/CommandCenterView';
 import { LocalDevView } from './components/local-dev/LocalDevView';
 import { SettingsView, type SettingsTab } from './components/settings/SettingsView';
 import { TopologyStacksView } from './components/topology/TopologyStacksView';
+import { UnifiNetworkZbfView } from './components/network/UnifiNetworkZbfView';
 import { DietPiHostView } from './components/dietpi/DietPiHostView';
 import type { CronActionRequest } from './components/dietpi/CronManagerPanel';
 import { EdgePkiView } from './components/edge/EdgePkiView';
 import { ThreatIntelView } from './components/security/ThreatIntelView';
+import { WshHardeningView } from './components/security/WshHardeningView';
 import { ReleasePipelineView } from './components/releases/ReleasePipelineView';
 import { BuildTelemetryView } from './components/telemetry/BuildTelemetryView';
 import { BackupsRecoveryView } from './components/backups/BackupsRecoveryView';
@@ -46,6 +56,11 @@ import {
   ParakithOptInRecord,
   NavSectionId,
   WorkStreamSource,
+  ConsoleAutoOpenMode,
+  ConsoleDockSide,
+  ConsoleScopeMode,
+  ReturnBreadcrumb,
+  NavigateContext,
   getAppOperationalHealth,
   isAppUnhealthy,
   isAppEvaluableForFleetCount,
@@ -65,6 +80,11 @@ import {
 } from './lib/types';
 import { computeActionableSecuritySummary } from './lib/threat-actionability';
 import { inferPageScopeFromJob } from './lib/stream-utils';
+import {
+  shouldAutoOpenOnJobStart,
+  shouldAutoOpenOnJobFinish,
+  resolveResponsiveDockLayout,
+} from './lib/console-dock-policy';
 import { buildSyncAlertEvaluationInput } from './lib/pushover-payload';
 import {
   buildSslCertCommand,
@@ -131,10 +151,72 @@ export const App: React.FC = () => {
   const [isLoadingWsh, setIsLoadingWsh] = useState<boolean>(false);
   const [dietpiSubTab, setDietpiSubTab] = useState<'host' | 'crons'>('host');
   const [isCronActionBusy, setIsCronActionBusy] = useState<boolean>(false);
-  // Terminal Drawer State
+  // Terminal Dock & Phase 1 Navigation / Console State
   const [terminalTabs, setTerminalTabs] = useState<TerminalTab[]>([]);
   const [activeTerminalTabId, setActiveTerminalTabId] = useState<string>('');
   const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('panoramasre_sidebar_collapsed') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [sidebarAutoCollapsed, setSidebarAutoCollapsed] = useState<boolean>(false);
+  const [dockSide, setDockSide] = useState<ConsoleDockSide>(() => {
+    try {
+      return localStorage.getItem('panoramasre_console_dock_side') === 'right' ? 'right' : 'bottom';
+    } catch {
+      return 'bottom';
+    }
+  });
+  const [dockHeight, setDockHeight] = useState<number>(() => {
+    try {
+      const parsed = Number(localStorage.getItem('panoramasre_console_dock_height'));
+      return Number.isFinite(parsed) && parsed >= 180 && parsed <= 700 ? parsed : 320;
+    } catch {
+      return 320;
+    }
+  });
+  const [dockWidth, setDockWidth] = useState<number>(() => {
+    try {
+      const parsed = Number(localStorage.getItem('panoramasre_console_dock_width'));
+      return Number.isFinite(parsed) && parsed >= 320 && parsed <= 820 ? parsed : 500;
+    } catch {
+      return 500;
+    }
+  });
+  const [autoOpenMode, setAutoOpenMode] = useState<ConsoleAutoOpenMode>(() => {
+    try {
+      const saved = localStorage.getItem('panoramasre_console_auto_open');
+      return saved === 'errors' || saved === 'manual' ? saved : 'smart';
+    } catch {
+      return 'smart';
+    }
+  });
+  const [scopeMode, setScopeMode] = useState<ConsoleScopeMode>(() => {
+    try {
+      return localStorage.getItem('panoramasre_console_scope_mode') === 'all' ? 'all' : 'page';
+    } catch {
+      return 'page';
+    }
+  });
+  const [unreadFailureTabId, setUnreadFailureTabId] = useState<string | null>(null);
+  const [isPaletteOpen, setIsPaletteOpen] = useState<boolean>(false);
+  const [isAlertsDrawerOpen, setIsAlertsDrawerOpen] = useState<boolean>(false);
+  const [returnTo, setReturnTo] = useState<ReturnBreadcrumb | null>(null);
+  const [viewportWidth, setViewportWidth] = useState<number>(() =>
+    typeof window !== 'undefined' ? window.innerWidth : 1600
+  );
+  const dismissedJobIdsRef = useRef<Set<string>>(new Set());
+  const isDrawerOpenRef = useRef<boolean>(false);
+  isDrawerOpenRef.current = isDrawerOpen;
+  const autoOpenModeRef = useRef<ConsoleAutoOpenMode>('smart');
+  autoOpenModeRef.current = autoOpenMode;
+  const activeTerminalTabIdRef = useRef<string>('');
+  activeTerminalTabIdRef.current = activeTerminalTabId;
+  const terminalTabsRef = useRef<TerminalTab[]>([]);
+  terminalTabsRef.current = terminalTabs;
   const [isDeployingAll, setIsDeployingAll] = useState<boolean>(false);
   const [isHostRebooting, setIsHostRebooting] = useState<boolean>(false);
   const [selectedReleaseAppSlug, setSelectedReleaseAppSlug] = useState<string>('');
@@ -322,8 +404,250 @@ export const App: React.FC = () => {
     if (tabId) {
       setActiveTerminalTabId(tabId);
     }
+    setUnreadFailureTabId(null);
     setIsDrawerOpen(true);
   }, []);
+
+  const handleCloseDrawer = useCallback(() => {
+    // Remember Manual-Dismiss across active running jobs, unread failures, and batch groups
+    const activeTabObj = terminalTabsRef.current.find(
+      (t) => t.id === activeTerminalTabIdRef.current
+    );
+    if (activeTabObj && (activeTabObj.isRunning || (activeTabObj.exitCode !== undefined && activeTabObj.exitCode !== 0 && activeTabObj.exitCode !== 130))) {
+      dismissedJobIdsRef.current.add(activeTabObj.id);
+      if (activeTabObj.batchGroupId) {
+        dismissedJobIdsRef.current.add(activeTabObj.batchGroupId);
+      }
+    }
+    for (const tab of terminalTabsRef.current) {
+      if (tab.isRunning) {
+        dismissedJobIdsRef.current.add(tab.id);
+        if (tab.batchGroupId) {
+          dismissedJobIdsRef.current.add(tab.batchGroupId);
+        }
+      }
+    }
+    setUnreadFailureTabId(null);
+    setIsDrawerOpen(false);
+  }, []);
+
+  const isJobOrBatchDismissed = useCallback((jobId: string, batchGroupId?: string | null) => {
+    if (dismissedJobIdsRef.current.has(jobId)) return true;
+    if (batchGroupId && dismissedJobIdsRef.current.has(batchGroupId)) return true;
+    return false;
+  }, []);
+
+  const evaluateJobFinishAutoOpen = useCallback(
+    (jobId: string, exitCode: number) => {
+      if (exitCode === 0 || exitCode === 130) return;
+      const targetTab = terminalTabsRef.current.find((t) => t.id === jobId);
+      const suppressed = isJobOrBatchDismissed(jobId, targetTab?.batchGroupId);
+      const shouldOpen =
+        !isDrawerOpenRef.current &&
+        !suppressed &&
+        shouldAutoOpenOnJobFinish({
+          exitCode,
+          source: targetTab?.source ?? 'ui',
+          mode: autoOpenModeRef.current,
+          isAborted: exitCode === 130,
+        });
+      if (shouldOpen) {
+        setActiveTerminalTabId(jobId);
+        setUnreadFailureTabId(null);
+        setIsDrawerOpen(true);
+      } else if (!isDrawerOpenRef.current) {
+        setUnreadFailureTabId(jobId);
+      }
+    },
+    [isJobOrBatchDismissed]
+  );
+
+  const registerStreamTab = useCallback(
+    (
+      newTab: TerminalTab,
+      opts?: { focusTab?: boolean; upsert?: boolean; persist?: boolean }
+    ) => {
+      setTerminalTabs((prev) => {
+        if (opts?.upsert) {
+          const existingIdx = prev.findIndex((t) => t.id === newTab.id);
+          if (existingIdx !== -1) {
+            const next = [...prev];
+            next[existingIdx] = {
+              ...next[existingIdx],
+              ...newTab,
+              lines: next[existingIdx].lines,
+            };
+            return next;
+          }
+        }
+        return [...prev, newTab];
+      });
+      if (opts?.focusTab !== false) {
+        setActiveTerminalTabId(newTab.id);
+      }
+      if (opts?.persist !== false) {
+        saveTabToDb(newTab);
+      }
+      const autoOpen =
+        !isDrawerOpenRef.current &&
+        shouldAutoOpenOnJobStart({
+          tier: newTab.autoOpenTier ?? 'B',
+          source: newTab.source ?? 'ui',
+          mode: autoOpenModeRef.current,
+          jobId: newTab.id,
+          batchGroupId: newTab.batchGroupId,
+          dismissedIds: dismissedJobIdsRef.current,
+        });
+      if (autoOpen) {
+        setActiveTerminalTabId(newTab.id);
+        setUnreadFailureTabId(null);
+        setIsDrawerOpen(true);
+      }
+    },
+    [saveTabToDb]
+  );
+
+  const navigateTo = useCallback(
+    (view: NavItem, ctx?: NavigateContext) => {
+      const labels: Record<NavItem, string> = {
+        hud: 'Command HUD',
+        agent: 'AI Agent SRE',
+        releases: 'Releases & Drift',
+        telemetry: 'Build Telemetry',
+        smoke: 'Smoke Tests',
+        security: 'Threat & Zero Trust',
+        hardening: 'WSH Hardening',
+        edge: 'PKI & Certificates',
+        'opt-ins': 'SMS Opt-Ins (10DLC)',
+        topology: 'Topology & Ingress',
+        'unifi-zbf': 'UniFi Network & ZBF',
+        dietpi: 'DietPi Host & Crons',
+        backups: 'Backups & DR',
+        'local-dev': 'Local Dev',
+        settings: 'Settings & Logs',
+      };
+      if (ctx?.returnFromCurrent) {
+        setReturnTo({ view: activeTab, label: labels[activeTab] });
+      } else if (!ctx?.preserveReturn) {
+        setReturnTo(null);
+      }
+      if (ctx?.appSlug !== undefined && view === 'releases') {
+        setSelectedReleaseAppSlug(ctx.appSlug);
+      }
+      if (ctx?.tab !== undefined && view === 'dietpi' && (ctx.tab === 'host' || ctx.tab === 'crons')) {
+        setDietpiSubTab(ctx.tab);
+      }
+      if (ctx?.tab !== undefined && view === 'settings') {
+        setSettingsNav((prev) => ({
+          tab: ctx.tab as SettingsTab,
+          nonce: prev.nonce + 1,
+        }));
+      } else if (view === 'settings' && activeTab !== 'settings') {
+        setSettingsNav((prev) => ({ tab: 'general', nonce: prev.nonce + 1 }));
+      }
+      setActiveTab(view);
+    },
+    [activeTab]
+  );
+
+  // Persist dock & sidebar user preferences
+  useEffect(() => {
+    try {
+      localStorage.setItem('panoramasre_sidebar_collapsed', String(sidebarCollapsed));
+    } catch {
+      // ignore storage errors
+    }
+  }, [sidebarCollapsed]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('panoramasre_console_dock_side', dockSide);
+    } catch {
+      // ignore storage errors
+    }
+  }, [dockSide]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('panoramasre_console_dock_height', String(dockHeight));
+    } catch {
+      // ignore storage errors
+    }
+  }, [dockHeight]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('panoramasre_console_dock_width', String(dockWidth));
+    } catch {
+      // ignore storage errors
+    }
+  }, [dockWidth]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('panoramasre_console_auto_open', autoOpenMode);
+    } catch {
+      // ignore storage errors
+    }
+  }, [autoOpenMode]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('panoramasre_console_scope_mode', scopeMode);
+    } catch {
+      // ignore storage errors
+    }
+  }, [scopeMode]);
+
+  // Track viewport width for responsive Right-dock & sidebar auto-collapse rules
+  useEffect(() => {
+    const onResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  const responsiveDockLayout = useMemo(
+    () =>
+      resolveResponsiveDockLayout({
+        viewportWidth,
+        dockOpen: isDrawerOpen,
+        dockSide,
+        sidebarCollapsed,
+        sidebarAutoCollapsed,
+      }),
+    [viewportWidth, isDrawerOpen, dockSide, sidebarCollapsed, sidebarAutoCollapsed]
+  );
+
+  useEffect(() => {
+    if (responsiveDockLayout.nextSidebarCollapsed !== sidebarCollapsed) {
+      setSidebarCollapsed(responsiveDockLayout.nextSidebarCollapsed);
+    }
+    if (responsiveDockLayout.nextSidebarAutoCollapsed !== sidebarAutoCollapsed) {
+      setSidebarAutoCollapsed(responsiveDockLayout.nextSidebarAutoCollapsed);
+    }
+  }, [responsiveDockLayout, sidebarCollapsed, sidebarAutoCollapsed]);
+
+  // Global keyboard shortcuts: Ctrl+K (Command Palette) & Ctrl+` (Toggle Output Console)
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setIsPaletteOpen((prev) => !prev);
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === '`' || e.code === 'Backquote')) {
+        e.preventDefault();
+        if (isDrawerOpenRef.current) {
+          handleCloseDrawer();
+        } else {
+          setUnreadFailureTabId(null);
+          setIsDrawerOpen(true);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [handleCloseDrawer]);
 
   // Keep refs to current apps, snapshot, and smoke history loader for async callbacks
   const appsRef = useRef<DiscoveredApp[]>([]);
@@ -636,9 +960,9 @@ export const App: React.FC = () => {
         pageScope: traceScope,
         source: 'ui',
         abortable: false,
+        autoOpenTier: 'B',
       };
-      setTerminalTabs((prev) => [...prev, initialTab]);
-      saveTabToDb(initialTab);
+      registerStreamTab(initialTab, { focusTab: false });
     }
 
     const pushSyncTrace = (line: string) => {
@@ -886,13 +1210,14 @@ export const App: React.FC = () => {
             return updated;
           })
         );
+        evaluateJobFinishAutoOpen(syncJobId, 1);
       }
     } finally {
       if (isUserInitiated) {
         setIsManualSyncing(false);
       }
     }
-  }, [computeBackupIncidentKey, refreshAppliances, refreshBackupLedger, refreshSslStatus, refreshTunnelVersion, refreshOptIns, saveTabToDb]);
+  }, [computeBackupIncidentKey, evaluateJobFinishAutoOpen, refreshAppliances, refreshBackupLedger, refreshSslStatus, refreshTunnelVersion, refreshOptIns, registerStreamTab, saveTabToDb]);
 
   // Initial sync on mount (all tiers once on startup + cached opt-ins hydration)
   const refreshThreatIntelState = useCallback(async (preferredRunId?: string) => {
@@ -1138,17 +1463,9 @@ export const App: React.FC = () => {
         source: mappedSource,
         appSlug: appId,
         abortable: false,
+        autoOpenTier: 'C',
       };
-      setTerminalTabs((prev) => {
-        const existingIdx = prev.findIndex((t) => t.id === id);
-        if (existingIdx !== -1) {
-          const next = [...prev];
-          next[existingIdx] = { ...next[existingIdx], ...newTab, lines: next[existingIdx].lines };
-          return next;
-        }
-        return [...prev, newTab];
-      });
-      setActiveTerminalTabId(id);
+      registerStreamTab(newTab, { upsert: true, persist: false });
     }).then((unsub) => {
       unlistenStart = unsub;
     });
@@ -1171,6 +1488,7 @@ export const App: React.FC = () => {
               source: 'supervisor',
               appSlug: appId,
               abortable: false,
+              autoOpenTier: 'C',
             },
           ];
         }
@@ -1195,6 +1513,7 @@ export const App: React.FC = () => {
           return t;
         })
       );
+      evaluateJobFinishAutoOpen(id, code);
       refreshDevServers();
     }).then((unsub) => {
       unlistenEnd = unsub;
@@ -1353,10 +1672,9 @@ export const App: React.FC = () => {
       source: 'ui',
       appSlug: app.manifest.slug,
       abortable: true,
+      autoOpenTier: 'B',
     };
-    setTerminalTabs((prev) => [...prev, newTab]);
-    setActiveTerminalTabId(jobId);
-    saveTabToDb(newTab);
+    registerStreamTab(newTab);
 
     runStreamJob({
       jobId,
@@ -1413,10 +1731,9 @@ export const App: React.FC = () => {
       source: 'ui',
       appSlug: app.manifest.slug,
       abortable: true,
+      autoOpenTier: 'A',
     };
-    setTerminalTabs((prev) => [...prev, newTab]);
-    setActiveTerminalTabId(jobId);
-    saveTabToDb(newTab);
+    registerStreamTab(newTab);
 
     if (isRunning) {
       try {
@@ -1491,10 +1808,9 @@ export const App: React.FC = () => {
       source: 'ui',
       appSlug: app.manifest.slug,
       abortable: true,
+      autoOpenTier: 'A',
     };
-    setTerminalTabs((prev) => [...prev, newTab]);
-    setActiveTerminalTabId(jobId);
-    saveTabToDb(newTab);
+    registerStreamTab(newTab);
 
     runStreamJob({
       jobId,
@@ -1561,10 +1877,9 @@ export const App: React.FC = () => {
       pageScope: 'edge',
       source: 'ui',
       abortable: true,
+      autoOpenTier: 'A',
     };
-    setTerminalTabs((prev) => [...prev, newTab]);
-    setActiveTerminalTabId(jobId);
-    saveTabToDb(newTab);
+    registerStreamTab(newTab);
 
     runStreamJob({
       jobId,
@@ -1606,10 +1921,9 @@ export const App: React.FC = () => {
       pageScope: 'topology',
       source: 'ui',
       abortable: true,
+      autoOpenTier: action === 'update' || action === 'update_force' ? 'A' : 'B',
     };
-    setTerminalTabs((prev) => [...prev, newTab]);
-    setActiveTerminalTabId(jobId);
-    saveTabToDb(newTab);
+    registerStreamTab(newTab);
 
     runStreamJob({
       jobId,
@@ -1688,7 +2002,8 @@ export const App: React.FC = () => {
     bump: string,
     allowDirty: boolean,
     skipSmoke = false,
-    edgeMode: 'GitCi' | 'Wrangler' = 'GitCi'
+    edgeMode: 'GitCi' | 'Wrangler' = 'GitCi',
+    batchGroupId?: string
   ): Promise<number> => {
     const jobId = `deploy-${app.manifest.slug}-${Date.now()}`;
     currentRunningDeployJobIdRef.current = jobId;
@@ -1717,10 +2032,10 @@ export const App: React.FC = () => {
       source: 'ui',
       appSlug: app.manifest.slug,
       abortable: true,
+      autoOpenTier: 'A',
+      batchGroupId,
     };
-    setTerminalTabs((prev) => [...prev, newTab]);
-    setActiveTerminalTabId(jobId);
-    saveTabToDb(newTab);
+    registerStreamTab(newTab);
 
     let command = 'pwsh.exe';
     let args: string[];
@@ -1823,10 +2138,9 @@ export const App: React.FC = () => {
       source: 'ui',
       appSlug: app.manifest.slug,
       abortable: true,
+      autoOpenTier: 'A',
     };
-    setTerminalTabs((prev) => [...prev, newTab]);
-    setActiveTerminalTabId(jobId);
-    saveTabToDb(newTab);
+    registerStreamTab(newTab);
 
     const cfExec = isEdgeApp
       ? buildCloudflarePagesDeployCommand(app.workspacePath, {
@@ -1951,6 +2265,7 @@ export const App: React.FC = () => {
 
       const skipSmoke = sortedApps.length > 1;
       const deployedApps: DiscoveredApp[] = [];
+      const batchGroupId = `deploy-batch-${Date.now()}`;
 
       for (let i = 0; i < sortedApps.length; i++) {
         // Check if user clicked Halt
@@ -1966,7 +2281,7 @@ export const App: React.FC = () => {
         const app = sortedApps[i];
         let exitCode: number = -1;
         try {
-          exitCode = await executeAppDeploy(app, bump, allowDirty, skipSmoke);
+          exitCode = await executeAppDeploy(app, bump, allowDirty, skipSmoke, 'GitCi', batchGroupId);
         } catch {
           exitCode = -1;
         }
@@ -2180,8 +2495,9 @@ export const App: React.FC = () => {
           return t;
         })
       );
+      evaluateJobFinishAutoOpen(jobId, exitCode);
     },
-    [saveTabToDb]
+    [evaluateJobFinishAutoOpen, saveTabToDb]
   );
 
   const failTerminalJob = useCallback(
@@ -2202,8 +2518,9 @@ export const App: React.FC = () => {
           return t;
         })
       );
+      evaluateJobFinishAutoOpen(jobId, -1);
     },
-    [saveTabToDb]
+    [evaluateJobFinishAutoOpen, saveTabToDb]
   );
 
   // Orchestrated DietPi Host Reboot with Active Polling & Recovery Telemetry
@@ -2224,10 +2541,9 @@ export const App: React.FC = () => {
       pageScope: 'dietpi',
       source: 'ui',
       abortable: true,
+      autoOpenTier: 'A',
     };
-    setTerminalTabs((prev) => [...prev, newTab]);
-    setActiveTerminalTabId(jobId);
-    saveTabToDb(newTab);
+    registerStreamTab(newTab);
     showActionFeedback('Initiating DietPi WSH reboot...', 'pending');
 
     // Send reboot in background with nohup and immediate exit so SSH closes cleanly with exit code 0
@@ -2361,10 +2677,9 @@ export const App: React.FC = () => {
       pageScope: originScope,
       source: 'ui',
       abortable: true,
+      autoOpenTier: 'B',
     };
-    setTerminalTabs((prev) => [...prev, newTab]);
-    setActiveTerminalTabId(jobId);
-    saveTabToDb(newTab);
+    registerStreamTab(newTab);
 
     runStreamJob({
       jobId,
@@ -2413,10 +2728,9 @@ export const App: React.FC = () => {
       pageScope: originScope,
       source: 'ui',
       abortable: true,
+      autoOpenTier: 'A',
     };
-    setTerminalTabs((prev) => [...prev, newTab]);
-    setActiveTerminalTabId(jobId);
-    saveTabToDb(newTab);
+    registerStreamTab(newTab);
 
     runStreamJob({
       jobId,
@@ -2460,10 +2774,9 @@ export const App: React.FC = () => {
       pageScope: originScope,
       source: 'ui',
       abortable: true,
+      autoOpenTier: 'A',
     };
-    setTerminalTabs((prev) => [...prev, newTab]);
-    setActiveTerminalTabId(jobId);
-    saveTabToDb(newTab);
+    registerStreamTab(newTab);
 
     runStreamJob({
       jobId,
@@ -2652,12 +2965,11 @@ export const App: React.FC = () => {
         pageScope: 'security',
         source: 'ui',
         abortable: false,
+        autoOpenTier: 'B',
       };
       activeThreatAuditTabIdRef.current = tabId;
       threatAuditLazyTabCreatedRef.current = false;
-      setTerminalTabs((prev) => [...prev, newTab]);
-      setActiveTerminalTabId(tabId);
-      saveTabToDb(newTab);
+      registerStreamTab(newTab);
       setIsRunningThreatAudit(true);
       setThreatAuditProgress({
         runId: tabId,
@@ -2732,12 +3044,11 @@ export const App: React.FC = () => {
         pageScope: 'security',
         source: 'ui',
         abortable: false,
+        autoOpenTier: 'B',
       };
       activeThreatAuditTabIdRef.current = tabId;
       threatAuditLazyTabCreatedRef.current = false;
-      setTerminalTabs((prev) => [...prev, newTab]);
-      setActiveTerminalTabId(tabId);
-      saveTabToDb(newTab);
+      registerStreamTab(newTab);
       setIsRunningThreatAudit(true);
       setThreatAuditProgress({
         runId: tabId,
@@ -2825,11 +3136,9 @@ export const App: React.FC = () => {
           pageScope: 'security',
           source: 'scheduled',
           abortable: false,
+          autoOpenTier: 'C',
         };
-        setTerminalTabs((prev) =>
-          prev.some((t) => t.id === targetTabId) ? prev : [...prev, bgTab]
-        );
-        saveTabToDb(bgTab);
+        registerStreamTab(bgTab, { focusTab: false, upsert: true });
       } else {
         appendTerminalLine(targetTabId, line);
       }
@@ -2892,10 +3201,9 @@ export const App: React.FC = () => {
         source: 'ui',
         appSlug: app.manifest.slug,
         abortable: true,
+        autoOpenTier: action === 'verify_local' || action === 'status' ? 'B' : 'A',
       };
-      setTerminalTabs((prev) => [...prev, newTab]);
-      setActiveTerminalTabId(jobId);
-      saveTabToDb(newTab);
+      registerStreamTab(newTab);
 
       try {
         await runStreamJob({
@@ -3032,10 +3340,9 @@ export const App: React.FC = () => {
         pageScope: 'smoke',
         source: triggeredBy.startsWith('sre-scheduled') ? 'scheduled' : 'ui',
         abortable: true,
+        autoOpenTier: triggeredBy.startsWith('sre-scheduled') ? 'C' : 'B',
       };
-      setTerminalTabs((prev) => [...prev, newTab]);
-      setActiveTerminalTabId(jobId);
-      saveTabToDb(newTab);
+      registerStreamTab(newTab);
 
       const scriptArgs = [
         '-NoProfile',
@@ -3099,11 +3406,9 @@ export const App: React.FC = () => {
       pageScope: 'telemetry',
       source: 'ui',
       abortable: true,
+      autoOpenTier: 'A',
     };
-    setTerminalTabs((prev) => [...prev, newTab]);
-    setActiveTerminalTabId(jobId);
-    setIsDrawerOpen(true);
-    saveTabToDb(newTab);
+    registerStreamTab(newTab);
 
     void runStreamJob({
       jobId,
@@ -3157,10 +3462,9 @@ export const App: React.FC = () => {
       pageScope: 'smoke',
       source: 'ui',
       abortable: true,
+      autoOpenTier: 'B',
     };
-    setTerminalTabs((prev) => [...prev, newTab]);
-    setActiveTerminalTabId(jobId);
-    saveTabToDb(newTab);
+    registerStreamTab(newTab);
 
     runStreamJob({
       jobId,
@@ -3214,10 +3518,9 @@ export const App: React.FC = () => {
         pageScope: 'smoke',
         source: isScheduled ? 'scheduled' : 'mcp',
         abortable: false,
+        autoOpenTier: 'C',
       };
-      setTerminalTabs((prev) => [...prev, newTab]);
-      setActiveTerminalTabId(jobId);
-      saveTabToDb(newTab);
+      registerStreamTab(newTab);
       showActionFeedback(`${actorLabel} started Production Smoke Suite (${triggeredBy})`, 'pending');
     }).then((unsub) => {
       unlistenStart = unsub;
@@ -3286,9 +3589,9 @@ export const App: React.FC = () => {
         pageScope,
         source: 'ui',
         abortable: false,
+        autoOpenTier: 'B',
       };
-      setTerminalTabs((prev) => [...prev, newTab]);
-      saveTabToDb(newTab);
+      registerStreamTab(newTab, { focusTab: false });
 
       try {
         await task((line) => appendTerminalLine(jobId, line));
@@ -3368,10 +3671,9 @@ export const App: React.FC = () => {
         source: 'ui',
         appSlug: req.app?.manifest.slug,
         abortable: true,
+        autoOpenTier: req.type === 'dry-run' ? 'B' : 'A',
       };
-      setTerminalTabs((prev) => [...prev, newTab]);
-      setActiveTerminalTabId(jobId);
-      saveTabToDb(newTab);
+      registerStreamTab(newTab);
       setIsCronActionBusy(true);
 
       runStreamJob({
@@ -3469,12 +3771,301 @@ export const App: React.FC = () => {
         pageScope: 'settings',
         source: 'ui',
         abortable: false,
+        autoOpenTier: 'B',
       };
-      setTerminalTabs((prev) => [...prev, tab]);
-      saveTabToDb(tab);
+      registerStreamTab(tab, { focusTab: false });
     },
-    [saveTabToDb]
+    [registerStreamTab]
   );
+
+  const handleRunAuditCommand = useCallback(
+    (
+      actionLabel: string,
+      cmd: string,
+      args: string[],
+      originScope: NavSectionId = 'topology'
+    ) => {
+      const jobId = `audit-${Date.now()}`;
+      const newTab: TerminalTab = {
+        id: jobId,
+        title: actionLabel,
+        lines: [`[PanoramaSRE] Executing ${actionLabel}...`],
+        isRunning: true,
+        createdAt: new Date().toISOString(),
+        pageScope: originScope,
+        source: 'ui',
+        abortable: true,
+        autoOpenTier: 'A',
+      };
+      registerStreamTab(newTab);
+
+      runStreamJob({
+        jobId,
+        label: actionLabel,
+        command: cmd,
+        args,
+        workingDir: 'C:\\Users\\rodrigo',
+        lockType: 'None',
+        onLine: (line) => {
+          appendTerminalLine(jobId, line);
+        },
+        onComplete: (exitCode) => {
+          finalizeTerminalJob(jobId, exitCode);
+        },
+        onError: (err) => {
+          failTerminalJob(jobId, `Action failed: ${err}`);
+        },
+      });
+    },
+    [appendTerminalLine, failTerminalJob, finalizeTerminalJob, registerStreamTab]
+  );
+
+  const sslMinDays = sslFleet ? sslFleet.min_days_remaining : null;
+  const sslAlertCount =
+    hasCompletedInitialSync && sslFleet
+      ? sslFleet.critical_count + sslFleet.expiring_soon_count + sslFleet.drift_count
+      : 0;
+  const sslAlertSeverity: 'error' | 'warning' | null =
+    sslFleet && sslFleet.critical_count > 0 ? 'error' : sslAlertCount > 0 ? 'warning' : null;
+  const hardeningTotalCount = topology.securityAudit.invariants.length;
+  const hardeningPassingCount = Math.max(0, hardeningTotalCount - securityViolationCount);
+
+  const navLabelMap: Record<NavItem, string> = {
+    hud: 'Command HUD',
+    agent: 'AI Agent SRE',
+    releases: 'Releases & Drift',
+    telemetry: 'Build Telemetry',
+    smoke: 'Smoke Tests',
+    security: 'Threat & Zero Trust',
+    hardening: 'WSH Hardening',
+    edge: 'PKI & Certificates',
+    'opt-ins': 'SMS Opt-Ins (10DLC)',
+    topology: 'Topology & Ingress',
+    'unifi-zbf': 'UniFi Network & ZBF',
+    dietpi: 'DietPi Host & Crons',
+    backups: 'Backups & DR',
+    'local-dev': 'Local Dev',
+    settings: 'Settings & Logs',
+  };
+
+  const unifiedAlerts: UnifiedAlertItem[] = [];
+  if (hasCompletedInitialSync) {
+    if (unhealthyCount > 0) {
+      unifiedAlerts.push({
+        id: 'alert-unhealthy-apps',
+        domain: 'Apps',
+        severity: 'critical',
+        title: `${unhealthyCount} Production App${unhealthyCount === 1 ? '' : 's'} Unhealthy`,
+        detail: apps
+          .filter((a) => isAppUnhealthy(a, healthEvalOpts))
+          .map((a) => a.manifest.displayName)
+          .join(', '),
+        actionLabel: 'Inspect Releases',
+        onAction: () => {
+          const firstBad = apps.find((a) => isAppUnhealthy(a, healthEvalOpts));
+          navigateTo('releases', {
+            appSlug: firstBad?.manifest.slug,
+            returnFromCurrent: true,
+          });
+        },
+      });
+    }
+    if (securityViolationCount > 0) {
+      unifiedAlerts.push({
+        id: 'alert-wsh-hardening',
+        domain: 'Hardening',
+        severity: 'critical',
+        title: `${securityViolationCount} WSH Security Invariant Violation${securityViolationCount === 1 ? '' : 's'}`,
+        detail: failingInvariants.map((i) => `${i.id}: ${i.title}`).join(' · '),
+        actionLabel: 'Open Hardening',
+        onAction: () =>
+          navigateTo('hardening', {
+            returnFromCurrent: true,
+          }),
+      });
+    }
+    if (sslAlertCount > 0 && sslFleet) {
+      unifiedAlerts.push({
+        id: 'alert-ssl-fleet',
+        domain: 'PKI & TLS',
+        severity: sslFleet.critical_count > 0 ? 'critical' : 'warning',
+        title: `${sslAlertCount} Certificate Alert${sslAlertCount === 1 ? '' : 's'} (min ${sslFleet.min_days_remaining}d)`,
+        detail: `${sslFleet.critical_count} critical (<7d), ${sslFleet.expiring_soon_count} expiring (<30d), ${sslFleet.drift_count} SHA256 drift.`,
+        actionLabel: 'Open PKI Matrix',
+        onAction: () =>
+          navigateTo('edge', {
+            returnFromCurrent: true,
+          }),
+      });
+    }
+    if (backupFailureCount > 0) {
+      unifiedAlerts.push({
+        id: 'alert-backups',
+        domain: 'Backups & DR',
+        severity: 'critical',
+        title: `${backupFailureCount} GFS Backup Failure${backupFailureCount === 1 ? '' : 's'}`,
+        detail: 'Latest nightly GFS database snapshot reported failed application DBs.',
+        actionLabel: 'Open Backups',
+        onAction: () =>
+          navigateTo('backups', {
+            returnFromCurrent: true,
+          }),
+      });
+    }
+    if (smokeFailureCount > 0) {
+      unifiedAlerts.push({
+        id: 'alert-smoke',
+        domain: 'Smoke Tests',
+        severity: 'critical',
+        title: `${smokeFailureCount} Failed Smoke Assertion${smokeFailureCount === 1 ? '' : 's'}`,
+        detail: 'Latest 41-step production smoke run reported assertions failing.',
+        actionLabel: 'Inspect Smoke Run',
+        onAction: () =>
+          navigateTo('smoke', {
+            returnFromCurrent: true,
+          }),
+      });
+    }
+    if (threatBadge.count > 0 && threatBadge.severity) {
+      unifiedAlerts.push({
+        id: 'alert-threat-intel',
+        domain: 'Threat & ZT',
+        severity: threatBadge.severity === 'error' ? 'critical' : 'warning',
+        title: `${threatBadge.count} Actionable Security Finding${threatBadge.count === 1 ? '' : 's'}`,
+        detail: 'Unmitigated Cloudflare / UniFi SIEM findings or rogue LAN clients require triage.',
+        actionLabel: 'Open Threat SOC',
+        onAction: () =>
+          navigateTo('security', {
+            returnFromCurrent: true,
+          }),
+      });
+    }
+    if (dietpiBadges.totalCount > 0 && dietpiBadges.severity) {
+      unifiedAlerts.push({
+        id: 'alert-dietpi-host',
+        domain: 'DietPi & Crons',
+        severity: dietpiBadges.severity === 'error' ? 'critical' : 'warning',
+        title: `${dietpiBadges.totalCount} DietPi Host / Cron Alert${dietpiBadges.totalCount === 1 ? '' : 's'}`,
+        detail: 'Reboot required, APT upgrades pending, or host cron drift detected.',
+        actionLabel: 'Open DietPi Host',
+        onAction: () =>
+          navigateTo('dietpi', {
+            returnFromCurrent: true,
+          }),
+      });
+    }
+  }
+
+  const totalAttentionCount = unifiedAlerts.length;
+  const totalAttentionSeverity: 'error' | 'warning' | null = unifiedAlerts.some(
+    (a) => a.severity === 'critical'
+  )
+    ? 'error'
+    : unifiedAlerts.length > 0
+    ? 'warning'
+    : null;
+
+  const commandPaletteEntries: CommandPaletteEntry[] = [
+    ...(
+      [
+        ['hud', 'Command HUD', 'Executive fleet overview health telemetry'],
+        ['releases', 'Releases & Drift', 'Deploy rollback buildx edge cloudflare'],
+        ['telemetry', 'Build Telemetry', 'Docker BuildKit cache budget metrics'],
+        ['smoke', 'Smoke Tests', 'Production verification assertions suite'],
+        ['security', 'Threat & Zero Trust', '360 audit WAF actors SIEM Gemini'],
+        ['hardening', 'WSH Hardening', 'Docker iptables firewall CGNAT SEC invariants'],
+        ['edge', 'PKI & Certificates', 'SSL TLS Let\'s Encrypt ACME dual-probe'],
+        ['opt-ins', 'SMS Opt-Ins (10DLC)', 'Parakith Twilio A2P compliance'],
+        ['topology', 'Topology & Ingress', 'Cloudflare tunnel Lighttpd ports'],
+        ['unifi-zbf', 'UniFi Network & ZBF', 'VLAN firewall rules LAN device baseline'],
+        ['dietpi', 'DietPi Host & Crons', 'Raspberry Pi kernel APT reboot crontab'],
+        ['backups', 'Backups & DR', 'SQLite GFS restore hydration snapshots'],
+        ['local-dev', 'Local Dev', 'Dev servers supervisor Next.js MCP ports'],
+        ['settings', 'Settings & Logs', 'Governance polling SIEM notifications SQLite'],
+      ] as Array<[NavItem, string, string]>
+    ).map(([id, label, keywords]) => ({
+      id: `view-${id}`,
+      kind: 'View',
+      label,
+      hint: navLabelMap[id],
+      keywords,
+      category: 'view' as const,
+      onExecute: () => navigateTo(id),
+    })),
+    ...apps.map((app) => ({
+      id: `app-${app.manifest.slug}`,
+      kind: 'App Release',
+      label: `${app.manifest.displayName} (/${app.manifest.slug})`,
+      hint: `:${app.manifest.port}`,
+      keywords: `${app.manifest.slug} ${app.manifest.appId} ${app.manifest.hostingTarget ?? 'wsh-docker'}`,
+      category: 'app' as const,
+      onExecute: () =>
+        navigateTo('releases', {
+          appSlug: app.manifest.slug,
+          returnFromCurrent: true,
+        }),
+    })),
+    ...failingInvariants.map((inv) => ({
+      id: `inv-${inv.id}`,
+      kind: 'Violation',
+      label: `${inv.id}: ${inv.title}`,
+      hint: 'WSH Hardening',
+      keywords: `invariant violation security ${inv.id} ${inv.title}`,
+      category: 'invariant' as const,
+      onExecute: () =>
+        navigateTo('hardening', {
+          returnFromCurrent: true,
+        }),
+    })),
+    {
+      id: 'act-sync-now',
+      kind: 'Action',
+      label: 'Sync Full Suite Telemetry Now',
+      keywords: 'refresh sync telemetry',
+      category: 'action',
+      onExecute: () => void syncFullTelemetry(true, true, activeTab, true),
+    },
+    {
+      id: 'act-run-smoke',
+      kind: 'Action',
+      label: 'Run 41-Step Production Smoke Suite',
+      keywords: 'smoke test verify production',
+      category: 'action',
+      onExecute: () => void handleRunSmokeTests('sre-manual', false),
+    },
+    {
+      id: 'act-run-threat-audit',
+      kind: 'Action',
+      label: 'Run 360° Threat & Zero Trust Audit',
+      keywords: 'threat security audit gemini',
+      category: 'action',
+      onExecute: () => void handleRunThreatAuditNow(24, false),
+    },
+    {
+      id: 'act-toggle-console',
+      kind: 'Console',
+      label: isDrawerOpen ? 'Collapse Output Console Dock' : 'Open Output Console Dock',
+      hint: 'Ctrl+`',
+      keywords: 'console output terminal stream drawer',
+      category: 'console',
+      onExecute: () => {
+        if (isDrawerOpen) handleCloseDrawer();
+        else handleOpenInBottomConsole();
+      },
+    },
+    {
+      id: 'act-open-logs',
+      kind: 'Logs',
+      label: 'Open Full System Logs (Settings > Logs)',
+      keywords: 'logs history audit sqlite',
+      category: 'console',
+      onExecute: () =>
+        navigateTo('settings', {
+          tab: 'logs',
+          returnFromCurrent: true,
+        }),
+    },
+  ];
 
   return (
     <div className="flex flex-col h-screen w-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 overflow-hidden font-sans">
@@ -3482,12 +4073,7 @@ export const App: React.FC = () => {
       <div className="flex flex-1 min-h-0 w-full overflow-hidden relative">
         <SidebarRail
           activeTab={activeTab}
-          onSelectTab={(tab) => {
-            if (tab === 'settings' && activeTab !== 'settings') {
-              setSettingsNav((prev) => ({ tab: 'general', nonce: prev.nonce + 1 }));
-            }
-            setActiveTab(tab);
-          }}
+          onSelectTab={(tab) => navigateTo(tab)}
           unhealthyCount={unhealthyCount}
           backupFailureCount={backupFailureCount}
           behindReleasesCount={behindReleasesCount}
@@ -3496,16 +4082,31 @@ export const App: React.FC = () => {
           dietpiAlertCount={dietpiBadges.totalCount}
           dietpiAlertSeverity={dietpiBadges.severity}
           securityViolationCount={securityViolationCount}
+          hardeningPassingCount={hardeningPassingCount}
+          hardeningTotalCount={hardeningTotalCount}
           topologyAlertCount={topologyBadges.totalCount}
           topologyAlertSeverity={topologyBadges.severity}
           smokeFailureCount={smokeFailureCount}
           unreadOptInsCount={optInSnapshot?.unreadCount ?? 0}
           threatAlertCount={threatBadge.count}
           threatAlertSeverity={threatBadge.severity}
+          sslAlertCount={sslAlertCount}
+          sslAlertSeverity={sslAlertSeverity}
+          sslMinDays={sslMinDays}
+          devRunningCount={devRunningCount}
+          totalAppCount={apps.length}
+          totalAttentionCount={totalAttentionCount}
+          totalAttentionSeverity={totalAttentionSeverity}
+          isCollapsed={sidebarCollapsed}
+          onToggleCollapse={() => {
+            setSidebarAutoCollapsed(false);
+            setSidebarCollapsed((c) => !c);
+          }}
+          showAgentNav={false}
           isInitialSyncComplete={hasCompletedInitialSync}
         />
 
-        <main className="flex-1 flex flex-col h-full overflow-hidden relative">
+        <main className="flex-1 flex flex-col min-w-0 h-full overflow-hidden relative">
           <TopLiveSyncBar
             networkPosture={networkPosture}
             devRunningCount={devRunningCount}
@@ -3521,14 +4122,33 @@ export const App: React.FC = () => {
             hasResolvedPosture={hasResolvedPosture}
             onRefresh={() => syncFullTelemetry(true, true, activeTab, true)}
             backupFailureCount={backupFailureCount}
-            onNavigateToBackups={() => setActiveTab('backups')}
+            onNavigateToBackups={() => navigateTo('backups')}
             securityViolationCount={securityViolationCount}
-            onNavigateToTopology={() => setActiveTab('topology')}
+            onNavigateToTopology={() => navigateTo('topology')}
             mcpStatus={mcpStatus}
-            onNavigateToDev={() => setActiveTab('local-dev')}
+            onNavigateToDev={() => navigateTo('local-dev')}
+            totalAttentionCount={totalAttentionCount}
+            totalAttentionSeverity={totalAttentionSeverity}
+            onOpenCommandPalette={() => setIsPaletteOpen(true)}
+            onOpenAlertsDrawer={() => setIsAlertsDrawerOpen(true)}
           />
 
-          <div className="flex-1 min-h-0 overflow-y-auto">
+          <div
+            className={`flex-1 min-h-0 flex ${
+              responsiveDockLayout.effectiveDockSide === 'right' ? 'flex-row' : 'flex-col'
+            } overflow-hidden`}
+          >
+          <div className="flex-1 min-w-0 min-h-0 overflow-y-auto">
+          {returnTo && (
+            <ReturnBreadcrumbPill
+              returnTo={returnTo}
+              onNavigateBack={() => {
+                const target = returnTo.view;
+                setReturnTo(null);
+                navigateTo(target);
+              }}
+            />
+          )}
           {activeTab === 'hud' && (
             <CommandCenterView
               apps={apps}
@@ -3597,41 +4217,58 @@ export const App: React.FC = () => {
               onOpenInBottomConsole={handleOpenInBottomConsole}
               onAbortJob={handleAbortJob}
               onClearTab={handleClearTab}
-              onRunAuditCommand={(actionLabel, cmd, args) => {
-                const jobId = `audit-${Date.now()}`;
-                const newTab: TerminalTab = {
-                  id: jobId,
-                  title: actionLabel,
-                  lines: [`[PanoramaSRE] Executing ${actionLabel}...`],
-                  isRunning: true,
-                  createdAt: new Date().toISOString(),
-                  pageScope: 'topology',
-                  source: 'ui',
-                  abortable: true,
-                };
-                setTerminalTabs((prev) => [...prev, newTab]);
-                setActiveTerminalTabId(jobId);
-                saveTabToDb(newTab);
-
-                runStreamJob({
-                  jobId,
-                  label: actionLabel,
-                  command: cmd,
-                  args,
-                  workingDir: 'C:\\Users\\rodrigo',
-                  lockType: 'None',
-                  onLine: (line) => {
-                    appendTerminalLine(jobId, line);
-                  },
-                  onComplete: (exitCode) => {
-                    finalizeTerminalJob(jobId, exitCode);
-                  },
-                  onError: (err) => {
-                    failTerminalJob(jobId, `Action failed: ${err}`);
-                  },
-                });
-              }}
+              onRunAuditCommand={(actionLabel, cmd, args) =>
+                handleRunAuditCommand(actionLabel, cmd, args, 'topology')
+              }
               onTriggerTunnelAction={handleTriggerTunnelAction}
+            />
+          )}
+
+          {activeTab === 'hardening' && (
+            <WshHardeningView
+              snapshot={wshSnapshot}
+              apps={apps}
+              onRunAuditCommand={(actionLabel, cmd, args) =>
+                handleRunAuditCommand(actionLabel, cmd, args, 'hardening')
+              }
+              onRunPenetrationAudit={() => handleRunPenetrationAudit('hardening')}
+              onReapplyHardening={() => handleReapplyHardening('hardening')}
+              onNavigateToTopology={() =>
+                navigateTo('topology', {
+                  returnFromCurrent: true,
+                })
+              }
+              onNavigateToSecurity={() =>
+                navigateTo('security', {
+                  returnFromCurrent: true,
+                })
+              }
+              onNavigateToUnifi={() =>
+                navigateTo('unifi-zbf', {
+                  returnFromCurrent: true,
+                })
+              }
+            />
+          )}
+
+          {activeTab === 'unifi-zbf' && (
+            <UnifiNetworkZbfView
+              unifiBaseUrl={threatSettings?.preferences.unifiBaseUrl || 'https://ui.panoramadr.com'}
+              onNavigateToTopology={() =>
+                navigateTo('topology', {
+                  returnFromCurrent: true,
+                })
+              }
+              onNavigateToHardening={() =>
+                navigateTo('hardening', {
+                  returnFromCurrent: true,
+                })
+              }
+              onNavigateToSecurity={() =>
+                navigateTo('security', {
+                  returnFromCurrent: true,
+                })
+              }
             />
           )}
 
@@ -3663,10 +4300,9 @@ export const App: React.FC = () => {
                   pageScope: 'dietpi',
                   source: 'ui',
                   abortable: true,
+                  autoOpenTier: 'A',
                 };
-                setTerminalTabs((prev) => [...prev, newTab]);
-                setActiveTerminalTabId(jobId);
-                saveTabToDb(newTab);
+                registerStreamTab(newTab);
 
                 runStreamJob({
                   jobId,
@@ -3921,9 +4557,11 @@ export const App: React.FC = () => {
             activeTab !== 'releases' &&
             activeTab !== 'telemetry' &&
             activeTab !== 'topology' &&
+            activeTab !== 'unifi-zbf' &&
             activeTab !== 'dietpi' &&
             activeTab !== 'edge' &&
             activeTab !== 'security' &&
+            activeTab !== 'hardening' &&
             activeTab !== 'backups' &&
             activeTab !== 'smoke' &&
             activeTab !== 'opt-ins' &&
@@ -3932,29 +4570,86 @@ export const App: React.FC = () => {
                 Module <span className="font-mono text-emerald-400 mx-1">{activeTab}</span> will hydrate in subsequent milestones.
               </div>
             )}
-        </div>
-      </main>
-    </div>
+          </div>
 
-    {/* Global SRE Unified Console & Events Panel (Spans full application width, docked at bottom, pushing upper UI up) */}
-    <SreEventsConsolePanel
-      isOpen={isDrawerOpen}
-      onClose={() => setIsDrawerOpen(false)}
-      tabs={terminalTabs}
-      activeTabId={activeTerminalTabId}
-      onSelectTab={setActiveTerminalTabId}
-      onCloseTab={handleCloseTab}
-      onClearTab={handleClearTab}
-      onPurgeAllTabs={handlePurgeAllTabs}
-      onAbortJob={handleAbortJob}
-      actionFeedback={actionFeedback}
-      onClearFeedback={() => setActionFeedback(null)}
-      eventsHistory={eventsHistory}
-      onClearEvents={() => setEventsHistory([])}
-      runningJobsCount={terminalTabs.filter((t) => t.isRunning).length}
-      onToggleDrawer={() => setIsDrawerOpen((prev) => !prev)}
-    />
-  </div>
+          <SreEventsConsolePanel
+            isOpen={isDrawerOpen}
+            onClose={handleCloseDrawer}
+            tabs={terminalTabs}
+            activeTabId={activeTerminalTabId}
+            onSelectTab={(id) => {
+              if (id === unreadFailureTabId) {
+                setUnreadFailureTabId(null);
+              }
+              setActiveTerminalTabId(id);
+            }}
+            onCloseTab={handleCloseTab}
+            onClearTab={handleClearTab}
+            onPurgeAllTabs={handlePurgeAllTabs}
+            onAbortJob={handleAbortJob}
+            actionFeedback={actionFeedback}
+            onClearFeedback={() => setActionFeedback(null)}
+            eventsHistory={eventsHistory}
+            onClearEvents={() => setEventsHistory([])}
+            runningJobsCount={terminalTabs.filter((t) => t.isRunning).length}
+            networkPosture={networkPosture}
+            activePageScope={activeTab}
+            dockSide={responsiveDockLayout.effectiveDockSide}
+            onChangeDockSide={setDockSide}
+            canDockRight={responsiveDockLayout.canDockRight}
+            dockHeight={dockHeight}
+            onChangeDockHeight={setDockHeight}
+            dockWidth={dockWidth}
+            onChangeDockWidth={setDockWidth}
+            autoOpenMode={autoOpenMode}
+            onChangeAutoOpenMode={setAutoOpenMode}
+            scopeMode={scopeMode}
+            onChangeScopeMode={setScopeMode}
+            unreadFailureTabId={unreadFailureTabId}
+            onOpenFullSystemLogs={() =>
+              navigateTo('settings', {
+                tab: 'logs',
+                returnFromCurrent: true,
+              })
+            }
+          />
+          </div>
+        </main>
+      </div>
+
+      {/* Permanent 36px Live Activity Ticker & Drawer Control Footer */}
+      <ConsoleFooterTicker
+        isOpen={isDrawerOpen}
+        networkPosture={networkPosture}
+        tabs={terminalTabs}
+        runningJobsCount={terminalTabs.filter((t) => t.isRunning).length}
+        autoOpenMode={autoOpenMode}
+        unreadFailureTabId={unreadFailureTabId}
+        actionFeedback={actionFeedback}
+        onClearFeedback={() => setActionFeedback(null)}
+        onToggleDrawer={() => {
+          if (isDrawerOpen) {
+            handleCloseDrawer();
+          } else {
+            handleOpenInBottomConsole();
+          }
+        }}
+        onAbortJob={handleAbortJob}
+        onInspectUnreadFailure={(tabId) => handleOpenInBottomConsole(tabId)}
+      />
+
+      {/* Global Ctrl+K Command Palette & Unified Alerts Slide-Over Drawer */}
+      <CommandPaletteModal
+        isOpen={isPaletteOpen}
+        onClose={() => setIsPaletteOpen(false)}
+        entries={commandPaletteEntries}
+      />
+      <AlertsInboxDrawer
+        isOpen={isAlertsDrawerOpen}
+        onClose={() => setIsAlertsDrawerOpen(false)}
+        alerts={unifiedAlerts}
+      />
+    </div>
   );
 };
 

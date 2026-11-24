@@ -1,18 +1,40 @@
 export type NavSectionId =
   | 'hud'
+  | 'agent'
   | 'local-dev'
   | 'releases'
   | 'telemetry'
   | 'topology'
+  | 'unifi-zbf'
   | 'dietpi'
   | 'edge'
   | 'security'
+  | 'hardening'
   | 'opt-ins'
   | 'backups'
   | 'smoke'
   | 'settings';
 
 export type HostingTarget = 'wsh-docker' | 'wsh-docker-service' | 'cloudflare-pages';
+
+export type AutoOpenTier = 'A' | 'B' | 'C';
+export type ConsoleAutoOpenMode = 'smart' | 'errors' | 'manual';
+export type ConsoleDockSide = 'bottom' | 'right';
+export type ConsoleScopeMode = 'page' | 'all';
+
+export interface ReturnBreadcrumb {
+  view: NavSectionId;
+  label: string;
+  tab?: string;
+}
+
+export interface NavigateContext {
+  tab?: string;
+  appSlug?: string;
+  highlightId?: string;
+  returnFromCurrent?: boolean;
+  preserveReturn?: boolean;
+}
 
 export interface CloudflareAppConfig {
   pagesProject: string;
@@ -49,6 +71,8 @@ export interface TerminalTab {
   source?: WorkStreamSource;
   appSlug?: string;
   abortable?: boolean;
+  autoOpenTier?: AutoOpenTier;
+  batchGroupId?: string;
 }
 
 export interface CronJobDeclaration {

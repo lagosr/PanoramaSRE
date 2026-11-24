@@ -15,7 +15,6 @@ import {
 import { FleetAppCard } from './FleetAppCard';
 import { ApplianceStatusStrip } from './ApplianceStatusStrip';
 import { ReleaseCompositionDrawer } from './ReleaseCompositionDrawer';
-import { WorkStreamContainer } from '../ui/WorkStreamContainer';
 import { ShieldAlert, HardDriveDownload, RefreshCw, AlertTriangle, ShieldCheck, Network, Clock } from 'lucide-react';
 
 interface CommandCenterViewProps {
@@ -53,7 +52,6 @@ export function CommandCenterView({
   isBackupIncidentDismissed = false,
   optInSnapshot,
   cronSummary,
-  terminalTabs = [],
   isLoading,
   isInitialSyncComplete = true,
   networkPosture = 'LAN_DIRECT',
@@ -67,9 +65,6 @@ export function CommandCenterView({
   onReapplyHardening,
   onRunPenetrationAudit,
   onNavigateToTopology,
-  onOpenInBottomConsole,
-  onAbortJob,
-  onClearTab,
 }: CommandCenterViewProps) {
   const [selectedApp, setSelectedApp] = useState<DiscoveredApp | null>(null);
 
@@ -391,18 +386,6 @@ export function CommandCenterView({
           })}
         </div>
       )}
-
-      {/* Position 4: Global Command HUD Operations Stream */}
-      <WorkStreamContainer
-        pageScope="hud"
-        tabs={terminalTabs}
-        title="Command HUD Remediation & Sync Stream"
-        description="Streams incident remediation actions (hardening re-apply, penetration audit, backup retry) and manual Sync Now runs."
-        emptyHint="Trigger a remediation action or click Sync Now in the top bar to stream progress here or inspect full suite history in the Bottom Console."
-        onOpenInBottomConsole={onOpenInBottomConsole}
-        onAbortJob={onAbortJob}
-        onClearTab={onClearTab}
-      />
 
       {/* Release Composition Inspector Drawer */}
       <ReleaseCompositionDrawer

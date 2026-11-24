@@ -26,8 +26,6 @@ import {
 import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { CustomSelect } from '../ui/CustomSelect';
-import { WorkStreamContainer } from '../ui/WorkStreamContainer';
-import { filterTabsForScope } from '../../lib/stream-utils';
 import { SegmentedControl, StatusBadge, ToggleSwitch } from '@lagosr/panorama-ui-kit';
 import { formatConsoleLine, stripAnsiCodes } from '../layout/ConsoleColorizer';
 import { useSmartAutoScroll } from '../../hooks/useSmartAutoScroll';
@@ -126,7 +124,6 @@ export type SettingsTab = 'general' | 'security' | 'notifications' | 'sync' | 'l
 export const SettingsView: React.FC<SettingsViewProps> = ({
   initialTab,
   initialTabNonce,
-  terminalTabs = [],
   onWorkspaceChanged,
   pollInterval: propPollInterval,
   onPollIntervalChanged,
@@ -135,9 +132,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   lastHourlyCheckTime = null,
   onRunHourlyChecksNow,
   isCheckingHourly = false,
-  onOpenInBottomConsole,
-  onAbortJob,
-  onClearTab,
   onEmitSettingsStream,
   onThreatSettingsChanged,
   wshSnapshot = null,
@@ -719,8 +713,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setIsSaved(true);
     setTimeout(() => setIsSaved(false), 2000);
   };
-
-  const hasSettingsStreamTabs = filterTabsForScope(terminalTabs, 'settings').length > 0;
 
   const handleHeaderSave = () => {
     if (activeTab === 'security') {
@@ -1989,21 +1981,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </button>
               )}
             </div>
-          </div>
-        )}
-
-        {activeTab !== 'logs' && hasSettingsStreamTabs && (
-          <div className="w-full max-w-[1920px] mx-auto">
-            <WorkStreamContainer
-              pageScope="settings"
-              title="Settings & Governance Stream"
-              description="Workspace rescan discovery, governance preference updates, and SIEM operations."
-              tabs={terminalTabs}
-              onOpenInBottomConsole={onOpenInBottomConsole}
-              onAbortJob={onAbortJob}
-              onClearTab={onClearTab}
-              emptyHint="Run a SIEM check, apply a workspace path, or test connectors to inspect stream output."
-            />
           </div>
         )}
       </div>

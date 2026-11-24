@@ -35,7 +35,6 @@ import {
 } from 'lucide-react';
 import { CustomSelect } from '../ui/CustomSelect';
 import { CopyableAddressText, CopyableValue } from '../ui/CopyableValue';
-import { WorkStreamContainer } from '../ui/WorkStreamContainer';
 import { SnoozeSplitButton } from './SnoozeSplitButton';
 import { UnifiVlanZbfPanel } from './UnifiVlanZbfPanel';
 import { formatLocalDateTime, formatRelativeTime, parseUtcDate } from '../../lib/formatters';
@@ -200,8 +199,6 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   wshSnapshot = null,
   terminalTabs = [],
   onOpenInBottomConsole,
-  onAbortJob,
-  onClearTab,
 }) => {
   const [subView, setSubView] = useState<SubViewTab>('overview');
   const [lookbackHours, setLookbackHours] = useState<string>('6');
@@ -1029,10 +1026,10 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   };
 
   const scrollToSecurityStream = () => {
-    document.getElementById('security-work-stream')?.scrollIntoView({
-      behavior: 'smooth',
-      block: 'start',
-    });
+    const latestSecurityTab =
+      [...terminalTabs].reverse().find((t) => t.pageScope === 'security' || t.id.startsWith('security-') || t.id.startsWith('audit-')) ??
+      terminalTabs[terminalTabs.length - 1];
+    onOpenInBottomConsole?.(latestSecurityTab?.id);
   };
 
   const renderFindingRow = (f: ThreatFindingRow) => {
@@ -3977,20 +3974,6 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
           </div>
         </div>
       )}
-
-      {/* Security & Live Threat Audit Execution Stream */}
-      <div id="security-work-stream">
-        <WorkStreamContainer
-          pageScope="security"
-          tabs={terminalTabs}
-          title="Security &amp; 360° Threat Audits Stream"
-          description="Live pipeline telemetry for manual and scheduled 360° Threat Audits and Tier 2 Carbon investigations."
-          emptyHint="Click Run Audit Now or Deep Investigate (Carbon) to stream live execution logs here."
-          onOpenInBottomConsole={onOpenInBottomConsole}
-          onAbortJob={onAbortJob}
-          onClearTab={onClearTab}
-        />
-      </div>
     </div>
   );
 };

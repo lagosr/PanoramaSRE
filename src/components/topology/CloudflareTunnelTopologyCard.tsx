@@ -165,7 +165,7 @@ export const CloudflareTunnelTopologyCard: React.FC<CloudflareTunnelTopologyCard
 
           <div className="p-2.5 rounded-lg bg-purple-500/10 border border-purple-500/30 text-purple-700 dark:text-purple-400">
             <span className="text-[10px] text-purple-500 block">cloudflared Daemon</span>
-            <span className="font-bold">network_mode: "host"</span>
+            <span className="font-bold tabular-nums">cf-egress-net (100.64.250.0/24)</span>
           </div>
 
           <ArrowRight className="w-4 h-4 text-purple-500" />
