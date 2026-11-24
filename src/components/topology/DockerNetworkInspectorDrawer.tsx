@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import { X, Network, Box, Shield, HardDrive, Terminal, ArrowRight, ExternalLink } from 'lucide-react';
 import { TopologyRouteItem, IngressHop } from '../../lib/topology-synthesizer';
+import { CopyableValue } from '../ui/CopyableValue';
 
 interface DockerNetworkInspectorDrawerProps {
   isOpen: boolean;
@@ -92,15 +93,21 @@ export const DockerNetworkInspectorDrawer: React.FC<DockerNetworkInspectorDrawer
                 </div>
                 <div>
                   <span className="text-slate-600 dark:text-slate-400 block text-[10px] uppercase">Target Host Port</span>
-                  <span className="text-slate-900 dark:text-slate-100 font-semibold">127.0.0.1:{selectedRoute.port}</span>
+                  <span className="text-slate-900 dark:text-slate-100 font-semibold">
+                    <CopyableValue value={`127.0.0.1:${selectedRoute.port}`} label="host socket" />
+                  </span>
                 </div>
                 <div>
                   <span className="text-slate-600 dark:text-slate-400 block text-[10px] uppercase">Bridge Subnet</span>
-                  <span>{selectedRoute.bridgeSubnet}</span>
+                  <span>
+                    <CopyableValue value={selectedRoute.bridgeSubnet} label="bridge subnet CIDR" />
+                  </span>
                 </div>
                 <div>
                   <span className="text-slate-600 dark:text-slate-400 block text-[10px] uppercase">Container IP (eth0)</span>
-                  <span className="text-sky-700 dark:text-sky-400 font-semibold">{selectedRoute.containerIp}</span>
+                  <span className="text-sky-700 dark:text-sky-400 font-semibold">
+                    <CopyableValue value={selectedRoute.containerIp} label="container IP" />
+                  </span>
                 </div>
               </div>
 

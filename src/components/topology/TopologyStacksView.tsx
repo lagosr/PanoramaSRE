@@ -204,6 +204,9 @@ export function TopologyStacksView({
           selectedRouteSlug={selectedRouteSlug}
           onSelectRouteSlug={setSelectedRouteSlug}
           onOpenInspector={handleOpenInspector}
+          apps={apps}
+          snapshot={snapshot}
+          onRunTestHop={handleRunTestHop}
         />
       )}
 
