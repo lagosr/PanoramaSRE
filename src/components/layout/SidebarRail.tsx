@@ -16,7 +16,6 @@ import {
   Waypoints,
   Bot,
   PanelLeftClose,
-  PanelLeftOpen,
 } from 'lucide-react';
 import { APP_VERSION_INFO } from '../../lib/version';
 import { NavSectionId } from '../../lib/types';
@@ -330,7 +329,7 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
                   type="button"
                   onClick={onToggleCollapse}
                   title="Expand Sidebar Rail"
-                  aria-label="Expand Sidebar Rail from Logo"
+                  aria-label="Expand Sidebar Rail"
                   className="w-9 h-9 rounded-xl bg-white dark:bg-slate-900 border border-amber-500/40 dark:border-amber-400/40 hover:border-[var(--color-brand)] flex items-center justify-center shadow-sm overflow-hidden cursor-pointer transition-colors"
                 >
                   <img
@@ -394,21 +393,6 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
             </button>
           )}
         </div>
-
-        {/* Dedicated centered expand strip when collapsed inside w-16 rail */}
-        {isCollapsed && onToggleCollapse && (
-          <div className="px-2 py-1.5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-center shrink-0">
-            <button
-              type="button"
-              onClick={onToggleCollapse}
-              className="w-10 h-7 flex items-center justify-center rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 hover:border-[var(--color-brand)] text-slate-600 dark:text-slate-300 hover:text-[var(--color-brand-text)] transition-colors cursor-pointer"
-              title="Expand Sidebar Rail"
-              aria-label="Expand Sidebar Rail"
-            >
-              <PanelLeftOpen className="w-4 h-4" />
-            </button>
-          </div>
-        )}
 
         {/* 5-Group Navigation */}
         <nav className="flex-1 overflow-y-auto p-2 space-y-3 custom-scrollbar">

@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { SidebarRail } from '../../components/layout/SidebarRail';
 
 describe('SidebarRail collapse/expand visibility', () => {
-  it('renders dedicated centered Expand button strip below h-14 header when collapsed', () => {
+  it('re-expands collapsed rail from app logo without extra toggle icon strip', () => {
     const html = renderToStaticMarkup(
       <SidebarRail
         activeTab="hud"
@@ -16,8 +16,9 @@ describe('SidebarRail collapse/expand visibility', () => {
     );
 
     expect(html).toContain('aria-label="Expand Sidebar Rail"');
-    expect(html).toContain('aria-label="Expand Sidebar Rail from Logo"');
+    expect(html).toContain('title="Expand Sidebar Rail"');
     expect(html).toContain('justify-center px-2');
+    expect(html).not.toContain('lucide-panel-left-open');
     expect(html).not.toContain('aria-label="Collapse Sidebar to Icons"');
   });
 
