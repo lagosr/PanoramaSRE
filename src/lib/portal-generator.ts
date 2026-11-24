@@ -28,6 +28,7 @@ export function renderPortalHtml(
     .filter(
       (a) =>
         a.hostingTarget !== 'cloudflare-pages' &&
+        a.hostingTarget !== 'wsh-docker-service' &&
         (mode === 'remote' ? a.sre.exposeInRemotePortal : true)
     )
     .sort((a, b) => a.portalOrder - b.portalOrder || a.port - b.port);

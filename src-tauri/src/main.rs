@@ -2219,4 +2219,84 @@ mod tests {
         let (send_off, _) = should_dispatch_threat_pushover(&base_run, &[tunnel_finding], "OFF");
         assert!(!send_off);
     }
+
+    #[test]
+    fn test_discover_wsh_docker_service_nested_manifest() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "panorama_sre_disc_test_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp_root);
+        let service_dir = temp_root
+            .join("PanoramaDrSuite")
+            .join("tools")
+            .join("unifi-siem");
+        std::fs::create_dir_all(&service_dir).unwrap();
+        let manifest_json = r#"{
+  "schemaVersion": 1,
+  "appId": "unifi-siem",
+  "slug": "unifi-siem",
+  "hostingTarget": "wsh-docker-service",
+  "displayName": "UniFi SIEM Collector",
+  "portalTitle": "UniFi SIEM Collector",
+  "description": "Hardened UDP Syslog & CyberSecure CEF ingestor running on WSH.",
+  "basePath": "",
+  "port": 5514,
+  "containerName": "unifi-siem",
+  "composeProject": "unifi-siem",
+  "remoteAppRoot": "/opt/unifi-siem",
+  "dataVolume": "/var/data/unifi-siem",
+  "themeColor": "amber",
+  "icon": "ShieldAlert",
+  "hasDatabase": false,
+  "portalOrder": 95,
+  "roles": ["admin"],
+  "service": {
+    "protocol": "udp",
+    "bindIp": "172.25.25.5",
+    "networkName": "unifi-siem-net",
+    "networkSubnet": "100.64.251.0/24",
+    "hostEnvPath": "/etc/panorama/unifi-siem.env",
+    "hostLogPath": "/var/data/unifi-siem/unifi-siem.log",
+    "optionalDeployment": true,
+    "requiresWshFirewall": true
+  },
+  "sre": {
+    "deployScript": "deploy-unifi-siem.ps1",
+    "devCommand": "",
+    "healthEndpoint": "",
+    "healthCheckMode": "docker-container",
+    "testCommand": "npx vitest run",
+    "typecheckCommand": "npx tsc --noEmit",
+    "requiresAuthInDev": false,
+    "automatedBackupDefault": false,
+    "exposeInRemotePortal": false,
+    "supportsRollback": false,
+    "supportsDryRun": true,
+    "supportsVerifyLocal": true,
+    "supportsStatus": true,
+    "supportsStop": true
+  }
+}"#;
+        std::fs::write(service_dir.join("panorama.app.json"), manifest_json).unwrap();
+
+        let discovered = panorama_sre_lib::commands::workspace::discover_suite_apps_in_root(&temp_root)
+            .expect("discovery should succeed");
+        assert_eq!(discovered.len(), 1);
+        let item = &discovered[0];
+        assert_eq!(item.manifest.slug, "unifi-siem");
+        assert_eq!(item.manifest.hosting_target, "wsh-docker-service");
+        assert_eq!(item.manifest.port, 5514);
+        assert!(!item.manifest.requires_auth_in_dev);
+        let svc = item.manifest.service.as_ref().expect("service block parsed");
+        assert_eq!(svc.protocol, "udp");
+        assert_eq!(svc.bind_ip, "172.25.25.5");
+        assert!(svc.optional_deployment);
+        assert!(svc.requires_wsh_firewall);
+        let sre = item.manifest.sre.as_ref().expect("sre block parsed");
+        assert_eq!(sre.health_check_mode.as_deref(), Some("docker-container"));
+        assert_eq!(sre.supports_dry_run, Some(true));
+
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
 }

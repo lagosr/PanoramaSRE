@@ -33,7 +33,13 @@ export function inferPageScopeFromJob(
   const lowerId = (id || '').toLowerCase();
   if (lowerId.startsWith('hud-')) return 'hud';
   if (lowerId.startsWith('dev-') || lowerId.startsWith('local-dev-')) return 'local-dev';
-  if (lowerId.startsWith('deploy-') || lowerId.startsWith('rollback-')) return 'releases';
+  if (
+    lowerId.startsWith('deploy-') ||
+    lowerId.startsWith('rollback-') ||
+    lowerId.startsWith('unifi-siem-')
+  ) {
+    return 'releases';
+  }
   if (lowerId.startsWith('prune-buildkit') || lowerId.startsWith('telemetry-')) return 'telemetry';
   if (
     lowerId.startsWith('cf-tunnel-') ||
@@ -63,11 +69,7 @@ export function inferPageScopeFromJob(
   }
   if (lowerId.startsWith('smoke-')) return 'smoke';
   if (lowerId.startsWith('optin-') || lowerId.startsWith('opt-in')) return 'opt-ins';
-  if (
-    lowerId.startsWith('settings-') ||
-    lowerId.startsWith('workspace-') ||
-    lowerId.startsWith('unifi-siem-')
-  ) {
+  if (lowerId.startsWith('settings-') || lowerId.startsWith('workspace-')) {
     return 'settings';
   }
 

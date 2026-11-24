@@ -29,6 +29,7 @@ interface CommandCenterViewProps {
   onNavigateToBackups?: () => void;
   onNavigateToOptIns?: () => void;
   onNavigateToCrons?: () => void;
+  onNavigateToRelease?: (slug: string) => void;
   onTriggerFullGfsBackup?: () => void;
   securityViolationCount?: number;
   failingInvariants?: SecurityPostureInvariant[];
@@ -53,6 +54,7 @@ export function CommandCenterView({
   onNavigateToBackups,
   onNavigateToOptIns,
   onNavigateToCrons,
+  onNavigateToRelease,
   onTriggerFullGfsBackup,
   securityViolationCount = 0,
   failingInvariants = [],
@@ -77,9 +79,16 @@ export function CommandCenterView({
     setSelectedApp(app);
   };
 
-  const unhealthyApps = apps.filter(
-    (a) => a.health?.status !== 'healthy' || a.provenanceState === 'PROD_UNREACHABLE'
-  );
+  const unhealthyApps = apps.filter((a) => {
+    if (
+      a.manifest.hostingTarget === 'wsh-docker-service' &&
+      a.manifest.service?.optionalDeployment &&
+      a.health?.status === 'not_deployed'
+    ) {
+      return false;
+    }
+    return a.health?.status !== 'healthy' || a.provenanceState === 'PROD_UNREACHABLE';
+  });
 
   // Detect Automated Database Backup Failures (Red Flag Incident)
   const isLastBackupFailed = backupLedger?.last_run_status?.toLowerCase() === 'failed';
@@ -366,6 +375,7 @@ export function CommandCenterView({
                 onOpenApp={handleOpenApp}
                 onInspectComposition={handleInspectComposition}
                 onNavigateToOptIns={onNavigateToOptIns}
+                onNavigateToRelease={onNavigateToRelease}
               />
             );
           })}

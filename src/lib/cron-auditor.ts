@@ -540,7 +540,13 @@ export interface RawDiscoveredSuiteApp {
 /** Normalizes a raw manifest DTO from `discover_suite_apps` into a typed `AppManifest`. */
 export function normalizeDiscoveredManifest(raw: Record<string, any>): AppManifest {
   const hostingTarget: HostingTarget =
-    raw.hostingTarget === 'cloudflare-pages' ? 'cloudflare-pages' : 'wsh-docker';
+    raw.hostingTarget === 'cloudflare-pages'
+      ? 'cloudflare-pages'
+      : raw.hostingTarget === 'wsh-docker-service'
+      ? 'wsh-docker-service'
+      : 'wsh-docker';
+  const isService = hostingTarget === 'wsh-docker-service';
+  const isNonWebDocker = hostingTarget === 'cloudflare-pages' || isService;
   const rawSre = raw.sre || {};
   const slug = String(raw.slug || '');
   const displayName = String(raw.display_name || raw.displayName || slug);
@@ -561,25 +567,27 @@ export function normalizeDiscoveredManifest(raw: Record<string, any>): AppManife
       raw.container_name ||
       raw.containerName ||
       (hostingTarget === 'cloudflare-pages' ? '' : slug),
-    composeProject: hostingTarget === 'cloudflare-pages' ? '' : slug,
+    composeProject:
+      raw.composeProject || (hostingTarget === 'cloudflare-pages' ? '' : slug),
     remoteAppRoot:
       raw.remote_app_root ||
       raw.remoteAppRoot ||
-      (hostingTarget === 'cloudflare-pages' ? '' : `/var/data/${slug}`),
+      (hostingTarget === 'cloudflare-pages' ? '' : isService ? `/opt/${slug}` : `/var/data/${slug}`),
     dataVolume:
       raw.data_volume ||
       raw.dataVolume ||
-      (hostingTarget === 'cloudflare-pages' ? '' : `/var/data/${slug}/data`),
+      (hostingTarget === 'cloudflare-pages' ? '' : isService ? `/var/data/${slug}` : `/var/data/${slug}/data`),
     localSqlitePath: raw.local_sqlite_path || raw.localSqlitePath || '',
     themeColor: raw.theme_color || raw.themeColor || 'emerald',
     icon: raw.icon || 'Layers',
-    hasDatabase: raw.hasDatabase ?? raw.has_database ?? true,
+    hasDatabase: raw.hasDatabase ?? raw.has_database ?? !isService,
     portalOrder:
       raw.portalOrder ??
       raw.portal_order ??
-      (hostingTarget === 'cloudflare-pages' ? 99 : 1),
+      (isNonWebDocker ? 95 : 1),
     roles: raw.roles || ['admin'],
     cloudflare: raw.cloudflare || undefined,
+    service: raw.service || undefined,
     sre: {
       deployScript:
         rawSre.deployScript ||
@@ -587,29 +595,35 @@ export function normalizeDiscoveredManifest(raw: Record<string, any>): AppManife
           ? './deploy-cloudflare-pages.ps1'
           : './deploy-docker.ps1'),
       dbScript:
-        rawSre.dbScript ||
-        (hostingTarget === 'cloudflare-pages' ? '' : './db-manager.ps1'),
-      devCommand: rawSre.devCommand || raw.dev_command || 'npm run dev',
+        rawSre.dbScript ?? (isNonWebDocker ? '' : './db-manager.ps1'),
+      devCommand:
+        rawSre.devCommand ?? raw.dev_command ?? (isService ? '' : 'npm run dev'),
       previewCommand: rawSre.previewCommand,
       healthEndpoint:
-        rawSre.healthEndpoint ||
-        (hostingTarget === 'cloudflare-pages'
+        rawSre.healthEndpoint ??
+        (isService
+          ? ''
+          : hostingTarget === 'cloudflare-pages'
           ? '/api/health'
           : `${basePath}/api/health`),
+      healthCheckMode: rawSre.healthCheckMode,
       healthAuthMode: rawSre.healthAuthMode,
       manifestEndpoint:
         rawSre.manifestEndpoint ??
-        (hostingTarget === 'cloudflare-pages'
-          ? undefined
-          : `${basePath}/api/auth/manifest`),
+        (isNonWebDocker ? undefined : `${basePath}/api/auth/manifest`),
       testCommand: rawSre.testCommand || 'npm test',
       typecheckCommand: rawSre.typecheckCommand || 'npx tsc --noEmit',
       requiresAuthInDev:
         rawSre.requiresAuthInDev ?? raw.requires_auth_in_dev ?? false,
       automatedBackupDefault:
-        rawSre.automatedBackupDefault ?? hostingTarget !== 'cloudflare-pages',
+        rawSre.automatedBackupDefault ?? hostingTarget === 'wsh-docker',
       exposeInRemotePortal:
-        rawSre.exposeInRemotePortal ?? hostingTarget !== 'cloudflare-pages',
+        rawSre.exposeInRemotePortal ?? hostingTarget === 'wsh-docker',
+      supportsRollback: rawSre.supportsRollback,
+      supportsDryRun: rawSre.supportsDryRun,
+      supportsVerifyLocal: rawSre.supportsVerifyLocal,
+      supportsStatus: rawSre.supportsStatus,
+      supportsStop: rawSre.supportsStop,
       cronJobs: Array.isArray(rawSre.cronJobs) ? rawSre.cronJobs : [],
       cronLegacyFiles: Array.isArray(rawSre.cronLegacyFiles) ? rawSre.cronLegacyFiles : [],
     },

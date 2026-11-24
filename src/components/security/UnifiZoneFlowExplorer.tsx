@@ -60,6 +60,7 @@ import {
   ZoneRuleQuickInspectModal,
   type RuleInspectTarget,
 } from './ZoneRuleQuickInspectModal';
+import { CopyableAddressText, CopyableValue } from '../ui/CopyableValue';
 
 interface UnifiZoneFlowExplorerProps {
   topology: UnifiTopologySnapshotDto;
@@ -1416,7 +1417,16 @@ export const UnifiZoneFlowExplorer: React.FC<UnifiZoneFlowExplorerProps> = ({
 
                   {/* Metadata Sub-Bar */}
                   <div className="px-3.5 py-1.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-slate-600 dark:text-slate-400 tabular-nums">
-                    <span>{subnets.length > 0 ? subnets.join(', ') : 'System scope'}</span>
+                    <span className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                      {subnets.length > 0
+                        ? subnets.map((cidr, idx) => (
+                            <React.Fragment key={cidr}>
+                              {idx > 0 && <span>,</span>}
+                              <CopyableValue value={cidr} label="zone subnet CIDR" />
+                            </React.Fragment>
+                          ))
+                        : 'System scope'}
+                    </span>
                     {selectedZones.length > 1 && (
                       <span>
                         Wires: → {outOpenCount} out • ← {inOpenCount} in
@@ -1643,13 +1653,21 @@ export const UnifiZoneFlowExplorer: React.FC<UnifiZoneFlowExplorerProps> = ({
                                     : 'INTRA-ZONE';
 
                               return (
-                                <button
+                                <div
                                   key={`${zone.id}-${pol.id}-${item.direction}`}
-                                  type="button"
+                                  role="button"
+                                  tabIndex={0}
                                   onClick={() =>
                                     handleInspectRuleFromZoneCard(item, zone)
                                   }
-                                  className={`w-full px-3.5 py-2.5 text-left space-y-1 transition-colors cursor-pointer group ${
+                                  onKeyDown={(e) => {
+                                    if (e.target !== e.currentTarget) return;
+                                    if (e.key === 'Enter' || e.key === ' ') {
+                                      e.preventDefault();
+                                      handleInspectRuleFromZoneCard(item, zone);
+                                    }
+                                  }}
+                                  className={`w-full px-3.5 py-2.5 text-left space-y-1 transition-colors cursor-pointer group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)] ${
                                     edgeId && activeConnectionId === edgeId
                                       ? 'bg-[var(--color-brand-subtle)]/35'
                                       : 'odd:bg-white dark:odd:bg-slate-900 even:bg-slate-50/70 dark:even:bg-slate-950/60 hover:bg-slate-100/80 dark:hover:bg-slate-800/70'
@@ -1686,18 +1704,20 @@ export const UnifiZoneFlowExplorer: React.FC<UnifiZoneFlowExplorerProps> = ({
                                     pol.sourceFilterSummary ||
                                     pol.destinationFilterSummary) && (
                                     <div className="text-[11px] font-mono text-slate-600 dark:text-slate-400 truncate">
-                                      {[
-                                        pol.protocol,
-                                        pol.sourceFilterSummary &&
-                                          `Src: ${pol.sourceFilterSummary}`,
-                                        pol.destinationFilterSummary &&
-                                          `Dst: ${pol.destinationFilterSummary}`,
-                                      ]
-                                        .filter(Boolean)
-                                        .join(' • ')}
+                                      <CopyableAddressText
+                                        text={[
+                                          pol.protocol,
+                                          pol.sourceFilterSummary &&
+                                            `Src: ${pol.sourceFilterSummary}`,
+                                          pol.destinationFilterSummary &&
+                                            `Dst: ${pol.destinationFilterSummary}`,
+                                        ]
+                                          .filter(Boolean)
+                                          .join(' • ')}
+                                      />
                                     </div>
                                   )}
-                                </button>
+                                </div>
                               );
                             })}
                           </div>
@@ -1771,9 +1791,15 @@ export const UnifiZoneFlowExplorer: React.FC<UnifiZoneFlowExplorerProps> = ({
                                             <Wifi className="w-3.5 h-3.5 text-sky-500 shrink-0" />
                                           )}
                                           <span className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate">
-                                            {cli.name ||
-                                              cli.hostname ||
-                                              cli.macAddress}
+                                            {cli.name || cli.hostname ? (
+                                              cli.name || cli.hostname
+                                            ) : (
+                                              <CopyableValue
+                                                value={cli.macAddress}
+                                                label="MAC address"
+                                                className="font-mono"
+                                              />
+                                            )}
                                           </span>
                                         </div>
                                         <div className="pl-5 text-[10px] font-mono text-slate-500 dark:text-slate-400 truncate">
@@ -1788,10 +1814,17 @@ export const UnifiZoneFlowExplorer: React.FC<UnifiZoneFlowExplorerProps> = ({
                                       </td>
                                       <td className="py-2 px-2 align-middle font-mono tabular-nums">
                                         <div className="text-xs font-medium text-slate-900 dark:text-slate-100">
-                                          {cli.ipAddress || 'no-ip'}
+                                          <CopyableValue
+                                            value={cli.ipAddress}
+                                            fallback="no-ip"
+                                            label="IP address"
+                                          />
                                         </div>
                                         <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                                          {cli.macAddress}
+                                          <CopyableValue
+                                            value={cli.macAddress}
+                                            label="MAC address"
+                                          />
                                         </div>
                                       </td>
                                       <td className="py-2 px-3 align-middle text-right">

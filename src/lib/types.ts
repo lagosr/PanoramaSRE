@@ -12,7 +12,7 @@ export type NavSectionId =
   | 'smoke'
   | 'settings';
 
-export type HostingTarget = 'wsh-docker' | 'cloudflare-pages';
+export type HostingTarget = 'wsh-docker' | 'wsh-docker-service' | 'cloudflare-pages';
 
 export interface CloudflareAppConfig {
   pagesProject: string;
@@ -22,6 +22,17 @@ export interface CloudflareAppConfig {
   d1DatabaseName?: string;
   d1DatabaseId?: string;
   deployMode?: string;
+}
+
+export interface ServiceAppConfig {
+  protocol: 'udp' | 'tcp' | 'both' | 'none';
+  bindIp: string;
+  networkName: string;
+  networkSubnet: string;
+  hostEnvPath?: string;
+  hostLogPath?: string;
+  optionalDeployment?: boolean;
+  requiresWshFirewall?: boolean;
 }
 
 export type WorkStreamSource = 'ui' | 'mcp' | 'scheduled' | 'supervisor';
@@ -150,6 +161,7 @@ export interface AppManifest {
   portalOrder: number;
   roles: string[];
   cloudflare?: CloudflareAppConfig;
+  service?: ServiceAppConfig;
   auth?: {
     slug: string;
     basePath: string;
@@ -161,6 +173,7 @@ export interface AppManifest {
     devCommand: string;
     previewCommand?: string;
     healthEndpoint: string;
+    healthCheckMode?: 'http' | 'docker-container';
     healthAuthMode?: string;
     manifestEndpoint?: string;
     testCommand: string;
@@ -169,6 +182,11 @@ export interface AppManifest {
     automatedBackupDefault: boolean;
     exposeInRemotePortal: boolean;
     syncManifestOnDeploy?: boolean;
+    supportsRollback?: boolean;
+    supportsDryRun?: boolean;
+    supportsVerifyLocal?: boolean;
+    supportsStatus?: boolean;
+    supportsStop?: boolean;
     cronJobs?: CronJobDeclaration[];
     cronLegacyFiles?: string[];
   };
@@ -680,8 +698,14 @@ export interface SslFleetSummary {
  * or is in an unhealthy / unreachable production state that requires deployment.
  */
 export function isAppDeployCandidate(app: DiscoveredApp): boolean {
+  const isOptionalNotDeployedService =
+    app.manifest?.hostingTarget === 'wsh-docker-service' &&
+    Boolean(app.manifest?.service?.optionalDeployment) &&
+    app.health?.status === 'not_deployed';
   const isHealthy = app.health?.status === 'healthy';
-  const isCritical = !isHealthy || app.provenanceState === 'PROD_UNREACHABLE' || app.provenanceState === 'DIRTY_PROD';
+  const isCritical =
+    !isOptionalNotDeployedService &&
+    (!isHealthy || app.provenanceState === 'PROD_UNREACHABLE' || app.provenanceState === 'DIRTY_PROD');
   const hasDrift =
     (app.composition?.undeployed_commits?.length || 0) > 0 ||
     (app.composition?.ahead_count || 0) > 0 ||
@@ -691,6 +715,72 @@ export function isAppDeployCandidate(app: DiscoveredApp): boolean {
     app.provenanceState === 'DIVERGED';
 
   return isCritical || hasDrift;
+}
+
+/**
+ * Derives live container-backed health and provenance state for `wsh-docker-service`
+ * apps (such as headless UDP syslog collectors) from the latest WSH snapshot without
+ * making HTTP `/api/health` requests.
+ */
+export function reconcileServiceAppsFromSnapshot(
+  appList: DiscoveredApp[],
+  snapshot: WshSnapshot | null | undefined
+): DiscoveredApp[] {
+  const containers = snapshot?.containers || [];
+  return appList.map((app) => {
+    if (app.manifest.hostingTarget !== 'wsh-docker-service') {
+      return app;
+    }
+    const targetName = (app.manifest.containerName || app.manifest.slug).toLowerCase();
+    const matched = containers.find((c) => {
+      const cleanName = (c.Names || '').replace(/^\//, '').toLowerCase();
+      return cleanName === targetName;
+    });
+
+    const dirty = Boolean(app.composition?.local_dirty);
+    const hasPending = (app.composition?.undeployed_commits?.length || 0) > 0;
+
+    if (matched && matched.State?.toLowerCase() === 'running') {
+      return {
+        ...app,
+        health: {
+          status: 'healthy',
+          version: '1.0.0',
+          deployed_at: matched.Status || 'Running',
+          database: 'none',
+        },
+        provenanceState: dirty ? 'LOCAL_WIP' : 'IN_SYNC',
+      };
+    }
+
+    if (matched) {
+      return {
+        ...app,
+        health: {
+          status: 'unhealthy',
+          version: '1.0.0',
+          deployed_at: matched.Status || matched.State || 'Stopped',
+          database: 'none',
+        },
+        provenanceState: 'PROD_UNREACHABLE',
+      };
+    }
+
+    if (!snapshot) {
+      return app;
+    }
+
+    return {
+      ...app,
+      health: {
+        status: 'not_deployed',
+        version: '',
+        deployed_at: '',
+        database: 'none',
+      },
+      provenanceState: dirty ? 'LOCAL_WIP' : hasPending ? 'AHEAD' : 'UNKNOWN',
+    };
+  });
 }
 
 export interface AgentActionSummary {

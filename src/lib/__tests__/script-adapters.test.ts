@@ -5,7 +5,7 @@ import {
   buildDbManagerCommand,
   buildSslCertCommand,
   buildCloudflareTunnelCommand,
-  buildUnifiSiemCommand,
+  buildServiceScriptCommand,
   buildRemoteSshCommand,
 } from '../script-adapters';
 
@@ -116,29 +116,33 @@ describe('script-adapters CLI builders', () => {
     expect(rollbackCmd.args).not.toContain('-Mode');
   });
 
-  it('correctly constructs deploy-unifi-siem arguments across all lifecycle actions', () => {
-    const tools = 'C:\\AG Projects\\PanoramaDrSuite\\tools';
+  it('correctly constructs wsh-docker-service lifecycle arguments across all actions', () => {
+    const wsDir = 'C:\\AG Projects\\PanoramaDrSuite\\tools\\unifi-siem';
 
-    const verifyCmd = buildUnifiSiemCommand(tools, 'verify_local');
+    const verifyCmd = buildServiceScriptCommand(wsDir, 'deploy-unifi-siem.ps1', 'verify_local');
     expect(verifyCmd.command).toBe('pwsh.exe');
-    expect(verifyCmd.workingDir).toBe(`${tools}\\unifi-siem`);
+    expect(verifyCmd.workingDir).toBe(wsDir);
     expect(verifyCmd.args).toContain('-VerifyLocal');
     expect(verifyCmd.lockType).toBe('None');
 
-    const statusCmd = buildUnifiSiemCommand(tools, 'status');
+    const statusCmd = buildServiceScriptCommand(wsDir, 'deploy-unifi-siem.ps1', 'status');
     expect(statusCmd.args).toContain('-Status');
     expect(statusCmd.lockType).toBe('None');
 
-    const testCmd = buildUnifiSiemCommand(tools, 'test');
+    const testCmd = buildServiceScriptCommand(wsDir, 'deploy-unifi-siem.ps1', 'test');
     expect(testCmd.args).toContain('-Test');
     expect(testCmd.lockType).toBe('None');
 
-    const deployCmd = buildUnifiSiemCommand(tools, 'deploy');
+    const deployCmd = buildServiceScriptCommand(wsDir, 'deploy-unifi-siem.ps1', 'deploy', {
+      allowDirty: true,
+    });
+    expect(deployCmd.args).toContain('.\\deploy-unifi-siem.ps1');
+    expect(deployCmd.args).toContain('-AllowDirty');
     expect(deployCmd.args).not.toContain('-VerifyLocal');
     expect(deployCmd.args).not.toContain('-Stop');
     expect(deployCmd.lockType).toBe('WshRemoteMutation');
 
-    const stopCmd = buildUnifiSiemCommand(tools, 'stop');
+    const stopCmd = buildServiceScriptCommand(wsDir, 'deploy-unifi-siem.ps1', 'stop');
     expect(stopCmd.args).toContain('-Stop');
     expect(stopCmd.lockType).toBe('WshRemoteMutation');
   });

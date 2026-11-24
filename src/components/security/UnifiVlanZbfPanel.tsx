@@ -13,6 +13,7 @@ import {
   Wifi,
 } from 'lucide-react';
 import { CustomSelect } from '../ui/CustomSelect';
+import { CopyableAddressText, CopyableValue } from '../ui/CopyableValue';
 import { UnifiZoneFlowExplorer } from './UnifiZoneFlowExplorer';
 import { formatLocalDateTime, formatRelativeTime } from '../../lib/formatters';
 import type {
@@ -292,8 +293,16 @@ export const UnifiVlanZbfPanel: React.FC<UnifiVlanZbfPanelProps> = ({
 
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-mono text-slate-600 dark:text-slate-400">
           {pol.protocol && <span>Proto: {pol.protocol}</span>}
-          {pol.sourceFilterSummary && <span>Src Filter: {pol.sourceFilterSummary}</span>}
-          {pol.destinationFilterSummary && <span>Dst Filter: {pol.destinationFilterSummary}</span>}
+          {pol.sourceFilterSummary && (
+            <span>
+              Src Filter: <CopyableAddressText text={pol.sourceFilterSummary} />
+            </span>
+          )}
+          {pol.destinationFilterSummary && (
+            <span>
+              Dst Filter: <CopyableAddressText text={pol.destinationFilterSummary} />
+            </span>
+          )}
           {pol.connectionStates.length > 0 && (
             <span>State: {pol.connectionStates.join(', ')}</span>
           )}
@@ -686,13 +695,13 @@ export const UnifiVlanZbfPanel: React.FC<UnifiVlanZbfPanelProps> = ({
                   <div>
                     <div className="text-slate-400 text-[10px]">CIDR SUBNET</div>
                     <div className="text-slate-800 dark:text-slate-200 font-semibold">
-                      {net.subnetCidr || '—'}
+                      <CopyableValue value={net.subnetCidr} label="VLAN subnet CIDR" fallback="—" />
                     </div>
                   </div>
                   <div>
                     <div className="text-slate-400 text-[10px]">GATEWAY IP</div>
                     <div className="text-slate-800 dark:text-slate-200 font-semibold">
-                      {net.gatewayIp || '—'}
+                      <CopyableValue value={net.gatewayIp} label="VLAN gateway IP" fallback="—" />
                     </div>
                   </div>
                 </div>

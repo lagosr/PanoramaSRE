@@ -34,6 +34,7 @@ import {
   X,
 } from 'lucide-react';
 import { CustomSelect } from '../ui/CustomSelect';
+import { CopyableAddressText, CopyableValue } from '../ui/CopyableValue';
 import { WorkStreamContainer } from '../ui/WorkStreamContainer';
 import { SnoozeSplitButton } from './SnoozeSplitButton';
 import { UnifiVlanZbfPanel } from './UnifiVlanZbfPanel';
@@ -132,6 +133,7 @@ interface ThreatIntelViewProps {
   onSelectRunId: (runId: string) => Promise<void>;
   onRefreshAll: () => Promise<void>;
   onNavigateToSettings: () => void;
+  onNavigateToSiemRelease?: () => void;
   wshSnapshot?: WshSnapshot | null;
   terminalTabs?: TerminalTab[];
   onOpenInBottomConsole?: (tabId?: string) => void;
@@ -194,6 +196,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   onSelectRunId,
   onRefreshAll,
   onNavigateToSettings,
+  onNavigateToSiemRelease,
   wshSnapshot = null,
   terminalTabs = [],
   onOpenInBottomConsole,
@@ -1280,7 +1283,9 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
           </div>
         </div>
 
-        <p className="text-xs text-slate-700 dark:text-slate-300">{f.summary}</p>
+        <p className="text-xs text-slate-700 dark:text-slate-300">
+          <CopyableAddressText text={f.summary} />
+        </p>
 
         {f.resolutionNote && findingDisp !== 'ACTIVE' && (
           <div className="text-[11px] font-mono text-emerald-700 dark:text-emerald-400">
@@ -1298,7 +1303,11 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] font-mono text-slate-500 dark:text-slate-400">
           {f.host && <span>Host: {f.host}</span>}
-          {f.actorIp && <span>IP: {f.actorIp}</span>}
+          {f.actorIp && (
+            <span>
+              IP: <CopyableValue value={f.actorIp} label="actor IP" />
+            </span>
+          )}
           {f.actorAsn && <span>ASN: {f.actorAsn}</span>}
           {rayIds.length > 0 && <span>Rays: {rayIds.slice(0, 4).join(', ')}</span>}
         </div>
@@ -1892,7 +1901,11 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                         variant={severityToBadgeVariant(a.highestSeverity)}
                       />
                       <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">
-                        {a.ipAddress || a.id}
+                        {a.ipAddress ? (
+                          <CopyableValue value={a.ipAddress} label="actor IP" />
+                        ) : (
+                          a.id
+                        )}
                       </span>
                       {a.totalOrigin200s > 0 && (
                         <StatusBadge label={`${a.totalOrigin200s} Origin 200s`} variant="danger" />
@@ -3217,7 +3230,11 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                             variant={severityToBadgeVariant(actor.highestSeverity)}
                           />
                           <span className="text-sm font-mono font-bold text-slate-900 dark:text-slate-100">
-                            {actor.ipAddress || actor.id}
+                            {actor.ipAddress ? (
+                              <CopyableValue value={actor.ipAddress} label="threat actor IP" />
+                            ) : (
+                              actor.id
+                            )}
                           </span>
                           {actor.country && (
                             <span className="px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-[11px] font-mono text-slate-700 dark:text-slate-300">
@@ -3492,10 +3509,10 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                 </div>
                 <button
                   type="button"
-                  onClick={onNavigateToSettings}
+                  onClick={onNavigateToSiemRelease ?? onNavigateToSettings}
                   className="btn-ghost text-[11px] px-0 py-0.5 min-h-[24px] text-[var(--color-brand-text)] flex items-center gap-1 whitespace-nowrap flex-shrink-0"
                 >
-                  <span>Manage SIEM in Settings</span>
+                  <span>{onNavigateToSiemRelease ? 'Manage SIEM in Releases' : 'Manage SIEM in Settings'}</span>
                   <ArrowRight className="w-3 h-3" />
                 </button>
               </div>
@@ -3510,7 +3527,11 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                 <span>Cross-Over Note: Internal LAN &amp; WSH ← External Cloudflare</span>
               </div>
               <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                External requests cross <code className="font-mono">panorama-tunnel</code> (<code className="font-mono">cf-egress-net</code>) into WSH Lighttpd <code className="font-mono">:443</code> and authenticate through <code className="font-mono">PanoramaAuth</code> SSO. Meanwhile, UniFi Gateway CyberSecure inspects WAN-to-LAN traffic and forwards CEF events to WSH <code className="font-mono">172.25.25.5:5514/udp</code>. Compare with <strong>External (Cloudflare)</strong> if an anomaly traces back to a WAN client.
+                External requests cross <code className="font-mono">panorama-tunnel</code> (<code className="font-mono">cf-egress-net</code>) into WSH Lighttpd <code className="font-mono">:443</code> and authenticate through <code className="font-mono">PanoramaAuth</code> SSO. Meanwhile, UniFi Gateway CyberSecure inspects WAN-to-LAN traffic and forwards CEF events to WSH{' '}
+                <code className="font-mono">
+                  <CopyableValue value="172.25.25.5:5514" label="SIEM endpoint" />/udp
+                </code>
+                . Compare with <strong>External (Cloudflare)</strong> if an anomaly traces back to a WAN client.
               </p>
               <div className="flex flex-wrap gap-2 text-[11px] font-mono tabular-nums">
                 <StatusBadge label={`CF WAF Hits: ${totalWafHits}`} variant="info" />
@@ -3779,8 +3800,12 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                           <td className="py-2.5 px-3 font-sans font-medium text-slate-900 dark:text-slate-100">
                             {cli.label || cli.hostname || 'Unnamed Device'}
                           </td>
-                          <td className="py-2.5 px-3 text-slate-700 dark:text-slate-300">{cli.macAddress}</td>
-                          <td className="py-2.5 px-3 text-slate-700 dark:text-slate-300">{cli.ipAddress || '—'}</td>
+                          <td className="py-2.5 px-3 text-slate-700 dark:text-slate-300">
+                            <CopyableValue value={cli.macAddress} label="MAC address" />
+                          </td>
+                          <td className="py-2.5 px-3 text-slate-700 dark:text-slate-300">
+                            <CopyableValue value={cli.ipAddress} label="IP address" fallback="—" />
+                          </td>
                           <td className="py-2.5 px-3">
                             <div className="flex flex-wrap items-center gap-1.5">
                               {cli.networkVlan ? (
@@ -3932,7 +3957,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                         />
                         <StatusBadge label={rule.entryType} variant="neutral" />
                         <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">
-                          {rule.value}
+                          <CopyableValue value={rule.value} label={rule.entryType} />
                         </span>
                         <span className="text-slate-600 dark:text-slate-400 truncate">{rule.label}</span>
                       </div>
@@ -3953,14 +3978,14 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
         </div>
       )}
 
-      {/* Security, Live Threat Audit & UniFi SIEM Execution Stream */}
+      {/* Security & Live Threat Audit Execution Stream */}
       <div id="security-work-stream">
         <WorkStreamContainer
           pageScope="security"
           tabs={terminalTabs}
-          title="Security, 360° Threat Audits &amp; UniFi SIEM Execution Stream"
-          description="Live pipeline telemetry for manual and scheduled 360° Threat Audits plus unifi-siem local verification, dry-runs, WSH deployments, and firewall hardening runs."
-          emptyHint="Click Run Audit Now, Deep Investigate (Carbon), or trigger UniFi SIEM Collector actions to stream live execution logs here."
+          title="Security &amp; 360° Threat Audits Stream"
+          description="Live pipeline telemetry for manual and scheduled 360° Threat Audits and Tier 2 Carbon investigations."
+          emptyHint="Click Run Audit Now or Deep Investigate (Carbon) to stream live execution logs here."
           onOpenInBottomConsole={onOpenInBottomConsole}
           onAbortJob={onAbortJob}
           onClearTab={onClearTab}

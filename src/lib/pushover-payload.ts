@@ -37,25 +37,34 @@ export function buildSyncAlertEvaluationInput(
   };
 
   if (params.apps && params.apps.length > 0) {
-    out.apps = params.apps.map((a) => {
-      const status = a.health?.status === 'healthy'
-        ? 'healthy'
-        : a.health
-        ? 'unhealthy'
-        : 'unreachable';
-      return {
-        slug: a.manifest.slug,
-        displayName: a.manifest.displayName,
-        basePath: a.manifest.basePath,
-        status,
-        detail:
-          status === 'healthy'
-            ? null
-            : a.health?.status
-            ? `status=${a.health.status}`
-            : 'No /api/health response',
-      };
-    });
+    out.apps = params.apps
+      .filter(
+        (a) =>
+          !(
+            a.manifest.hostingTarget === 'wsh-docker-service' &&
+            a.manifest.service?.optionalDeployment &&
+            a.health?.status === 'not_deployed'
+          )
+      )
+      .map((a) => {
+        const status = a.health?.status === 'healthy'
+          ? 'healthy'
+          : a.health
+          ? 'unhealthy'
+          : 'unreachable';
+        return {
+          slug: a.manifest.slug,
+          displayName: a.manifest.displayName,
+          basePath: a.manifest.basePath,
+          status,
+          detail:
+            status === 'healthy'
+              ? null
+              : a.health?.status
+              ? `status=${a.health.status}`
+              : 'No /api/health response',
+        };
+      });
   }
 
   if (params.appliances && params.appliances.length > 0) {

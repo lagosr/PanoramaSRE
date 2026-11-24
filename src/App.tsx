@@ -47,6 +47,7 @@ import {
   NavSectionId,
   WorkStreamSource,
   isAppDeployCandidate,
+  reconcileServiceAppsFromSnapshot,
   BatchPreDeploySnapshot,
   BatchSmokeFailureReport,
   DeployTelemetryRunRecord,
@@ -65,8 +66,8 @@ import { buildSyncAlertEvaluationInput } from './lib/pushover-payload';
 import {
   buildSslCertCommand,
   buildCloudflareTunnelCommand,
-  buildUnifiSiemCommand,
-  type UnifiSiemAction,
+  buildServiceScriptCommand,
+  type ServiceLifecycleAction,
   buildRemoteSshCommand,
   buildCloudflarePagesDeployCommand,
   buildCronSyncCommand,
@@ -378,13 +379,20 @@ export const App: React.FC = () => {
     const currentApps = appsRef.current;
     if (currentApps.length === 0) return;
     try {
-      const appsPayload = currentApps.map((a) => ({
-        appId: a.manifest.appId,
-        port: a.manifest.port,
-        basePath: a.manifest.basePath,
-        workspacePath: a.workspacePath,
-        localSqlitePath: a.manifest.localSqlitePath,
-      }));
+      const appsPayload = currentApps
+        .filter(
+          (a) =>
+            a.manifest.hostingTarget !== 'wsh-docker-service' &&
+            Boolean(a.manifest.sre.devCommand?.trim())
+        )
+        .map((a) => ({
+          appId: a.manifest.appId,
+          port: a.manifest.port,
+          basePath: a.manifest.basePath,
+          workspacePath: a.workspacePath,
+          localSqlitePath: a.manifest.localSqlitePath,
+        }));
+      if (appsPayload.length === 0) return;
       const devStatuses = await invoke<DevServerInfo[]>('get_dev_servers_status', {
         apps: appsPayload,
       });
@@ -439,6 +447,7 @@ export const App: React.FC = () => {
           force,
         });
         setWshSnapshot(snap);
+        setApps((prev) => reconcileServiceAppsFromSnapshot(prev, snap));
         setLastSecurityAuditTime(new Date().toLocaleTimeString());
       }
     } catch {
@@ -648,31 +657,33 @@ export const App: React.FC = () => {
           const appManifest = normalizeDiscoveredManifest(item.manifest);
           const hostingTarget = appManifest.hostingTarget || 'wsh-docker';
 
-          // Probe /api/health (WSH or Cloudflare Pages stealth HMAC probe)
+          // Probe /api/health (skip for non-HTTP WSH container services; reconcile from WSH snapshot instead)
           let probedHealth: AppHealth | undefined;
           let latencyMs = 0;
-          try {
-            const healthUrl =
-              hostingTarget === 'cloudflare-pages'
-                ? `${(appManifest.cloudflare?.primaryUrl || 'https://www.parakith.com').replace(/\/+$/, '')}${appManifest.sre.healthEndpoint || '/api/health'}`
-                : `https://wsh.panoramadr.com${appManifest.basePath}/api/health`;
-            const res = await invoke<{
-              status: string;
-              latency_ms: number;
-              health: AppHealth | null;
-            }>('probe_app_health', {
-              appId: appManifest.appId,
-              url: healthUrl,
-              timeoutMs: 4000,
-              authMode: appManifest.sre.healthAuthMode ?? null,
-              workspacePath: item.workspace_path,
-            });
-            latencyMs = res.latency_ms;
-            if (res.health) {
-              probedHealth = res.health;
+          if (hostingTarget !== 'wsh-docker-service') {
+            try {
+              const healthUrl =
+                hostingTarget === 'cloudflare-pages'
+                  ? `${(appManifest.cloudflare?.primaryUrl || 'https://www.parakith.com').replace(/\/+$/, '')}${appManifest.sre.healthEndpoint || '/api/health'}`
+                  : `https://wsh.panoramadr.com${appManifest.basePath}/api/health`;
+              const res = await invoke<{
+                status: string;
+                latency_ms: number;
+                health: AppHealth | null;
+              }>('probe_app_health', {
+                appId: appManifest.appId,
+                url: healthUrl,
+                timeoutMs: 4000,
+                authMode: appManifest.sre.healthAuthMode ?? null,
+                workspacePath: item.workspace_path,
+              });
+              latencyMs = res.latency_ms;
+              if (res.health) {
+                probedHealth = res.health;
+              }
+            } catch {
+              // Health probe fallback
             }
-          } catch {
-            // Health probe fallback
           }
 
           // Compute Git Provenance Composition
@@ -701,28 +712,37 @@ export const App: React.FC = () => {
         })
       );
 
-      // 4. Query Dev Servers Status
+      // 4. Query Dev Servers Status (web/edge apps only)
       try {
-        const appsPayload = enrichedApps.map((a) => ({
-          appId: a.manifest.appId,
-          port: a.manifest.port,
-          basePath: a.manifest.basePath,
-          workspacePath: a.workspacePath,
-          localSqlitePath: a.manifest.localSqlitePath,
-        }));
-        const devStatuses = await invoke<DevServerInfo[]>('get_dev_servers_status', {
-          apps: appsPayload,
-        });
+        const appsPayload = enrichedApps
+          .filter(
+            (a) =>
+              a.manifest.hostingTarget !== 'wsh-docker-service' &&
+              Boolean(a.manifest.sre.devCommand?.trim())
+          )
+          .map((a) => ({
+            appId: a.manifest.appId,
+            port: a.manifest.port,
+            basePath: a.manifest.basePath,
+            workspacePath: a.workspacePath,
+            localSqlitePath: a.manifest.localSqlitePath,
+          }));
+        if (appsPayload.length > 0) {
+          const devStatuses = await invoke<DevServerInfo[]>('get_dev_servers_status', {
+            apps: appsPayload,
+          });
 
-        // Merge dev server status into apps
-        for (const app of enrichedApps) {
-          app.devServer = devStatuses.find((d) => d.app_id === app.manifest.appId);
+          // Merge dev server status into apps
+          for (const app of enrichedApps) {
+            app.devServer = devStatuses.find((d) => d.app_id === app.manifest.appId);
+          }
         }
       } catch (err) {
         console.error('[PanoramaSRE] Dev servers probe error:', err);
       }
 
-      setApps(enrichedApps);
+      const preSnapApps = reconcileServiceAppsFromSnapshot(enrichedApps, wshSnapshotRef.current);
+      setApps(preSnapApps);
       const discoveredParakith =
         enrichedApps.find(
           (a) => a.manifest.hostingTarget === 'cloudflare-pages' && a.manifest.cloudflare?.d1DatabaseName
@@ -764,6 +784,10 @@ export const App: React.FC = () => {
         }
       }
 
+      // Reconcile container-backed health for WSH services against latest snapshot
+      const reconciledApps = reconcileServiceAppsFromSnapshot(preSnapApps, latestSnap);
+      setApps(reconciledApps);
+
       // 6. On initial startup or manual Sync Now, also execute Tier 2 appliances + Tier 4 hourly checks
       let hourlyAppliances: ApplianceStatus[] | undefined;
       let hourlyLedger: BackupLedgerSummary | null = null;
@@ -787,12 +811,12 @@ export const App: React.FC = () => {
 
       // 7. Evaluate edge-triggered Pushover notifications (coalesced across this sync tick; paused if roaming)
       const evalTopo = latestSnap
-        ? synthesizeTopology(enrichedApps, latestSnap, hourlyTunnel)
+        ? synthesizeTopology(reconciledApps, latestSnap, hourlyTunnel)
         : null;
       const { incidentKey, isDismissed } = computeBackupIncidentKey(hourlyLedger);
       const alertInput = buildSyncAlertEvaluationInput({
         maintenanceSuppressed: maintenanceSuppressedRef.current,
-        apps: enrichedApps,
+        apps: reconciledApps,
         appliances: hourlyAppliances,
         wshSnapshot: includeWshSnapshot ? latestSnap : null,
         securityViolationCount: evalTopo ? evalTopo.securityAudit.securityViolationCount : 0,
@@ -1235,9 +1259,12 @@ export const App: React.FC = () => {
       }
     }
 
-    // 2. Start all other remaining WSH child web servers in parallel (exclude external Cloudflare Pages)
+    // 2. Start all other remaining WSH child web servers in parallel (exclude Cloudflare Pages & headless services)
     const childApps = apps.filter(
-      (a) => a.manifest.slug !== 'auth' && a.manifest.hostingTarget !== 'cloudflare-pages'
+      (a) =>
+        a.manifest.slug !== 'auth' &&
+        (!a.manifest.hostingTarget || a.manifest.hostingTarget === 'wsh-docker') &&
+        Boolean(a.manifest.sre.devCommand?.trim())
     );
     await Promise.all(
       childApps.map(async (child) => {
@@ -1633,13 +1660,19 @@ export const App: React.FC = () => {
     setSelectedReleaseAppSlug(app.manifest.slug);
     setTrackedDeployJobIds((prev) => ({ ...prev, [app.manifest.slug]: jobId }));
     const isEdgeApp = app.manifest.hostingTarget === 'cloudflare-pages';
+    const isWshService = app.manifest.hostingTarget === 'wsh-docker-service';
+    const jobTitle = isWshService
+      ? `Deploy Service: ${app.manifest.displayName}`
+      : isEdgeApp
+      ? `Edge Publish: ${app.manifest.displayName}`
+      : `Deploy: ${app.manifest.displayName}`;
     const newTab: TerminalTab = {
       id: jobId,
-      title: isEdgeApp
-        ? `Edge Publish: ${app.manifest.displayName}`
-        : `Deploy: ${app.manifest.displayName}`,
+      title: jobTitle,
       lines: [
-        isEdgeApp
+        isWshService
+          ? `[PanoramaSRE] Initiating WSH service deployment for ${app.manifest.displayName}...`
+          : isEdgeApp
           ? `[PanoramaSRE] Initiating Cloudflare Pages publish (${edgeMode}) for ${app.manifest.displayName}...`
           : `[PanoramaSRE] Initiating release pipeline for ${app.manifest.displayName}...`,
       ],
@@ -1659,7 +1692,18 @@ export const App: React.FC = () => {
     let lockType: ScriptActionExecution['lockType'] = 'WshRemoteMutation';
     let workingDir = app.workspacePath;
 
-    if (isEdgeApp) {
+    if (isWshService) {
+      const svcExec = buildServiceScriptCommand(
+        app.workspacePath,
+        app.manifest.sre.deployScript || './deploy-unifi-siem.ps1',
+        'deploy',
+        { allowDirty }
+      );
+      command = svcExec.command;
+      args = svcExec.args;
+      lockType = svcExec.lockType;
+      workingDir = svcExec.workingDir || app.workspacePath;
+    } else if (isEdgeApp) {
       const cfExec = buildCloudflarePagesDeployCommand(app.workspacePath, {
         mode: edgeMode,
         bumpVersion: (bump as 'none' | 'patch' | 'minor' | 'major') || 'none',
@@ -1685,9 +1729,7 @@ export const App: React.FC = () => {
 
     return runStreamJob({
       jobId,
-      label: isEdgeApp
-        ? `Edge Publish: ${app.manifest.displayName}`
-        : `Deploy: ${app.manifest.displayName}`,
+      label: jobTitle,
       command,
       args,
       workingDir,
@@ -1695,18 +1737,24 @@ export const App: React.FC = () => {
       onLine: (line) => {
         appendTerminalLine(jobId, line);
       },
-      onComplete: (exitCode) => {
+      onComplete: async (exitCode) => {
         if (currentRunningDeployJobIdRef.current === jobId) {
           currentRunningDeployJobIdRef.current = null;
         }
         finalizeTerminalJob(jobId, exitCode);
+        if (isWshService) {
+          await refreshWshTelemetry(true);
+          if (app.manifest.slug === 'unifi-siem') {
+            await refreshThreatIntelState(selectedThreatDetail?.run?.id);
+          }
+        }
         syncFullTelemetry(false, false);
         void refreshDeployTelemetryRef.current?.();
         setTimeout(() => {
           syncFullTelemetry(false, false);
           void refreshDeployTelemetryRef.current?.();
         }, 1500);
-        if (!skipSmoke) {
+        if (!skipSmoke && !isWshService) {
           void refreshSmokeHistoryRef.current?.();
         }
       },
@@ -1848,9 +1896,9 @@ export const App: React.FC = () => {
     setBatchSmokeFailureReport(null);
 
     try {
-      // Respect the user's explicit deployment order and isolate external Cloudflare Pages apps from WSH Docker batching
+      // Respect the user's explicit deployment order and isolate external Cloudflare Pages & headless services from WSH Docker batching
       const sortedApps = appsToDeploy.filter(
-        (a) => a.manifest.hostingTarget !== 'cloudflare-pages'
+        (a) => !a.manifest.hostingTarget || a.manifest.hostingTarget === 'wsh-docker'
       );
 
       const preBatchSnapshots: Record<string, BatchPreDeploySnapshot> = {};
@@ -2460,7 +2508,16 @@ export const App: React.FC = () => {
     (a) => a.devServer?.status === 'RUNNING_MANAGED' || a.devServer?.status === 'RUNNING_EXTERNAL'
   ).length;
 
-  const unhealthyCount = apps.filter((a) => a.health && a.health.status !== 'healthy').length;
+  const unhealthyCount = apps.filter(
+    (a) =>
+      a.health &&
+      a.health.status !== 'healthy' &&
+      !(
+        a.manifest.hostingTarget === 'wsh-docker-service' &&
+        a.manifest.service?.optionalDeployment &&
+        a.health.status === 'not_deployed'
+      )
+  ).length;
   const prodHealthyCount = apps.filter((a) => a.health?.status === 'healthy').length;
 
   const {
@@ -2749,35 +2806,34 @@ export const App: React.FC = () => {
     };
   }, [appendTerminalLine, finalizeTerminalJob, saveTabToDb]);
 
-  const handleTriggerUnifiSiemAction = useCallback(
-    async (action: UnifiSiemAction) => {
-      if (action === 'deploy' || action === 'stop') {
+  const handleTriggerServiceAction = useCallback(
+    async (app: DiscoveredApp, action: Exclude<ServiceLifecycleAction, 'deploy'>) => {
+      if (action === 'stop') {
         const confirmed = await ask(
-          action === 'deploy'
-            ? 'Build and deploy the hardened unifi-siem CEF Syslog collector container (172.25.25.5:5514/udp) onto wsh.panoramadr.com?\n\nEnsure you have also applied Re-Apply WSH Firewall and configured the UniFi ZBF UDP 5514 allow rule.'
-            : 'Stop and remove the unifi-siem container on wsh.panoramadr.com?',
+          `Stop and remove the ${app.manifest.displayName} container (${app.manifest.containerName || app.manifest.slug}) on wsh.panoramadr.com?`,
           {
-            title:
-              action === 'deploy'
-                ? 'Confirm UniFi SIEM Collector Deployment'
-                : 'Confirm Stop UniFi SIEM Collector',
-            kind: action === 'stop' ? 'warning' : 'info',
-            okLabel: action === 'deploy' ? 'Deploy Collector' : 'Stop Collector',
+            title: `Confirm Stop ${app.manifest.displayName}`,
+            kind: 'warning',
+            okLabel: 'Stop Container',
             cancelLabel: 'Cancel',
           }
         );
         if (!confirmed) return;
       }
 
-      const suiteToolsPath = `${getWorkspaceRoot()}\\PanoramaDrSuite\\tools`;
-      const cmdSpec = buildUnifiSiemCommand(suiteToolsPath, action);
-      const jobId = `unifi-siem-${action}-${Date.now()}`;
-      const labelMap: Record<UnifiSiemAction, string> = {
-        verify_local: 'UniFi SIEM: Verify Local (-VerifyLocal)',
-        test: 'UniFi SIEM: Dry-Run Preflight (-Test)',
-        status: 'UniFi SIEM: Collector Status (-Status)',
-        deploy: 'UniFi SIEM: Deploy Collector to WSH',
-        stop: 'UniFi SIEM: Stop Collector on WSH',
+      const cmdSpec = buildServiceScriptCommand(
+        app.workspacePath,
+        app.manifest.sre.deployScript || './deploy-unifi-siem.ps1',
+        action
+      );
+      const jobId = `deploy-${app.manifest.slug}-${action}-${Date.now()}`;
+      setSelectedReleaseAppSlug(app.manifest.slug);
+      setTrackedDeployJobIds((prev) => ({ ...prev, [app.manifest.slug]: jobId }));
+      const labelMap: Record<Exclude<ServiceLifecycleAction, 'deploy'>, string> = {
+        verify_local: `${app.manifest.displayName}: Verify Local (-VerifyLocal)`,
+        test: `${app.manifest.displayName}: Dry-Run Preflight (-Test)`,
+        status: `${app.manifest.displayName}: Container Status (-Status)`,
+        stop: `${app.manifest.displayName}: Stop Service Container (-Stop)`,
       };
       const title = labelMap[action];
 
@@ -2787,8 +2843,9 @@ export const App: React.FC = () => {
         lines: [`[PanoramaSRE] Invoking ${cmdSpec.scriptPath}...`],
         isRunning: true,
         createdAt: new Date().toISOString(),
-        pageScope: 'settings',
+        pageScope: 'releases',
         source: 'ui',
+        appSlug: app.manifest.slug,
         abortable: true,
       };
       setTerminalTabs((prev) => [...prev, newTab]);
@@ -2811,7 +2868,9 @@ export const App: React.FC = () => {
             if (action !== 'verify_local') {
               await refreshWshTelemetry(true);
             }
-            await refreshThreatIntelState(selectedThreatDetail?.run?.id);
+            if (app.manifest.slug === 'unifi-siem') {
+              await refreshThreatIntelState(selectedThreatDetail?.run?.id);
+            }
             showActionFeedback(
               exitCode === 0 ? `${title} completed cleanly.` : `${title} exited with code ${exitCode}.`,
               exitCode === 0 ? 'success' : 'error',
@@ -2819,18 +2878,17 @@ export const App: React.FC = () => {
             );
           },
           onError: (err) => {
-            failTerminalJob(jobId, `UniFi SIEM command failed: ${err}`);
+            failTerminalJob(jobId, `${app.manifest.displayName} action failed: ${err}`);
           },
         });
       } catch (err) {
-        failTerminalJob(jobId, `UniFi SIEM command failed: ${String(err)}`);
+        failTerminalJob(jobId, `${app.manifest.displayName} action failed: ${String(err)}`);
       }
     },
     [
       appendTerminalLine,
       failTerminalJob,
       finalizeTerminalJob,
-      getWorkspaceRoot,
       refreshThreatIntelState,
       refreshWshTelemetry,
       saveTabToDb,
@@ -3438,6 +3496,10 @@ export const App: React.FC = () => {
                 setDietpiSubTab('crons');
                 setActiveTab('dietpi');
               }}
+              onNavigateToRelease={(slug) => {
+                setSelectedReleaseAppSlug(slug);
+                setActiveTab('releases');
+              }}
               onTriggerFullGfsBackup={() => handleTriggerFullGfsBackup('hud')}
               securityViolationCount={securityViolationCount}
               failingInvariants={failingInvariants}
@@ -3641,6 +3703,9 @@ export const App: React.FC = () => {
                 setSelectedTelemetryAppSlug(slug || 'all');
                 setActiveTab('telemetry');
               }}
+              wshSnapshot={wshSnapshot}
+              onTriggerServiceAction={(app, action) => void handleTriggerServiceAction(app, action)}
+              onReapplyHardening={() => handleReapplyHardening('releases')}
             />
           )}
 
@@ -3728,6 +3793,10 @@ export const App: React.FC = () => {
                 setSettingsNav((prev) => ({ tab: 'security', nonce: prev.nonce + 1 }));
                 setActiveTab('settings');
               }}
+              onNavigateToSiemRelease={() => {
+                setSelectedReleaseAppSlug('unifi-siem');
+                setActiveTab('releases');
+              }}
               wshSnapshot={wshSnapshot}
               terminalTabs={terminalTabs}
               onOpenInBottomConsole={handleOpenInBottomConsole}
@@ -3762,7 +3831,10 @@ export const App: React.FC = () => {
               onEmitSettingsStream={handleEmitSettingsStream}
               onThreatSettingsChanged={(dto) => setThreatSettings(dto)}
               wshSnapshot={wshSnapshot}
-              onTriggerUnifiSiemAction={(action) => void handleTriggerUnifiSiemAction(action)}
+              onNavigateToRelease={(slug) => {
+                setSelectedReleaseAppSlug(slug);
+                setActiveTab('releases');
+              }}
               onReapplyHardening={() => handleReapplyHardening('settings')}
             />
           )}

@@ -39,7 +39,12 @@ export function LocalDevView({
   actionMessage = null,
 }: LocalDevViewProps) {
   const [appSlugFilter, setAppSlugFilter] = useState<string>('all');
-  const runningCount = apps.filter(
+  const devApps = apps.filter(
+    (a) =>
+      a.manifest.hostingTarget !== 'wsh-docker-service' &&
+      Boolean(a.manifest.sre.devCommand?.trim())
+  );
+  const runningCount = devApps.filter(
     (a) => a.devServer?.status === 'RUNNING_MANAGED' || a.devServer?.status === 'RUNNING_EXTERNAL'
   ).length;
 
@@ -68,7 +73,7 @@ export function LocalDevView({
           <div className="flex flex-wrap sm:flex-nowrap items-center gap-3">
             <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20 tabular-nums whitespace-nowrap">
               <span className="w-2 h-2 rounded-full bg-emerald-500 dark:bg-emerald-400"></span>
-              {runningCount} / {apps.length} Dev Servers Active
+              {runningCount} / {devApps.length} Dev Servers Active
             </span>
 
             <button
@@ -101,7 +106,7 @@ export function LocalDevView({
 
       {/* Grid of Dev Server Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {apps.map((app) => (
+        {devApps.map((app) => (
           <DevServerCard
             key={app.manifest.slug}
             app={app}
@@ -135,7 +140,7 @@ export function LocalDevView({
             >
               All Apps
             </button>
-            {apps.map((app) => {
+            {devApps.map((app) => {
               const selected = appSlugFilter === app.manifest.appId;
               return (
                 <button

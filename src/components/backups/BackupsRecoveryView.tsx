@@ -143,9 +143,12 @@ export function BackupsRecoveryView({
   isIncidentDismissed = false,
   onDismissIncident,
 }: BackupsRecoveryViewProps) {
-  // Filter only DietPi WSH applications backed by an operational SQLite database (exclude Cloudflare Pages / D1 apps)
+  // Filter only DietPi WSH applications backed by an operational SQLite database (exclude Cloudflare Pages & headless services)
   const dbApps = apps.filter(
-    (a) => a.manifest.hasDatabase !== false && a.manifest.hostingTarget !== 'cloudflare-pages'
+    (a) =>
+      a.manifest.hasDatabase !== false &&
+      a.manifest.hostingTarget !== 'cloudflare-pages' &&
+      a.manifest.hostingTarget !== 'wsh-docker-service'
   );
   const [expandedRunIdx, setExpandedRunIdx] = useState<number | null>(null);
   const [selectedAppId, setSelectedAppId] = useState<string>(dbApps[0]?.manifest.appId || '');

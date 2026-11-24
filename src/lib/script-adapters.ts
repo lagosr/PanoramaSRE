@@ -166,19 +166,26 @@ export function buildCloudflareTunnelCommand(
   };
 }
 
-export type UnifiSiemAction = 'verify_local' | 'status' | 'deploy' | 'test' | 'stop';
+export type ServiceLifecycleAction = 'verify_local' | 'status' | 'deploy' | 'test' | 'stop';
 
-export function buildUnifiSiemCommand(
-  toolsPath: string,
-  action: UnifiSiemAction
+export function buildServiceScriptCommand(
+  workspacePath: string,
+  deployScript = './deploy-unifi-siem.ps1',
+  action: ServiceLifecycleAction,
+  options: { allowDirty?: boolean } = {}
 ): ScriptActionExecution {
-  const scriptPath = `${toolsPath}\\unifi-siem\\deploy-unifi-siem.ps1`;
-  const args: string[] = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath];
+  const normalizedScript = deployScript.startsWith('./') || deployScript.startsWith('.\\')
+    ? deployScript.replace(/\//g, '\\')
+    : `.\\${deployScript.replace(/^[./\\]+/, '').replace(/\//g, '\\')}`;
+  const cleanDir = workspacePath.replace(/[\\/]+$/, '');
+  const scriptPath = `${cleanDir}\\${normalizedScript.replace(/^\.\\/, '')}`;
+  const args: string[] = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', normalizedScript];
 
   if (action === 'verify_local') args.push('-VerifyLocal');
   if (action === 'status') args.push('-Status');
   if (action === 'test') args.push('-Test');
   if (action === 'stop') args.push('-Stop');
+  if (action === 'deploy' && options.allowDirty) args.push('-AllowDirty');
 
   return {
     scriptPath,
@@ -186,7 +193,7 @@ export function buildUnifiSiemCommand(
     args,
     lockType: action === 'deploy' || action === 'stop' ? 'WshRemoteMutation' : 'None',
     elevated: false,
-    workingDir: `${toolsPath}\\unifi-siem`,
+    workingDir: cleanDir,
   };
 }
 

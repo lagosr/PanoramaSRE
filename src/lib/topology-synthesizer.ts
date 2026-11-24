@@ -132,7 +132,9 @@ export function synthesizeTopology(
   snapshot: WshSnapshot | null,
   tunnelVersionStatus?: CloudflareTunnelVersionStatus | null
 ): SynthesizedTopology {
-  const wshApps = apps.filter((a) => a.manifest.hostingTarget !== 'cloudflare-pages');
+  const wshApps = apps.filter(
+    (a) => !a.manifest.hostingTarget || a.manifest.hostingTarget === 'wsh-docker'
+  );
 
   // 1. Parse raw Lighttpd routes
   const rawRoutePairs = (snapshot?.lighttpd_routes_raw || '')

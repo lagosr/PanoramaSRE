@@ -55,10 +55,14 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
 
   const wasOpenRef = useRef(false);
 
-  const wshApps = apps.filter((a) => a.manifest.hostingTarget !== 'cloudflare-pages');
+  const wshApps = apps.filter(
+    (a) => !a.manifest.hostingTarget || a.manifest.hostingTarget === 'wsh-docker'
+  );
 
   useEffect(() => {
-    const deployableApps = apps.filter((a) => a.manifest.hostingTarget !== 'cloudflare-pages');
+    const deployableApps = apps.filter(
+      (a) => !a.manifest.hostingTarget || a.manifest.hostingTarget === 'wsh-docker'
+    );
     if (isOpen && !wasOpenRef.current) {
       // First time the modal opens: initialize state
       wasOpenRef.current = true;

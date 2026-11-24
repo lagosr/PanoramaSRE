@@ -109,6 +109,23 @@ pub fn compute_normalized_lf_sha256(content: &str) -> String {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ServiceConfigDto {
+    pub protocol: String,
+    pub bind_ip: String,
+    pub network_name: String,
+    pub network_subnet: String,
+    #[serde(default)]
+    pub host_env_path: Option<String>,
+    #[serde(default)]
+    pub host_log_path: Option<String>,
+    #[serde(default)]
+    pub optional_deployment: bool,
+    #[serde(default)]
+    pub requires_wsh_firewall: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SreConfigDto {
     #[serde(default)]
     pub deploy_script: Option<String>,
@@ -120,6 +137,8 @@ pub struct SreConfigDto {
     pub preview_command: Option<String>,
     #[serde(default)]
     pub health_endpoint: Option<String>,
+    #[serde(default)]
+    pub health_check_mode: Option<String>,
     #[serde(default)]
     pub health_auth_mode: Option<String>,
     #[serde(default)]
@@ -134,6 +153,16 @@ pub struct SreConfigDto {
     pub automated_backup_default: bool,
     #[serde(default = "default_true")]
     pub expose_in_remote_portal: bool,
+    #[serde(default)]
+    pub supports_rollback: Option<bool>,
+    #[serde(default)]
+    pub supports_dry_run: Option<bool>,
+    #[serde(default)]
+    pub supports_verify_local: Option<bool>,
+    #[serde(default)]
+    pub supports_status: Option<bool>,
+    #[serde(default)]
+    pub supports_stop: Option<bool>,
     #[serde(default)]
     pub cron_jobs: Vec<CronJobDto>,
     #[serde(default)]
@@ -176,6 +205,8 @@ pub struct AppManifestDto {
     pub requires_auth_in_dev: bool,
     #[serde(default)]
     pub cloudflare: Option<CloudflareConfigDto>,
+    #[serde(default)]
+    pub service: Option<ServiceConfigDto>,
     #[serde(default)]
     pub sre: Option<SreConfigDto>,
 }
@@ -318,6 +349,154 @@ pub async fn save_workspace_setting(
     Ok(resolved.to_string_lossy().to_string())
 }
 
+pub fn load_manifest_from_dir(path: &Path) -> Option<DiscoveredAppDto> {
+    if !path.is_dir() {
+        return None;
+    }
+    let manifest_path = path.join("panorama.app.json");
+    if !manifest_path.exists() {
+        return None;
+    }
+    let content = fs::read_to_string(&manifest_path).ok()?;
+    let content_clean = content.trim_start_matches('\u{feff}');
+    let manifest_val = serde_json::from_str::<serde_json::Value>(content_clean).ok()?;
+    let slug = manifest_val["slug"].as_str().unwrap_or("").to_string();
+    if slug.is_empty() {
+        return None;
+    }
+    // Exclude desktop control plane itself
+    let app_id_str = manifest_val["appId"].as_str().unwrap_or(&slug);
+    if slug == "sre" || app_id_str == "sre" {
+        return None;
+    }
+
+    let display_name = manifest_val["displayName"]
+        .as_str()
+        .unwrap_or(&slug)
+        .to_string();
+    let base_path = manifest_val["basePath"].as_str().unwrap_or("").to_string();
+    let port = manifest_val["port"].as_u64().unwrap_or(3000) as u16;
+    let hosting_target = manifest_val
+        .get("hostingTarget")
+        .and_then(|v| v.as_str())
+        .unwrap_or("wsh-docker")
+        .to_string();
+    let sre_block = manifest_val.get("sre");
+    let mut sre_dto = sre_block
+        .and_then(|v| serde_json::from_value::<SreConfigDto>(v.clone()).ok());
+    if let Some(ref mut sre) = sre_dto {
+        for job in sre.cron_jobs.iter_mut() {
+            let rel_clean = job.script.trim().replace('\\', "/");
+            if rel_clean.starts_with("scripts/") && !rel_clean.contains("..") {
+                let script_path = path.join(rel_clean.replace('/', std::path::MAIN_SEPARATOR_STR));
+                if let Ok(raw) = fs::read_to_string(&script_path) {
+                    job.local_script_exists = true;
+                    job.local_script_sha256 = Some(compute_normalized_lf_sha256(&raw));
+                } else {
+                    job.local_script_exists = false;
+                    job.local_script_sha256 = None;
+                }
+            } else {
+                job.local_script_exists = false;
+                job.local_script_sha256 = None;
+            }
+        }
+    }
+    let cloudflare_dto = manifest_val
+        .get("cloudflare")
+        .and_then(|v| serde_json::from_value::<CloudflareConfigDto>(v.clone()).ok());
+    let service_dto = manifest_val
+        .get("service")
+        .and_then(|v| serde_json::from_value::<ServiceConfigDto>(v.clone()).ok());
+
+    let dev_command = sre_dto
+        .as_ref()
+        .and_then(|s| s.dev_command.clone())
+        .or_else(|| {
+            sre_block
+                .and_then(|s| s.get("devCommand"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        });
+    let requires_auth_in_dev = sre_block
+        .and_then(|s| s.get("requiresAuthInDev"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(
+            hosting_target == "wsh-docker" && slug != "auth" && slug != "res",
+        );
+
+    let dto = AppManifestDto {
+        schema_version: manifest_val["schemaVersion"].as_i64().map(|v| v as i32),
+        app_id: manifest_val["appId"].as_str().map(|s| s.to_string()),
+        slug,
+        hosting_target,
+        display_name,
+        portal_title: manifest_val["portalTitle"].as_str().map(|s| s.to_string()),
+        description: manifest_val["description"].as_str().map(|s| s.to_string()),
+        base_path,
+        port,
+        container_name: manifest_val["containerName"].as_str().map(|s| s.to_string()),
+        remote_app_root: manifest_val["remoteAppRoot"].as_str().map(|s| s.to_string()),
+        data_volume: manifest_val["dataVolume"].as_str().map(|s| s.to_string()),
+        local_sqlite_path: manifest_val["localSqlitePath"].as_str().map(|s| s.to_string()),
+        theme_color: manifest_val["themeColor"].as_str().map(|s| s.to_string()),
+        icon: manifest_val["icon"].as_str().map(|s| s.to_string()),
+        has_database: manifest_val
+            .get("hasDatabase")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
+        portal_order: manifest_val
+            .get("portalOrder")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32),
+        dev_command,
+        requires_auth_in_dev,
+        cloudflare: cloudflare_dto,
+        service: service_dto,
+        sre: sre_dto,
+    };
+
+    Some(DiscoveredAppDto {
+        manifest: dto,
+        workspace_path: path.to_string_lossy().to_string(),
+        manifest_path: manifest_path.to_string_lossy().to_string(),
+    })
+}
+
+pub fn discover_suite_apps_in_root(root: &Path) -> Result<Vec<DiscoveredAppDto>, String> {
+    let mut apps = Vec::new();
+    let mut seen_slugs = std::collections::HashSet::new();
+    let entries = fs::read_dir(root).map_err(|e| format!("Failed to read workspace root: {}", e))?;
+
+    for entry in entries.flatten() {
+        if let Some(app) = load_manifest_from_dir(&entry.path()) {
+            let key = app.manifest.slug.to_lowercase();
+            if seen_slugs.insert(key) {
+                apps.push(app);
+            }
+        }
+    }
+
+    // Also discover first-class containerized tools/services nested under PanoramaDrSuite/tools/*
+    let suite_tools_dir = root.join("PanoramaDrSuite").join("tools");
+    if suite_tools_dir.is_dir() {
+        if let Ok(tool_entries) = fs::read_dir(&suite_tools_dir) {
+            for entry in tool_entries.flatten() {
+                if let Some(app) = load_manifest_from_dir(&entry.path()) {
+                    let key = app.manifest.slug.to_lowercase();
+                    if seen_slugs.insert(key) {
+                        apps.push(app);
+                    }
+                }
+            }
+        }
+    }
+
+    // Sort stably by port
+    apps.sort_by_key(|a| a.manifest.port);
+    Ok(apps)
+}
+
 pub fn discover_suite_apps_internal(
     db: &Arc<Mutex<SreDatabase>>,
     workspace_root: Option<String>,
@@ -334,118 +513,7 @@ pub fn discover_suite_apps_internal(
     };
 
     let root = resolve_suite_workspace_root(configured.as_deref());
-
-    let mut apps = Vec::new();
-    let entries = fs::read_dir(&root).map_err(|e| format!("Failed to read workspace root: {}", e))?;
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            let manifest_path = path.join("panorama.app.json");
-            if manifest_path.exists() {
-                if let Ok(content) = fs::read_to_string(&manifest_path) {
-                    // Normalize JSON and deserialize
-                    let content_clean = content.trim_start_matches('\u{feff}');
-                    if let Ok(manifest_val) = serde_json::from_str::<serde_json::Value>(content_clean) {
-                        let slug = manifest_val["slug"].as_str().unwrap_or("").to_string();
-                        let display_name = manifest_val["displayName"].as_str().unwrap_or(&slug).to_string();
-                        let base_path = manifest_val["basePath"].as_str().unwrap_or("").to_string();
-                        let port = manifest_val["port"].as_u64().unwrap_or(3000) as u16;
-
-                        // Exclude desktop control plane itself or non-web apps
-                        let app_id_str = manifest_val["appId"].as_str().unwrap_or(&slug);
-                        if slug == "sre" || app_id_str == "sre" {
-                            continue;
-                        }
-
-                        if !slug.is_empty() {
-                            let hosting_target = manifest_val
-                                .get("hostingTarget")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("wsh-docker")
-                                .to_string();
-                            let sre_block = manifest_val.get("sre");
-                            let mut sre_dto = sre_block
-                                .and_then(|v| serde_json::from_value::<SreConfigDto>(v.clone()).ok());
-                            if let Some(ref mut sre) = sre_dto {
-                                for job in sre.cron_jobs.iter_mut() {
-                                    let rel_clean = job.script.trim().replace('\\', "/");
-                                    if rel_clean.starts_with("scripts/") && !rel_clean.contains("..") {
-                                        let script_path = path.join(rel_clean.replace('/', std::path::MAIN_SEPARATOR_STR));
-                                        if let Ok(raw) = fs::read_to_string(&script_path) {
-                                            job.local_script_exists = true;
-                                            job.local_script_sha256 = Some(compute_normalized_lf_sha256(&raw));
-                                        } else {
-                                            job.local_script_exists = false;
-                                            job.local_script_sha256 = None;
-                                        }
-                                    } else {
-                                        job.local_script_exists = false;
-                                        job.local_script_sha256 = None;
-                                    }
-                                }
-                            }
-                            let cloudflare_dto = manifest_val
-                                .get("cloudflare")
-                                .and_then(|v| serde_json::from_value::<CloudflareConfigDto>(v.clone()).ok());
-
-                            let dev_command = sre_dto
-                                .as_ref()
-                                .and_then(|s| s.dev_command.clone())
-                                .or_else(|| {
-                                    sre_block
-                                        .and_then(|s| s.get("devCommand"))
-                                        .and_then(|v| v.as_str())
-                                        .map(|s| s.to_string())
-                                });
-                            let requires_auth_in_dev = sre_block
-                                .and_then(|s| s.get("requiresAuthInDev"))
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(
-                                    hosting_target != "cloudflare-pages"
-                                        && slug != "auth"
-                                        && slug != "res",
-                                );
-
-                            let dto = AppManifestDto {
-                                schema_version: manifest_val["schemaVersion"].as_i64().map(|v| v as i32),
-                                app_id: manifest_val["appId"].as_str().map(|s| s.to_string()),
-                                slug,
-                                hosting_target,
-                                display_name,
-                                portal_title: manifest_val["portalTitle"].as_str().map(|s| s.to_string()),
-                                description: manifest_val["description"].as_str().map(|s| s.to_string()),
-                                base_path,
-                                port,
-                                container_name: manifest_val["containerName"].as_str().map(|s| s.to_string()),
-                                remote_app_root: manifest_val["remoteAppRoot"].as_str().map(|s| s.to_string()),
-                                data_volume: manifest_val["dataVolume"].as_str().map(|s| s.to_string()),
-                                local_sqlite_path: manifest_val["localSqlitePath"].as_str().map(|s| s.to_string()),
-                                theme_color: manifest_val["themeColor"].as_str().map(|s| s.to_string()),
-                                icon: manifest_val["icon"].as_str().map(|s| s.to_string()),
-                                has_database: manifest_val.get("hasDatabase").and_then(|v| v.as_bool()).unwrap_or(true),
-                                portal_order: manifest_val.get("portalOrder").and_then(|v| v.as_u64()).map(|v| v as u32),
-                                dev_command,
-                                requires_auth_in_dev,
-                                cloudflare: cloudflare_dto,
-                                sre: sre_dto,
-                            };
-
-                            apps.push(DiscoveredAppDto {
-                                manifest: dto,
-                                workspace_path: path.to_string_lossy().to_string(),
-                                manifest_path: manifest_path.to_string_lossy().to_string(),
-                            });
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Sort stably by port
-    apps.sort_by_key(|a| a.manifest.port);
-    Ok(apps)
+    discover_suite_apps_in_root(&root)
 }
 
 #[tauri::command]

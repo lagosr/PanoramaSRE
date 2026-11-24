@@ -27,13 +27,11 @@ import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { CustomSelect } from '../ui/CustomSelect';
 import { WorkStreamContainer } from '../ui/WorkStreamContainer';
-import { UnifiSiemSettingsCard } from './UnifiSiemSettingsCard';
 import { filterTabsForScope } from '../../lib/stream-utils';
 import { SegmentedControl, StatusBadge, ToggleSwitch } from '@lagosr/panorama-ui-kit';
 import { formatConsoleLine, stripAnsiCodes } from '../layout/ConsoleColorizer';
 import { useSmartAutoScroll } from '../../hooks/useSmartAutoScroll';
 import { APP_VERSION_INFO } from '../../lib/version';
-import type { UnifiSiemAction } from '../../lib/script-adapters';
 import {
   PushoverPreferences,
   PushoverSendReceipt,
@@ -110,7 +108,7 @@ interface SettingsViewProps {
   onEmitSettingsStream?: (title: string, lines: string[], exitCode?: number) => void;
   onThreatSettingsChanged?: (dto: ThreatIntelSettingsViewDto) => void;
   wshSnapshot?: WshSnapshot | null;
-  onTriggerUnifiSiemAction?: (action: UnifiSiemAction) => void;
+  onNavigateToRelease?: (slug: string) => void;
   onReapplyHardening?: () => void;
 }
 
@@ -143,7 +141,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onEmitSettingsStream,
   onThreatSettingsChanged,
   wshSnapshot = null,
-  onTriggerUnifiSiemAction,
+  onNavigateToRelease,
   onReapplyHardening,
 }) => {
   const { theme, resolvedTheme, setTheme } = useTheme();
@@ -1327,11 +1325,48 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
             </div>
 
-            <UnifiSiemSettingsCard
-              containers={wshSnapshot?.containers || []}
-              onTriggerUnifiSiemAction={onTriggerUnifiSiemAction}
-              onReapplyHardening={onReapplyHardening}
-            />
+            {(() => {
+              const siemContainer = (wshSnapshot?.containers || []).find(
+                (c) => (c.Names || '').replace(/^\//, '').toLowerCase() === 'unifi-siem'
+              );
+              const siemRunning = siemContainer?.State?.toLowerCase() === 'running';
+              return (
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="space-y-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Server className="w-4 h-4 text-[var(--color-brand-text)] shrink-0" />
+                      <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                        UniFi SIEM Collector (unifi-siem on WSH)
+                      </h3>
+                      <StatusBadge
+                        label={
+                          siemRunning
+                            ? 'Container: Running'
+                            : siemContainer
+                            ? `Container: ${siemContainer.State || 'Stopped'}`
+                            : 'Container: Not Deployed'
+                        }
+                        variant={siemRunning ? 'success' : siemContainer ? 'warning' : 'neutral'}
+                      />
+                    </div>
+                    <p className="text-xs text-slate-600 dark:text-slate-400">
+                      Preconfigured via <code className="font-mono">.env.siem</code> /{' '}
+                      <code className="font-mono">config.json</code> and deployed alongside suite services in{' '}
+                      <strong>Releases &amp; Drift</strong>.
+                    </p>
+                  </div>
+                  {onNavigateToRelease && (
+                    <button
+                      type="button"
+                      onClick={() => onNavigateToRelease('unifi-siem')}
+                      className="btn-primary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                    >
+                      <span>Open in Releases &amp; Drift</span>
+                    </button>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         )}
 
@@ -1957,7 +1992,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         )}
 
-        {activeTab !== 'logs' && (activeTab === 'security' || hasSettingsStreamTabs) && (
+        {activeTab !== 'logs' && hasSettingsStreamTabs && (
           <div className="w-full max-w-[1920px] mx-auto">
             <WorkStreamContainer
               pageScope="settings"

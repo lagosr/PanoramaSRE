@@ -786,10 +786,11 @@ pub async fn process_ipc_message(
                     }
                 }
 
-                for app in apps
-                    .iter()
-                    .filter(|a| a.manifest.slug != "auth" && a.manifest.hosting_target != "cloudflare-pages")
-                {
+                for app in apps.iter().filter(|a| {
+                    a.manifest.slug != "auth"
+                        && a.manifest.hosting_target == "wsh-docker"
+                        && !a.manifest.dev_command.as_deref().unwrap_or("").trim().is_empty()
+                }) {
                     let app_id = app
                         .manifest
                         .app_id
@@ -1181,59 +1182,65 @@ pub async fn process_ipc_message(
                         .app_id
                         .clone()
                         .unwrap_or_else(|| app.manifest.slug.clone());
-                    let is_cf = app.manifest.hosting_target == "cloudflare-pages";
-                    let health_url = if is_cf {
-                        let base_origin = app
-                            .manifest
-                            .cloudflare
-                            .as_ref()
-                            .map(|c| c.primary_url.trim_end_matches('/').to_string())
-                            .unwrap_or_else(|| "https://www.parakith.com".to_string());
-                        let ep = app
-                            .manifest
-                            .sre
-                            .as_ref()
-                            .and_then(|s| s.health_endpoint.clone())
-                            .unwrap_or_else(|| "/api/health".to_string());
-                        format!("{}{}", base_origin, ep)
-                    } else {
-                        format!("https://wsh.panoramadr.com{}/api/health", app.manifest.base_path)
-                    };
-                    let auth_mode = app
-                        .manifest
-                        .sre
-                        .as_ref()
-                        .and_then(|s| s.health_auth_mode.clone());
-                    let probed = probe_app_health(
-                        app_id.clone(),
-                        health_url,
-                        Some(3000),
-                        auth_mode,
-                        Some(app.workspace_path.clone()),
-                    )
-                    .await;
-                    let prod_sha = probed
-                        .health
-                        .as_ref()
-                        .and_then(|h| h.release.as_ref())
-                        .and_then(|r| r.get("commit_sha"))
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
-                    let prod_release_id = probed.health.as_ref().and_then(|h| {
-                        h.release
-                            .as_ref()
-                            .and_then(|r| r.get("release_id"))
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string())
-                            .or_else(|| h.version.as_ref().map(|v| format!("v{}", v)))
-                    });
-                    let prod_dirty = probed
-                        .health
-                        .as_ref()
-                        .and_then(|h| h.release.as_ref())
-                        .and_then(|r| r.get("dirty"))
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
+                    let (prod_sha, prod_release_id, prod_dirty) =
+                        if app.manifest.hosting_target == "wsh-docker-service" {
+                            (None, None, false)
+                        } else {
+                            let is_cf = app.manifest.hosting_target == "cloudflare-pages";
+                            let health_url = if is_cf {
+                                let base_origin = app
+                                    .manifest
+                                    .cloudflare
+                                    .as_ref()
+                                    .map(|c| c.primary_url.trim_end_matches('/').to_string())
+                                    .unwrap_or_else(|| "https://www.parakith.com".to_string());
+                                let ep = app
+                                    .manifest
+                                    .sre
+                                    .as_ref()
+                                    .and_then(|s| s.health_endpoint.clone())
+                                    .unwrap_or_else(|| "/api/health".to_string());
+                                format!("{}{}", base_origin, ep)
+                            } else {
+                                format!("https://wsh.panoramadr.com{}/api/health", app.manifest.base_path)
+                            };
+                            let auth_mode = app
+                                .manifest
+                                .sre
+                                .as_ref()
+                                .and_then(|s| s.health_auth_mode.clone());
+                            let probed = probe_app_health(
+                                app_id.clone(),
+                                health_url,
+                                Some(3000),
+                                auth_mode,
+                                Some(app.workspace_path.clone()),
+                            )
+                            .await;
+                            let prod_sha = probed
+                                .health
+                                .as_ref()
+                                .and_then(|h| h.release.as_ref())
+                                .and_then(|r| r.get("commit_sha"))
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
+                            let prod_release_id = probed.health.as_ref().and_then(|h| {
+                                h.release
+                                    .as_ref()
+                                    .and_then(|r| r.get("release_id"))
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string())
+                                    .or_else(|| h.version.as_ref().map(|v| format!("v{}", v)))
+                            });
+                            let prod_dirty = probed
+                                .health
+                                .as_ref()
+                                .and_then(|h| h.release.as_ref())
+                                .and_then(|r| r.get("dirty"))
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+                            (prod_sha, prod_release_id, prod_dirty)
+                        };
 
                     compute_app_composition(
                         app_id,

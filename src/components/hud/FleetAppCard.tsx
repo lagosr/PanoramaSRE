@@ -1,7 +1,7 @@
 import { DiscoveredApp, AppBackupDetail, OptInComplianceSnapshot } from '../../lib/types';
 import { ProvenanceBadge } from '../ui/ProvenanceBadge';
 import { BlastRadiusBadge } from '../ui/BlastRadiusBadge';
-import { AlertCircle, HardDriveDownload, XCircle, Globe, MessageSquare } from 'lucide-react';
+import { AlertCircle, HardDriveDownload, XCircle, Globe, MessageSquare, Server } from 'lucide-react';
 
 interface FleetAppCardProps {
   app: DiscoveredApp;
@@ -10,6 +10,7 @@ interface FleetAppCardProps {
   onOpenApp: (url: string) => void;
   onInspectComposition: (app: DiscoveredApp) => void;
   onNavigateToOptIns?: () => void;
+  onNavigateToRelease?: (slug: string) => void;
 }
 
 export function FleetAppCard({
@@ -19,16 +20,25 @@ export function FleetAppCard({
   onOpenApp,
   onInspectComposition,
   onNavigateToOptIns,
+  onNavigateToRelease,
 }: FleetAppCardProps) {
   const isEdgePages = app.manifest.hostingTarget === 'cloudflare-pages';
+  const isWshService = app.manifest.hostingTarget === 'wsh-docker-service';
+  const isOptionalNotDeployed =
+    isWshService &&
+    Boolean(app.manifest.service?.optionalDeployment) &&
+    app.health?.status === 'not_deployed';
   const appPublicUrl = isEdgePages
     ? app.manifest.cloudflare?.primaryUrl || 'https://www.parakith.com'
     : `https://wsh.panoramadr.com${app.manifest.basePath}`;
   const isHealthy = app.health?.status === 'healthy';
   const release = app.health?.release;
   const latency = app.latencyMs ?? 0;
-  const isBackupFailed = !isEdgePages && backupStatus?.status?.toLowerCase() === 'failed';
-  const isCritical = !isHealthy || app.provenanceState === 'PROD_UNREACHABLE' || app.provenanceState === 'DIRTY_PROD';
+  const isBackupFailed =
+    !isEdgePages && !isWshService && backupStatus?.status?.toLowerCase() === 'failed';
+  const isCritical =
+    !isOptionalNotDeployed &&
+    (!isHealthy || app.provenanceState === 'PROD_UNREACHABLE' || app.provenanceState === 'DIRTY_PROD');
 
   return (
     <article
@@ -90,6 +100,12 @@ export function FleetAppCard({
                     EDGE • CF PAGES
                   </span>
                 )}
+                {isWshService && (
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-mono font-bold uppercase tracking-wider bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 shrink-0">
+                    <Server className="w-2.5 h-2.5" />
+                    WSH SERVICE
+                  </span>
+                )}
                 {isCritical && (
                   <span className="inline-block w-2 h-2 rounded-full bg-rose-500 animate-ping shrink-0" title="Unhealthy" />
                 )}
@@ -100,6 +116,8 @@ export function FleetAppCard({
               <p className="text-xs text-slate-600 dark:text-slate-400 font-mono tabular-nums truncate">
                 {isEdgePages
                   ? `Port ${app.manifest.port} (dev) • ${app.manifest.cloudflare?.domains?.[0] || 'Cloudflare Pages'}`
+                  : isWshService
+                  ? `${app.manifest.service?.bindIp || '172.25.25.5'}:${app.manifest.port}/${app.manifest.service?.protocol || 'udp'} • ${app.manifest.service?.networkName || app.manifest.composeProject}`
                   : `Port ${app.manifest.port} • ${app.manifest.basePath}`}
               </p>
             </div>
@@ -111,7 +129,11 @@ export function FleetAppCard({
               aheadCount={app.composition?.ahead_count}
               behindCount={app.composition?.behind_count}
             />
-            {app.health ? (
+            {isOptionalNotDeployed ? (
+              <span className="text-[10px] font-mono tabular-nums px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 font-semibold">
+                NOT DEPLOYED
+              </span>
+            ) : app.health ? (
               <span
                 className={`text-[10px] font-mono tabular-nums px-1.5 py-0.5 rounded font-semibold ${
                   isHealthy
@@ -119,7 +141,13 @@ export function FleetAppCard({
                     : 'bg-rose-500/20 text-rose-800 dark:text-rose-300 border border-rose-500/40 animate-pulse'
                 }`}
               >
-                {isHealthy ? `${latency}ms` : 'FAIL'}
+                {isHealthy
+                  ? isWshService
+                    ? 'RUNNING'
+                    : `${latency}ms`
+                  : isWshService
+                  ? 'STOPPED'
+                  : 'FAIL'}
               </span>
             ) : (
               <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-800 dark:text-rose-300 border border-rose-500/40 animate-pulse font-semibold">
@@ -149,7 +177,15 @@ export function FleetAppCard({
                 isCritical ? 'text-rose-800 dark:text-rose-300' : 'text-slate-900 dark:text-slate-200'
               }`}
             >
-              {release ? release.release_id : app.health?.version ? `v${app.health.version} (Legacy)` : 'Unreachable'}
+              {isWshService
+                ? isOptionalNotDeployed
+                  ? 'Not Deployed (Optional)'
+                  : app.health?.deployed_at || 'Deployed on WSH'
+                : release
+                ? release.release_id
+                : app.health?.version
+                ? `v${app.health.version} (Legacy)`
+                : 'Unreachable'}
             </span>
           </div>
 
@@ -160,7 +196,7 @@ export function FleetAppCard({
             </span>
           </div>
 
-          {!isEdgePages && backupStatus && (
+          {!isEdgePages && !isWshService && backupStatus && (
             <div className="flex items-center justify-between gap-2">
               <span className="text-slate-600 dark:text-slate-400 shrink-0">DB Backup:</span>
               <span
@@ -220,15 +256,25 @@ export function FleetAppCard({
         >
           Inspect Drift
         </button>
-        <button
-          onClick={() => onOpenApp(appPublicUrl)}
-          className={`${isCritical ? 'btn-danger' : 'btn-primary'} py-1.5 px-3 text-xs`}
-        >
-          <span>Open</span>
-          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3" />
-          </svg>
-        </button>
+        {isWshService && onNavigateToRelease ? (
+          <button
+            type="button"
+            onClick={() => onNavigateToRelease(app.manifest.slug)}
+            className="btn-primary py-1.5 px-3 text-xs whitespace-nowrap flex-shrink-0"
+          >
+            <span>Manage Release</span>
+          </button>
+        ) : (
+          <button
+            onClick={() => onOpenApp(appPublicUrl)}
+            className={`${isCritical ? 'btn-danger' : 'btn-primary'} py-1.5 px-3 text-xs`}
+          >
+            <span>Open</span>
+            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3" />
+            </svg>
+          </button>
+        )}
       </div>
     </article>
   );

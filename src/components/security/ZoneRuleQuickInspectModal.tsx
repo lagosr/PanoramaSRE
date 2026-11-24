@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { BottomSheetModal, StatusBadge } from '@lagosr/panorama-ui-kit';
+import { CopyableAddressText, CopyableValue } from '../ui/CopyableValue';
 import {
   ArrowLeftRight,
   ArrowRight,
@@ -287,7 +288,14 @@ export const ZoneRuleQuickInspectModal: React.FC<ZoneRuleQuickInspectModalProps>
                 })}
               </div>
               <div className="text-[11px] font-mono text-slate-600 dark:text-slate-400 tabular-nums">
-                {srcSubnets.length > 0 ? srcSubnets.join(', ') : 'System scope'}
+                {srcSubnets.length > 0
+                  ? srcSubnets.map((cidr, idx) => (
+                      <React.Fragment key={cidr}>
+                        {idx > 0 && ', '}
+                        <CopyableValue value={cidr} label="source subnet CIDR" />
+                      </React.Fragment>
+                    ))
+                  : 'System scope'}
                 {srcZone ? ` • ${srcZone.clientCount} client(s)` : ''}
               </div>
             </div>
@@ -319,7 +327,14 @@ export const ZoneRuleQuickInspectModal: React.FC<ZoneRuleQuickInspectModalProps>
                 })}
               </div>
               <div className="text-[11px] font-mono text-slate-600 dark:text-slate-400 tabular-nums">
-                {dstSubnets.length > 0 ? dstSubnets.join(', ') : 'System scope'}
+                {dstSubnets.length > 0
+                  ? dstSubnets.map((cidr, idx) => (
+                      <React.Fragment key={cidr}>
+                        {idx > 0 && ', '}
+                        <CopyableValue value={cidr} label="destination subnet CIDR" />
+                      </React.Fragment>
+                    ))
+                  : 'System scope'}
                 {dstZone ? ` • ${dstZone.clientCount} client(s)` : ''}
               </div>
             </div>
@@ -461,7 +476,10 @@ export const ZoneRuleQuickInspectModal: React.FC<ZoneRuleQuickInspectModalProps>
                             Source Criteria
                           </span>
                           <span className="font-mono text-slate-800 dark:text-slate-200 text-right break-all">
-                            {pol.sourceFilterSummary || 'Any source in zone'}
+                            <CopyableAddressText
+                              text={pol.sourceFilterSummary}
+                              fallback="Any source in zone"
+                            />
                           </span>
                         </div>
                         <div className="flex items-baseline justify-between gap-2">
@@ -469,7 +487,10 @@ export const ZoneRuleQuickInspectModal: React.FC<ZoneRuleQuickInspectModalProps>
                             Destination Criteria
                           </span>
                           <span className="font-mono text-slate-800 dark:text-slate-200 text-right break-all">
-                            {pol.destinationFilterSummary || 'Any destination in zone'}
+                            <CopyableAddressText
+                              text={pol.destinationFilterSummary}
+                              fallback="Any destination in zone"
+                            />
                           </span>
                         </div>
                         <div className="flex items-baseline justify-between gap-2">

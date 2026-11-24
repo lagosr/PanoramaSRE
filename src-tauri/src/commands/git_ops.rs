@@ -180,12 +180,46 @@ pub async fn compute_app_composition(
     prod_dirty: bool,
 ) -> Result<AppCompositionReport, String> {
     let repo = Path::new(&repo_path);
+    let sub_prefix = run_git(repo, &["rev-parse", "--show-prefix"])
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let toplevel_raw = run_git(repo, &["rev-parse", "--show-toplevel"]).unwrap_or_default();
+    let canon_repo = std::fs::canonicalize(repo).ok();
+    let canon_top = if toplevel_raw.is_empty() {
+        None
+    } else {
+        std::fs::canonicalize(Path::new(&toplevel_raw)).ok()
+    };
+    let is_nested_subdir = !sub_prefix.is_empty()
+        || matches!((canon_repo, canon_top), (Some(ref r), Some(ref t)) if r != t);
+    let normalize_rel_path = |raw_path: String| -> String {
+        if is_nested_subdir && !sub_prefix.is_empty() {
+            raw_path
+                .strip_prefix(&sub_prefix)
+                .map(|s| s.to_string())
+                .unwrap_or(raw_path)
+        } else {
+            raw_path
+        }
+    };
+
     let head_sha = run_git(repo, &["rev-parse", "HEAD"])?;
     let head_short = head_sha.chars().take(7).collect::<String>();
     let branch = run_git(repo, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_else(|_| "HEAD".into());
 
-    let porcelain = run_git_raw(repo, &["status", "--porcelain"]).unwrap_or_default();
-    let dirty_files = parse_porcelain_dirty_files(&porcelain);
+    let porcelain = if is_nested_subdir {
+        run_git_raw(repo, &["status", "--porcelain", "--", "."]).unwrap_or_default()
+    } else {
+        run_git_raw(repo, &["status", "--porcelain"]).unwrap_or_default()
+    };
+    let dirty_files: Vec<ChangedFileItem> = parse_porcelain_dirty_files(&porcelain)
+        .into_iter()
+        .map(|mut item| {
+            item.path = normalize_rel_path(item.path);
+            item
+        })
+        .collect();
     let local_dirty = !dirty_files.is_empty();
 
     // Gather recent git commits and release tags to form candidate rollback and release history
@@ -210,8 +244,13 @@ pub async fn compute_app_composition(
         }
     }
 
-    // 2. Recent commits (top 8)
-    if let Ok(log_out) = run_git(repo, &["log", "-n", "8", "--pretty=format:%h\t%cI\t%s"]) {
+    // 2. Recent commits (top 8, scoped to service subdir when nested)
+    let log_res = if is_nested_subdir {
+        run_git(repo, &["log", "-n", "8", "--pretty=format:%h\t%cI\t%s", "--", "."])
+    } else {
+        run_git(repo, &["log", "-n", "8", "--pretty=format:%h\t%cI\t%s"])
+    };
+    if let Ok(log_out) = log_res {
         for line in log_out.lines().filter(|l| !l.is_empty()) {
             let cols: Vec<&str> = line.splitn(3, '\t').collect();
             if cols.len() == 3 {
@@ -311,7 +350,12 @@ pub async fn compute_app_composition(
         });
     }
 
-    let counts_raw = run_git(repo, &["rev-list", "--left-right", "--count", &format!("{}...HEAD", p_sha)])?;
+    let rev_range = format!("{}...HEAD", p_sha);
+    let counts_raw = if is_nested_subdir {
+        run_git(repo, &["rev-list", "--left-right", "--count", &rev_range, "--", "."])?
+    } else {
+        run_git(repo, &["rev-list", "--left-right", "--count", &rev_range])?
+    };
     let mut parts = counts_raw.split_whitespace();
     let behind_count: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
     let ahead_count: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
@@ -319,7 +363,13 @@ pub async fn compute_app_composition(
     let mut undeployed_commits = Vec::new();
     let mut changed_files_since_prod = Vec::new();
     if ahead_count > 0 {
-        if let Ok(log_out) = run_git(repo, &["log", &format!("{}..HEAD", p_sha), "-n", "50", "--pretty=format:%h\t%s\t%an\t%cI"]) {
+        let log_ahead_range = format!("{}..HEAD", p_sha);
+        let ahead_log = if is_nested_subdir {
+            run_git(repo, &["log", &log_ahead_range, "-n", "50", "--pretty=format:%h\t%s\t%an\t%cI", "--", "."])
+        } else {
+            run_git(repo, &["log", &log_ahead_range, "-n", "50", "--pretty=format:%h\t%s\t%an\t%cI"])
+        };
+        if let Ok(log_out) = ahead_log {
             for line in log_out.lines().filter(|l| !l.is_empty()) {
                 let cols: Vec<&str> = line.splitn(4, '\t').collect();
                 if cols.len() == 4 {
@@ -332,13 +382,18 @@ pub async fn compute_app_composition(
                 }
             }
         }
-        if let Ok(diff_out) = run_git(repo, &["diff", "--name-status", p_sha, "HEAD"]) {
+        let diff_res = if is_nested_subdir {
+            run_git(repo, &["diff", "--name-status", p_sha, "HEAD", "--", "."])
+        } else {
+            run_git(repo, &["diff", "--name-status", p_sha, "HEAD"])
+        };
+        if let Ok(diff_out) = diff_res {
             for line in diff_out.lines().filter(|l| !l.is_empty()) {
                 let cols: Vec<&str> = line.splitn(2, '\t').collect();
                 if cols.len() == 2 {
                     changed_files_since_prod.push(ChangedFileItem {
                         status: cols[0].trim().into(),
-                        path: cols[1].trim().into(),
+                        path: normalize_rel_path(cols[1].trim().into()),
                     });
                 }
             }
@@ -352,7 +407,12 @@ pub async fn compute_app_composition(
         if local_env_path.exists() {
             let local_content = std::fs::read_to_string(&local_env_path).unwrap_or_default();
             let local_keys = extract_env_keys(&local_content);
-            let old_content = run_git(repo, &["show", &format!("{}:{}", p_sha, env_file)]).unwrap_or_default();
+            let old_ref = if is_nested_subdir && !sub_prefix.is_empty() {
+                format!("{}:{}{}", p_sha, sub_prefix, env_file)
+            } else {
+                format!("{}:{}", p_sha, env_file)
+            };
+            let old_content = run_git(repo, &["show", &old_ref]).unwrap_or_default();
             let old_keys = extract_env_keys(&old_content);
             for k in local_keys.difference(&old_keys) {
                 if !new_env_keys.contains(k) {
