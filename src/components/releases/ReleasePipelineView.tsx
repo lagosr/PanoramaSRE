@@ -9,23 +9,20 @@ import {
   TerminalTab,
   UnifiSiemEnvConfigDto,
   WshSnapshot,
-  getAppOperationalHealth,
-  isAppCritical,
   isAppDeployCandidate,
 } from '../../lib/types';
-import { 
-  GitBranch, 
-  Rocket, 
-  RotateCcw, 
-  AlertTriangle, 
-  CheckCircle2, 
-  Layers, 
-  BarChart3,
-  Server, 
-  Activity, 
-  Clock, 
-  Tag, 
-  Globe, 
+import {
+  GitBranch,
+  Rocket,
+  RotateCcw,
+  AlertTriangle,
+  CheckCircle2,
+  Layers,
+  Server,
+  Activity,
+  Clock,
+  Tag,
+  Globe,
   ExternalLink,
   ShieldAlert,
   ShieldCheck,
@@ -41,6 +38,8 @@ import {
   X,
 } from 'lucide-react';
 import { BatchDeployModal, BatchDeployOptions } from './BatchDeployModal';
+import { ReleaseFleetRail } from './ReleaseFleetRail';
+import { BuildEfficiencyStrip } from './BuildEfficiencyStrip';
 import { CustomSelect } from '../ui/CustomSelect';
 import { CopyableValue } from '../ui/CopyableValue';
 import { ToggleSwitch } from '@lagosr/panorama-ui-kit';
@@ -133,7 +132,28 @@ export function ReleasePipelineView({
   const [cfDeploymentsError, setCfDeploymentsError] = useState<string | null>(null);
   const [siemEnvConfig, setSiemEnvConfig] = useState<UnifiSiemEnvConfigDto | null>(null);
   const [showDeployAllModal, setShowDeployAllModal] = useState<boolean>(false);
+  const [batchSelectedSlugs, setBatchSelectedSlugs] = useState<Set<string>>(() => new Set());
   const [inspectApp, setInspectApp] = useState<DiscoveredApp | null>(null);
+
+  const toggleBatchSlug = (slug: string) => {
+    setBatchSelectedSlugs((prev) => {
+      const next = new Set(prev);
+      if (next.has(slug)) next.delete(slug);
+      else next.add(slug);
+      return next;
+    });
+  };
+
+  const selectAllBehindForBatch = () => {
+    const behindWsh = apps
+      .filter(
+        (a) =>
+          (!a.manifest.hostingTarget || a.manifest.hostingTarget === 'wsh-docker') &&
+          isAppDeployCandidate(a)
+      )
+      .map((a) => a.manifest.slug);
+    setBatchSelectedSlugs(new Set(behindWsh));
+  };
 
   // Helper to detect if an app has an active running deployment/rollback job
   const getAppDeployJob = (slug: string) => {
@@ -525,12 +545,6 @@ export function ReleasePipelineView({
 
   const openBottomConsole = onOpenInBottomConsole ?? onOpenInConsoleDrawer;
 
-  const handleReopenLatestStream = (slug: string, job: TerminalTab) => {
-    handleSelectApp(slug);
-    handleTrackJob(slug, job.id);
-    openBottomConsole?.(job.id);
-  };
-
   // Candidate rollback tags: derive from git candidates, known release info, and local head
   interface RollbackTagEntry {
     tag: string;
@@ -579,39 +593,30 @@ export function ReleasePipelineView({
   }
 
   return (
-    <div className="p-8 w-full min-w-0 max-w-[1920px] mx-auto space-y-6">
-      {/* Header */}
+    <div className="p-6 w-full min-w-0 max-w-[1920px] mx-auto space-y-5">
+      {/* Control Tower Header */}
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-            <GitBranch className="w-5 h-5 text-emerald-400" />
-            {isEdgeApp
-              ? '4-Stage Edge Release Pipeline & Rollback Engine'
-              : '6-Stage Release Pipeline & Instant Rollback Engine'}
-          </h2>
-          <p className="text-sm text-slate-500 mt-0.5">
-            {isEdgeApp
-              ? 'Publish verified static edge builds or re-promote immutable Cloudflare Pages deployments'
-              : 'Deploy cryptographic git-backed releases or execute sub-5-second container rollbacks'}
-          </p>
+        <div className="flex items-center gap-2.5 min-w-0">
+          <GitBranch className="w-5 h-5 text-[var(--color-brand-text)] shrink-0" />
+          <div className="min-w-0">
+            <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100 tracking-tight truncate">
+              Releases &amp; Drift Control Tower
+            </h1>
+            <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
+              {isEdgeApp
+                ? '4-Stage Edge Pipeline — publish verified static builds or re-promote immutable Cloudflare Pages deployments'
+                : isWshService
+                ? '4-Stage WSH Service Pipeline — CGNAT bridge verification, ARM64 BuildKit export, and lifecycle control'
+                : '6-Stage Release Pipeline — cryptographic git-backed deploys and sub-5-second N-3 container rollbacks'}
+            </p>
+          </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          {selectedApp && latestAvailableDeployJob && (
-            <button
-              type="button"
-              onClick={() => handleReopenLatestStream(selectedApp.manifest.slug, latestAvailableDeployJob)}
-              className="btn-secondary text-xs flex items-center gap-1.5"
-              title="Open this deployment stream in the bottom SRE Console"
-            >
-              <Terminal className="w-3.5 h-3.5 text-[var(--color-brand-text)]" />
-              <span>View Live Log ▴ ({latestAvailableDeployJob.lines.length} lines)</span>
-            </button>
-          )}
+        <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 shrink-0">
           {isDeployingAll && onHaltDeployments ? (
             <button
               onClick={onHaltDeployments}
-              className="btn-danger text-xs font-bold flex items-center gap-2 animate-pulse"
+              className="btn-danger text-xs font-bold flex items-center gap-2 animate-pulse whitespace-nowrap flex-shrink-0"
               title="Immediately halt suite deployments and abort any running deployment job"
             >
               <Square className="w-3.5 h-3.5 fill-current" />
@@ -620,7 +625,7 @@ export function ReleasePipelineView({
           ) : (
             <button
               onClick={() => setShowDeployAllModal(true)}
-              className="btn-primary text-xs font-bold flex items-center gap-2"
+              className="btn-primary text-xs font-bold flex items-center gap-2 whitespace-nowrap flex-shrink-0"
             >
               <Layers className="w-4 h-4" />
               <span>Batch / Multi-App Deployment...</span>
@@ -747,203 +752,29 @@ export function ReleasePipelineView({
         </div>
       )}
 
-      {/* Suite Release Status & Drift Overview Dashboard */}
-      <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800 pb-3">
-          <div className="flex items-center gap-2">
-            <Layers className="w-4 h-4 text-[var(--color-brand-text)]" />
-            <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 uppercase tracking-wider">
-              Suite Release Status & Deployment Drift Overview
-            </h3>
-          </div>
-          <span className="text-xs font-mono text-slate-600 dark:text-slate-400 tabular-nums">
-            {isInitialSyncComplete
-              ? `${apps.filter(isAppDeployCandidate).length} of ${apps.length} apps have undeployed changes or need remediation`
-              : `Syncing initial telemetry for ${apps.length} apps...`}
-          </span>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-          {apps.map((app) => {
-            const appComp = app.composition;
-            const appIsService = app.manifest.hostingTarget === 'wsh-docker-service';
-            const opHealth = getAppOperationalHealth(app, { isInitialSyncComplete, networkPosture });
-            const appIsPendingSync = opHealth === 'pending_sync';
-            const appIsTelemetryUnavailable = opHealth === 'telemetry_unavailable';
-            const appIsOptionalNotDeployed = opHealth === 'optional_not_deployed';
-            const undeployedCount = appComp?.undeployed_commits?.length || 0;
-            const isLocalDirty = !!appComp?.local_dirty;
-            const needsDeploy =
-              undeployedCount > 0 ||
-              isLocalDirty ||
-              appComp?.state === 'AHEAD' ||
-              appComp?.state === 'LOCAL_WIP' ||
-              app.provenanceState === 'DIRTY_PROD' ||
-              app.provenanceState === 'DIVERGED';
-            const isDeploying = !!getAppDeployJob(app.manifest.slug);
-            const appLatestJob = getAllAppDeployJobs(app.manifest.slug)[0];
-            const isSelected = selectedApp?.manifest.slug === app.manifest.slug;
-            const isHealthy = opHealth === 'healthy';
-            const isCritical = isAppCritical(app, { isInitialSyncComplete, networkPosture });
-            const isWipOnly = !isCritical && undeployedCount === 0 && isLocalDirty;
-            const appIdent = app.manifest.containerName || app.manifest.slug || app.manifest.appId;
-            const appResolvedTel = resolveActiveBuildTelemetry(app.health?.release, appComp);
-            const appBuildBadge = evaluateBuildHealthBadge(appResolvedTel.telemetry, appIdent);
-
-            return (
-              <div
-                key={app.manifest.slug}
-                onClick={() => handleSelectApp(app.manifest.slug)}
-                className={`p-3.5 rounded-lg border cursor-pointer transition-all flex flex-col justify-between space-y-2.5 ${
-                  isCritical
-                    ? isSelected
-                      ? 'bg-rose-50 dark:bg-rose-950/40 border-rose-500 shadow-[0_0_18px_rgba(244,63,94,0.35)] ring-2 ring-rose-500'
-                      : 'bg-rose-50/50 dark:bg-rose-950/20 hover:bg-rose-100 dark:hover:bg-rose-950/30 border-rose-500/60 shadow-[0_0_10px_rgba(244,63,94,0.15)]'
-                    : isWipOnly
-                    ? isSelected
-                      ? 'bg-amber-500/10 dark:bg-amber-950/30 border-amber-500 shadow-[0_0_18px_rgba(245,158,11,0.3)] ring-2 ring-amber-500/70'
-                      : 'bg-amber-500/[0.04] dark:bg-amber-950/20 hover:bg-amber-500/[0.08] dark:hover:bg-amber-950/30 border-amber-500/60 shadow-[0_0_12px_rgba(245,158,11,0.15)]'
-                    : needsDeploy
-                    ? isSelected
-                      ? 'bg-rose-500/10 dark:bg-rose-950/30 border-rose-500 shadow-[0_0_20px_rgba(244,63,94,0.4)] ring-2 ring-rose-500/80'
-                      : 'bg-rose-500/[0.04] dark:bg-rose-950/20 hover:bg-rose-500/[0.08] dark:hover:bg-rose-950/30 border-rose-500/70 shadow-[0_0_14px_rgba(244,63,94,0.25)]'
-                    : isSelected
-                    ? 'bg-slate-50 dark:bg-slate-950 border-emerald-500/50 shadow-md ring-1 ring-emerald-500/40'
-                    : 'bg-white dark:bg-slate-950/60 hover:bg-slate-50 dark:hover:bg-slate-950 border-slate-200 dark:border-slate-800/90'
-                }`}
-              >
-                {/* App Title & Status Badge */}
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0 flex-1">
-                    <h4 className="text-xs font-bold text-slate-900 dark:text-slate-100 truncate flex items-center gap-1.5">
-                      <span
-                        className={`w-2 h-2 rounded-full shrink-0 ${
-                          isHealthy
-                            ? 'bg-emerald-400'
-                            : appIsPendingSync
-                            ? 'bg-slate-400 animate-pulse'
-                            : appIsTelemetryUnavailable || appIsOptionalNotDeployed
-                            ? 'bg-slate-400'
-                            : 'bg-rose-500 animate-ping'
-                        }`}
-                      />
-                      <span className="truncate">{app.manifest.displayName}</span>
-                      {appIsService && (
-                        <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 shrink-0">
-                          SERVICE
-                        </span>
-                      )}
-                    </h4>
-                    <span className="text-[10px] text-slate-500 font-mono block truncate tabular-nums">
-                      {appIsService
-                        ? `${app.manifest.service?.bindIp || '172.25.25.5'}:${app.manifest.port}/${app.manifest.service?.protocol || 'udp'} • ${app.manifest.service?.networkName || app.manifest.composeProject}`
-                        : appIsPendingSync && !app.health
-                        ? 'Checking live production health...'
-                        : `Prod: ${app.health?.release?.semver || app.health?.version || 'v1.0.0'} (${app.health?.release?.commit_short || 'unstamped'})`}
-                    </span>
-                  </div>
-
-                  {appIsPendingSync ? (
-                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 shrink-0">
-                      SYNCING...
-                    </span>
-                  ) : appIsTelemetryUnavailable ? (
-                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 shrink-0">
-                      {networkPosture === 'WAN_CLOUDFLARE' ? 'LAN ONLY' : 'NO WSH DATA'}
-                    </span>
-                  ) : appIsOptionalNotDeployed ? (
-                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 shrink-0">
-                      NOT DEPLOYED
-                    </span>
-                  ) : isCritical ? (
-                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/50 flex items-center gap-1 shrink-0 animate-pulse">
-                      <AlertTriangle className="w-2.5 h-2.5 text-rose-500 dark:text-rose-400" />
-                      {appIsService ? 'STOPPED' : 'UNHEALTHY'}
-                    </span>
-                  ) : isDeploying ? (
-                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/40 flex items-center gap-1 shrink-0 animate-pulse">
-                      <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                      DEPLOYING
-                    </span>
-                  ) : isWipOnly ? (
-                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/40 flex items-center gap-1 shrink-0">
-                      <AlertTriangle className="w-2.5 h-2.5 text-amber-500 dark:text-amber-400" />
-                      UNCOMMITTED WIP
-                    </span>
-                  ) : needsDeploy ? (
-                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/50 shadow-[0_0_8px_rgba(244,63,94,0.25)] flex items-center gap-1 shrink-0 animate-pulse">
-                      <AlertTriangle className="w-2.5 h-2.5 text-rose-500 dark:text-rose-400" />
-                      BEHIND ({undeployedCount}{isLocalDirty ? '+' : ''})
-                    </span>
-                  ) : (
-                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20 shrink-0">
-                      {appIsService ? 'RUNNING' : 'SYNCHRONIZED'}
-                    </span>
-                  )}
-                </div>
-
-                {/* Drift Details & Inspect Diff Trigger */}
-                <div className="text-[11px] font-mono flex flex-wrap items-center justify-between gap-y-2 gap-x-1.5 text-slate-500 dark:text-slate-400 border-t border-slate-100 dark:border-slate-800/80 pt-2">
-                  <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
-                    <span>Pending:</span>
-                    <span className={`font-bold ${undeployedCount > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-500'}`}>
-                      {undeployedCount} {isLocalDirty ? '(+ uncommitted)' : ''}
-                    </span>
-                    <span
-                      className={`px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold border whitespace-nowrap shrink-0 ${
-                        appBuildBadge.tone === 'emerald'
-                          ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
-                          : appBuildBadge.tone === 'amber'
-                          ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/40'
-                          : appBuildBadge.tone === 'rose'
-                          ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/40'
-                          : 'bg-slate-100 dark:bg-slate-800/80 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700/80'
-                      }`}
-                      title={`Build Telemetry: ${appBuildBadge.label}`}
-                    >
-                      {appBuildBadge.shortLabel}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1.5 shrink-0 ml-auto">
-                    {appLatestJob && (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleReopenLatestStream(app.manifest.slug, appLatestJob);
-                        }}
-                        className="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 transition-colors flex items-center gap-1 shrink-0 whitespace-nowrap"
-                        title={`Open deployment stream for ${app.manifest.displayName}`}
-                      >
-                        <Terminal className="w-3 h-3 text-emerald-500 dark:text-emerald-400" />
-                        <span>Stream</span>
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setInspectApp(app);
-                      }}
-                      className="px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700/60 transition-colors flex items-center gap-1 shrink-0 whitespace-nowrap"
-                      title={`Inspect git diff & provenance for ${app.manifest.displayName}`}
-                    >
-                      <Eye className="w-3 h-3 text-emerald-500 dark:text-emerald-400" />
-                      <span>Inspect Diff</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
+      {/* Master-Detail Deployment Control Tower (Left Sticky Rail + Right Workbench) */}
+      <div className="flex flex-col lg:flex-row items-start gap-5 w-full min-w-0">
+        <ReleaseFleetRail
+          apps={apps}
+          selectedSlug={selectedApp?.manifest.slug || ''}
+          onSelectApp={handleSelectApp}
+          batchSelectedSlugs={batchSelectedSlugs}
+          onToggleBatchSlug={toggleBatchSlug}
+          onSelectAllBehindBatch={selectAllBehindForBatch}
+          onClearBatchSelection={() => setBatchSelectedSlugs(new Set())}
+          onOpenBatchDeploy={() => setShowDeployAllModal(true)}
+          onInspectApp={(app) => setInspectApp(app)}
+          getAppDeployJob={getAppDeployJob}
+          isInitialSyncComplete={isInitialSyncComplete}
+          networkPosture={networkPosture}
+          isDeployingAll={isDeployingAll}
+        />
 
       {selectedApp && (
-        <div className="space-y-6">
-          {/* Active Production Deployment Card (Position 3) */}
-          <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-sm">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800/80 pb-4 mb-4">
+        <div className="flex-1 min-w-0 w-full space-y-4">
+          {/* Active Production Deployment Header Card */}
+          <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800/80 pb-3.5 mb-3.5">
               <div className="flex items-center gap-2.5">
                 <div className="w-9 h-9 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
                   <Server className="w-4 h-4" />
@@ -1132,293 +963,15 @@ export function ReleasePipelineView({
             )}
           </div>
 
-          {/* Build Efficiency & Telemetry Card (Position 4 - Full Width, web/edge builds) */}
+          {/* Slim 1-Row Build Efficiency Strip (replaces duplicate 290-line card) */}
           {!isWshService && (
-          <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-sm space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800/80 pb-3.5">
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm flex items-center gap-2">
-                    <Container className="w-4 h-4 text-emerald-500 dark:text-emerald-400" />
-                    <span>Build Efficiency & Telemetry</span>
-                  </h3>
-                  <span
-                    className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold border ${
-                      selectedHealthBadge.tone === 'emerald'
-                        ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
-                        : selectedHealthBadge.tone === 'amber'
-                        ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/40'
-                        : selectedHealthBadge.tone === 'rose'
-                        ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/40'
-                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700'
-                    }`}
-                  >
-                    {selectedHealthBadge.label}
-                  </span>
-                  <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-100 dark:bg-slate-800/90 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
-                    {selectedResolvedTelemetry.source === 'LIVE_PROD'
-                      ? 'LIVE PROD'
-                      : selectedResolvedTelemetry.source === 'LOCAL_MANIFEST'
-                      ? 'LOCAL MANIFEST'
-                      : 'TARGETS ARMED'}
-                  </span>
-                </div>
-                <p className="text-xs text-slate-500 font-mono mt-1">
-                  Profile: {selectedTelemetry?.profile || 'nextjs-standalone'} • Warm Target: ≤{selectedTelemetryTargets.targetWarmSec}s • Cold Target: ≤{selectedTelemetryTargets.targetColdSec}s • Ceiling: {selectedTelemetryTargets.maxCeilingSec}s
-                </p>
-              </div>
-              {onOpenTelemetry && (
-                <button
-                  type="button"
-                  onClick={() => onOpenTelemetry(selectedApp.manifest.slug)}
-                  className="btn-secondary text-xs flex items-center gap-1.5"
-                >
-                  <BarChart3 className="w-3.5 h-3.5 text-[var(--color-brand-text)]" />
-                  <span>Full Telemetry &amp; Trends →</span>
-                </button>
-              )}
-            </div>
-
-            {selectedTelemetry ? (
-              <>
-                {/* 4 KPI Tiles */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono">
-                  <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
-                    <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">
-                      Total Build vs Target
-                    </span>
-                    <div className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                      {selectedTelemetry.total_duration_sec}s{' '}
-                      <span className="text-xs font-normal text-slate-400">
-                        / ≤{selectedTelemetryTargets.activeTargetSec}s
-                      </span>
-                    </div>
-                    <span className="text-[10px] text-slate-500 block mt-1 uppercase">
-                      Posture: {selectedTelemetry.cache_posture}
-                    </span>
-                  </div>
-
-                  <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
-                    <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">
-                      Baseline Delta (+{selectedTelemetryTargets.regressionThresholdPct}% Gate)
-                    </span>
-                    <div
-                      className={`text-sm font-bold ${
-                        typeof selectedTelemetry.regression_pct === 'number' &&
-                        selectedTelemetry.regression_pct > selectedTelemetryTargets.regressionThresholdPct
-                          ? 'text-amber-600 dark:text-amber-400'
-                          : 'text-slate-900 dark:text-slate-100'
-                      }`}
-                    >
-                      {typeof selectedTelemetry.regression_pct === 'number'
-                        ? `${selectedTelemetry.regression_pct > 0 ? '+' : ''}${selectedTelemetry.regression_pct}%`
-                        : 'Baseline Set'}
-                    </div>
-                    <span className="text-[10px] text-slate-500 block mt-1 truncate">
-                      {typeof selectedTelemetry.baseline_duration_sec === 'number'
-                        ? `Prev: ${selectedTelemetry.baseline_duration_sec}s (${selectedTelemetry.delta_sec && selectedTelemetry.delta_sec > 0 ? '+' : ''}${selectedTelemetry.delta_sec ?? 0}s)`
-                        : 'Initial posture reference'}
-                    </span>
-                  </div>
-
-                  <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
-                    <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">
-                      Deps Cache & ELF Gate
-                    </span>
-                    <div className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                      <span
-                        className={
-                          selectedTelemetry.deps_cache_hit
-                            ? 'text-emerald-600 dark:text-emerald-400'
-                            : 'text-amber-600 dark:text-amber-400'
-                        }
-                      >
-                        {selectedTelemetry.deps_cache_hit ? 'CACHED' : `${selectedTelemetry.deps_stage_sec}s`}
-                      </span>
-                      <span className="text-slate-400"> • </span>
-                      <span>{selectedTelemetry.elf_verified_count} ELF</span>
-                    </div>
-                    <span className="text-[10px] text-slate-500 block mt-1 truncate">
-                      aarch64 (0xb7) verified
-                    </span>
-                  </div>
-
-                  <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
-                    <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">
-                      Context & Pre-Validated Types
-                    </span>
-                    <div className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                      {selectedTelemetry.context_transfer_kb} KB
-                    </div>
-                    <span className="text-[10px] text-slate-500 block mt-1 truncate">
-                      Types: {selectedTelemetry.types_prevalidated ? `Host (${selectedTelemetry.host_typecheck_sec}s)` : 'In-Container'}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Multi-Segment Proportional Stage Progress Bar */}
-                {(() => {
-                  const hostTsc = Math.max(0, selectedTelemetry.host_typecheck_sec || 0);
-                  const depsSec = Math.max(0, selectedTelemetry.deps_stage_sec || 0);
-                  const nextSec = Math.max(0, selectedTelemetry.next_build_sec || 0);
-                  const tailSec = Math.max(
-                    0,
-                    (selectedTelemetry.arm64_natives_sec || 0) + (selectedTelemetry.export_tar_sec || 0)
-                  );
-                  const sumSec = Math.max(0.1, hostTsc + depsSec + nextSec + tailSec);
-                  const pctHost = Math.round((hostTsc / sumSec) * 100);
-                  const pctDeps = Math.round((depsSec / sumSec) * 100);
-                  const pctNext = Math.round((nextSec / sumSec) * 100);
-                  const pctTail = Math.max(0, 100 - pctHost - pctDeps - pctNext);
-
-                  return (
-                    <div className="space-y-2">
-                      <div className="h-2.5 w-full rounded-full bg-slate-100 dark:bg-slate-950 overflow-hidden flex border border-slate-200 dark:border-slate-800">
-                        {pctHost > 0 && (
-                          <div
-                            style={{ width: `${pctHost}%` }}
-                            className="bg-cyan-500 dark:bg-cyan-400 h-full"
-                            title={`Host Typecheck (tsc): ${hostTsc}s`}
-                          />
-                        )}
-                        {pctDeps > 0 && (
-                          <div
-                            style={{ width: `${pctDeps}%` }}
-                            className="bg-amber-500 dark:bg-amber-400 h-full"
-                            title={`Dependencies (npm ci): ${depsSec}s`}
-                          />
-                        )}
-                        {pctNext > 0 && (
-                          <div
-                            style={{ width: `${pctNext}%` }}
-                            className="bg-emerald-500 dark:bg-emerald-400 h-full"
-                            title={`Next.js Build (amd64): ${nextSec}s`}
-                          />
-                        )}
-                        {pctTail > 0 && (
-                          <div
-                            style={{ width: `${pctTail}%` }}
-                            className="bg-indigo-500 dark:bg-indigo-400 h-full"
-                            title={`ARM64 Natives & Export: ${Math.round(tailSec * 10) / 10}s`}
-                          />
-                        )}
-                      </div>
-                      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-slate-500 dark:text-slate-400">
-                        <span className="flex items-center gap-1.5">
-                          <span className="w-2 h-2 rounded-full bg-cyan-500 dark:bg-cyan-400" />
-                          Host tsc: {hostTsc}s
-                        </span>
-                        <span className="flex items-center gap-1.5">
-                          <span className="w-2 h-2 rounded-full bg-amber-500 dark:bg-amber-400" />
-                          Deps (npm ci): {selectedTelemetry.deps_cache_hit ? '0s (CACHED)' : `${depsSec}s`}
-                        </span>
-                        <span className="flex items-center gap-1.5">
-                          <span className="w-2 h-2 rounded-full bg-emerald-500 dark:bg-emerald-400" />
-                          Next.js Build: {nextSec}s (compile {selectedTelemetry.turbopack_compile_sec}s)
-                        </span>
-                        <span className="flex items-center gap-1.5">
-                          <span className="w-2 h-2 rounded-full bg-indigo-500 dark:bg-indigo-400" />
-                          ARM64 Natives & Export: {Math.round(tailSec * 10) / 10}s
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })()}
-
-                {/* End-to-End Pipeline Stage Waterfall Chips (v0.7.0+) */}
-                {selectedTelemetry.deploy_stages && (
-                  <div className="pt-2 border-t border-slate-100 dark:border-slate-800/80 flex flex-wrap items-center gap-2 text-[11px] font-mono tabular-nums">
-                    <span className="text-[10px] uppercase font-sans font-semibold text-slate-500 mr-1">
-                      Stage Waterfall:
-                    </span>
-                    <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-                      S1 Typecheck: {selectedTelemetry.deploy_stages.stage1_typecheck_sec}s
-                    </span>
-                    {selectedTelemetry.deploy_stages.semver_bump_sec > 0 && (
-                      <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-                        Bump: {selectedTelemetry.deploy_stages.semver_bump_sec}s
-                      </span>
-                    )}
-                    <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-                      S2 Build: {selectedTelemetry.deploy_stages.stage2_build_sec}s
-                    </span>
-                    <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-                      S4 Upload: {selectedTelemetry.deploy_stages.stage4_upload_sec}s
-                    </span>
-                    <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-                      S5 Swap+Verify:{' '}
-                      {Math.round(
-                        (selectedTelemetry.deploy_stages.stage5_swap_sec +
-                          selectedTelemetry.deploy_stages.stage5_verify_sec) *
-                          10
-                      ) / 10}
-                      s
-                    </span>
-                    {selectedTelemetry.deploy_stages.stage5_smoke_sec > 0 && (
-                      <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-                        Smoke: {selectedTelemetry.deploy_stages.stage5_smoke_sec}s
-                      </span>
-                    )}
-                    <span className="px-2 py-0.5 rounded bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-500/30 font-bold">
-                      Total: {selectedTelemetry.deploy_stages.total_deploy_sec}s
-                    </span>
-                  </div>
-                )}
-
-                {/* High-Contrast Build Regression & Budget Warnings Banner */}
-                {selectedHealthBadge.warnings.length > 0 && (
-                  <div
-                    className={`p-3.5 rounded-lg border text-xs font-mono space-y-1.5 ${
-                      selectedHealthBadge.tone === 'rose'
-                        ? 'bg-rose-500/10 border-rose-500/30 text-rose-700 dark:text-rose-300'
-                        : 'bg-amber-500/10 border-amber-500/30 text-amber-800 dark:text-amber-300'
-                    }`}
-                  >
-                    <div className="flex items-center gap-1.5 font-bold">
-                      <AlertTriangle className="w-4 h-4 shrink-0" />
-                      <span>Build Regression & Budget Warnings ({selectedHealthBadge.warnings.length})</span>
-                    </div>
-                    <ul className="list-disc list-inside space-y-0.5 text-[11px]">
-                      {selectedHealthBadge.warnings.map((w, i) => (
-                        <li key={i}>{w}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono">
-                <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
-                  <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">Warm Build Target</span>
-                  <span className="text-sm font-bold text-emerald-600 dark:text-emerald-400">
-                    ≤{selectedTelemetryTargets.targetWarmSec}s
-                  </span>
-                  <span className="text-[10px] text-slate-500 block mt-1">Cached npm + .next/cache</span>
-                </div>
-                <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
-                  <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">Cold Build Target</span>
-                  <span className="text-sm font-bold text-cyan-600 dark:text-cyan-400">
-                    ≤{selectedTelemetryTargets.targetColdSec}s
-                  </span>
-                  <span className="text-[10px] text-slate-500 block mt-1">Lockfile updated</span>
-                </div>
-                <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
-                  <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">Regression Gate</span>
-                  <span className="text-sm font-bold text-amber-600 dark:text-amber-400">
-                    +{selectedTelemetryTargets.regressionThresholdPct}%
-                  </span>
-                  <span className="text-[10px] text-slate-500 block mt-1">Ceiling: {selectedTelemetryTargets.maxCeilingSec}s</span>
-                </div>
-                <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80">
-                  <span className="text-[10px] uppercase font-sans text-slate-500 block mb-1">Context Budget</span>
-                  <span className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                    ≤{selectedTelemetryTargets.maxContextKB} KB
-                  </span>
-                  <span className="text-[10px] text-slate-500 block mt-1">ELF 0xb7 gate active</span>
-                </div>
-              </div>
-            )}
-          </div>
+            <BuildEfficiencyStrip
+              appSlug={selectedApp.manifest.slug}
+              resolvedTelemetry={selectedResolvedTelemetry}
+              healthBadge={selectedHealthBadge}
+              targets={selectedTelemetryTargets}
+              onOpenTelemetry={onOpenTelemetry}
+            />
           )}
 
           {/* Position 5: Decoupled Deployment Stage Stepper (Output Console Dock handles raw logs) */}
@@ -1451,7 +1004,7 @@ export function ReleasePipelineView({
                 ];
 
             return (
-              <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-3">
+              <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex flex-wrap items-center gap-2 min-w-0">
                     <Terminal className="w-4 h-4 text-[var(--color-brand-text)] shrink-0" />
@@ -1576,11 +1129,11 @@ export function ReleasePipelineView({
             );
           })()}
 
-          {/* Position 6: Release Composition & Rollback Grid */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-2 space-y-6">
-              {/* Release Composition Summary */}
-              <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-sm space-y-5">
+          {/* Position 6: Above-the-Fold Side-by-Side Deploy & Instant Rollback Grid */}
+          <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 items-start">
+            <div className="xl:col-span-7 space-y-4">
+              {/* Release Composition & Deploy Form */}
+              <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4">
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm">
@@ -1873,7 +1426,7 @@ export function ReleasePipelineView({
             </div>
 
             {/* Instant Rollback / Service Lifecycle Panel */}
-            <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-sm flex flex-col justify-between space-y-4">
+            <div className="xl:col-span-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm flex flex-col justify-between space-y-4">
               {isWshService ? (
                 <>
                   <div className="space-y-4">
@@ -2180,15 +1733,20 @@ export function ReleasePipelineView({
           </div>
         </div>
       )}
+      </div>
 
       {/* Batch / Multi-App Deployment Orchestrator Modal */}
       <BatchDeployModal
         isOpen={showDeployAllModal}
         apps={apps}
+        initialSelectedSlugs={
+          batchSelectedSlugs.size > 0 ? Array.from(batchSelectedSlugs) : undefined
+        }
         isInitialSyncComplete={isInitialSyncComplete}
         networkPosture={networkPosture}
         onConfirm={(options: BatchDeployOptions) => {
           setShowDeployAllModal(false);
+          setBatchSelectedSlugs(new Set());
           onTriggerDeployAll(
             options.selectedApps,
             options.bumpVersion,

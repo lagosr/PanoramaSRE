@@ -45,6 +45,7 @@ interface BuildTelemetryViewProps {
   onRefresh: () => void;
   onPruneBuildKitCache: () => void;
   onInspectConsoleSession?: (sessionId: string) => void;
+  onOpenInReleases?: (slug: string) => void;
 }
 
 function formatBytes(bytes: number | undefined | null): string {
@@ -67,6 +68,7 @@ export const BuildTelemetryView: React.FC<BuildTelemetryViewProps> = ({
   onRefresh,
   onPruneBuildKitCache,
   onInspectConsoleSession,
+  onOpenInReleases,
 }) => {
   const [localAppSlug, setLocalAppSlug] = useState<string>('all');
   const [range, setRange] = useState<TelemetryTimeRange>('14d');
@@ -412,17 +414,32 @@ export const BuildTelemetryView: React.FC<BuildTelemetryViewProps> = ({
                       {row.depsHitRatePct !== null ? `${row.depsHitRatePct}%` : '—'}
                     </td>
                     <td className="py-2.5 pl-2 text-right">
-                      <span
-                        className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-                          row.latestStatus === 'OPTIMAL'
-                            ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
-                            : row.latestStatus === 'WARN_CEILING' || row.latestStatus === 'FAILED'
-                            ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/30'
-                            : 'bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-500/30'
-                        }`}
-                      >
-                        {row.latestStatus}
-                      </span>
+                      <div className="inline-flex items-center justify-end gap-1.5">
+                        <span
+                          className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                            row.latestStatus === 'OPTIMAL'
+                              ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
+                              : row.latestStatus === 'WARN_CEILING' || row.latestStatus === 'FAILED'
+                              ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/30'
+                              : 'bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-500/30'
+                          }`}
+                        >
+                          {row.latestStatus}
+                        </span>
+                        {onOpenInReleases && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onOpenInReleases(row.slug);
+                            }}
+                            className="px-2 py-0.5 rounded text-[10px] font-sans font-semibold text-[var(--color-brand-text)] hover:underline whitespace-nowrap cursor-pointer"
+                            title={`Open ${row.displayName} in Releases & Drift`}
+                          >
+                            Releases →
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );

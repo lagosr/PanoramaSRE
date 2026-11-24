@@ -534,6 +534,9 @@ export const App: React.FC = () => {
       if (ctx?.appSlug !== undefined && view === 'releases') {
         setSelectedReleaseAppSlug(ctx.appSlug);
       }
+      if (ctx?.appSlug !== undefined && view === 'telemetry') {
+        setSelectedTelemetryAppSlug(ctx.appSlug || 'all');
+      }
       if (ctx?.tab !== undefined && view === 'dietpi' && (ctx.tab === 'host' || ctx.tab === 'crons')) {
         setDietpiSubTab(ctx.tab);
       }
@@ -4401,11 +4404,13 @@ export const App: React.FC = () => {
               onRollbackBatchTargets={(targets) => {
                 void handleRollbackBatchTargets(targets);
               }}
-              onOpenSmokeTests={() => setActiveTab('smoke')}
-              onOpenTelemetry={(slug) => {
-                setSelectedTelemetryAppSlug(slug || 'all');
-                setActiveTab('telemetry');
-              }}
+              onOpenSmokeTests={() => navigateTo('smoke', { returnFromCurrent: true })}
+              onOpenTelemetry={(slug) =>
+                navigateTo('telemetry', {
+                  appSlug: slug || 'all',
+                  returnFromCurrent: true,
+                })
+              }
               wshSnapshot={wshSnapshot}
               isInitialSyncComplete={hasCompletedInitialSync}
               networkPosture={networkPosture}
@@ -4429,6 +4434,9 @@ export const App: React.FC = () => {
               }}
               onPruneBuildKitCache={handlePruneBuildKitCache}
               onInspectConsoleSession={(sessionId) => handleOpenInBottomConsole(sessionId)}
+              onOpenInReleases={(slug) =>
+                navigateTo('releases', { appSlug: slug, returnFromCurrent: true })
+              }
             />
           )}
 

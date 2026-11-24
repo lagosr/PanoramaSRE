@@ -30,6 +30,7 @@ export interface BatchDeployOptions {
 interface BatchDeployModalProps {
   isOpen: boolean;
   apps: DiscoveredApp[];
+  initialSelectedSlugs?: string[];
   onConfirm: (options: BatchDeployOptions) => void;
   onCancel: () => void;
   isProcessing?: boolean;
@@ -47,6 +48,7 @@ const BUMP_OPTIONS: SelectOption[] = [
 export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
   isOpen,
   apps,
+  initialSelectedSlugs,
   onConfirm,
   onCancel,
   isProcessing = false,
@@ -81,11 +83,19 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
       ];
       setOrderedApps(initialSorted);
 
-      const drifted = deployableApps.filter(isAppDeployCandidate);
-      if (drifted.length > 0) {
-        setSelectedSlugs(new Set(drifted.map((a) => a.manifest.slug)));
+      const allowedSet = new Set(deployableApps.map((a) => a.manifest.slug));
+      const explicitInitial = (initialSelectedSlugs || []).filter((slug) =>
+        allowedSet.has(slug)
+      );
+      if (explicitInitial.length > 0) {
+        setSelectedSlugs(new Set(explicitInitial));
       } else {
-        setSelectedSlugs(new Set(deployableApps.map((a) => a.manifest.slug)));
+        const drifted = deployableApps.filter(isAppDeployCandidate);
+        if (drifted.length > 0) {
+          setSelectedSlugs(new Set(drifted.map((a) => a.manifest.slug)));
+        } else {
+          setSelectedSlugs(new Set(deployableApps.map((a) => a.manifest.slug)));
+        }
       }
       setConfirmText('');
     } else if (!isOpen && wasOpenRef.current) {
