@@ -4130,6 +4130,19 @@ export const App: React.FC = () => {
           returnFromCurrent: true,
         }),
     },
+    {
+      id: 'act-open-db-storage',
+      kind: 'Storage',
+      label: 'Local SQLite Storage & VACUUM (Settings)',
+      hint: 'Settings > Sync & Storage',
+      keywords: 'sqlite wal vacuum storage db compact',
+      category: 'action',
+      onExecute: () =>
+        navigateTo('settings', {
+          tab: 'sync',
+          returnFromCurrent: true,
+        }),
+    },
   ];
 
   return (
@@ -4645,11 +4658,21 @@ export const App: React.FC = () => {
               onEmitSettingsStream={handleEmitSettingsStream}
               onThreatSettingsChanged={(dto) => setThreatSettings(dto)}
               wshSnapshot={wshSnapshot}
-              onNavigateToRelease={(slug) => {
-                setSelectedReleaseAppSlug(slug);
-                setActiveTab('releases');
+              onNavigateToRelease={(slug) =>
+                navigateTo('releases', { appSlug: slug, returnFromCurrent: true })
+              }
+              onNavigateToHardening={() =>
+                navigateTo('hardening', { returnFromCurrent: true })
+              }
+              autoOpenMode={autoOpenMode}
+              onChangeAutoOpenMode={setAutoOpenMode}
+              dockSide={dockSide}
+              onChangeDockSide={setDockSide}
+              sidebarCollapsed={sidebarCollapsed}
+              onChangeSidebarCollapsed={(val) => {
+                setSidebarAutoCollapsed(false);
+                setSidebarCollapsed(val);
               }}
-              onReapplyHardening={() => handleReapplyHardening('settings')}
             />
           )}
 

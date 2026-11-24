@@ -42,15 +42,15 @@ export function LocalDevView({
   ).length;
 
   return (
-    <div className="p-8 w-full min-w-0 max-w-[1920px] mx-auto space-y-8">
+    <div className="p-6 w-full min-w-0 max-w-[1920px] mx-auto space-y-6">
       {/* Dev Server Supervisor Header */}
       <div>
         <div className="flex items-center justify-between">
           <div>
             <div className="flex items-center gap-2">
-              <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100">
+              <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100 tracking-tight">
                 Local Dev Server Supervisor
-              </h2>
+              </h1>
               {isActionPending && (
                 <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30 animate-pulse">
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />

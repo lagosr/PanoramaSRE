@@ -114,14 +114,14 @@ export const OptInComplianceView: React.FC<OptInComplianceViewProps> = ({
   };
 
   return (
-    <div className="p-4 sm:p-6 md:p-8 w-full min-w-0 max-w-[1920px] mx-auto space-y-6">
+    <div className="p-6 w-full min-w-0 max-w-[1920px] mx-auto space-y-6">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="min-w-0">
-          <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+          <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2 tracking-tight">
             <MessageSquare className="w-5 h-5 text-[var(--color-brand-text)] shrink-0" />
             <span>Parakith SMS Opt-In Compliance Ledger</span>
-          </h2>
+          </h1>
           <p className="text-sm text-slate-600 dark:text-slate-400 mt-0.5">
             Cloudflare D1 carrier evidentiary records ({snapshot?.databaseName || 'parakith-opt-ins'} • WNAM)
           </p>

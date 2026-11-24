@@ -111,14 +111,14 @@ export const EdgePkiView: React.FC<EdgePkiViewProps> = ({
   };
 
   return (
-    <div className="p-8 w-full min-w-0 max-w-[1920px] mx-auto space-y-8">
+    <div className="p-6 w-full min-w-0 max-w-[1920px] mx-auto space-y-6">
       {/* Header with Title & Action Controls */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+          <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2 tracking-tight">
             <ShieldCheck className="w-5 h-5 text-[var(--color-brand-text)]" />
             PKI & SSL/TLS Certificates
-          </h2>
+          </h1>
           <p className="text-sm text-slate-600 dark:text-slate-400 mt-0.5">
             Fleet X.509 dual-probe TLS validation, drift detection & automated Let's Encrypt lifecycle
           </p>

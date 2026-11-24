@@ -1473,4 +1473,16 @@ export interface CloudflareWafSnapshotDto {
   rules: CfWafRuleDto[];
 }
 
+export interface SreDbStats {
+  dbPath: string;
+  dbSizeBytes: number;
+  walSizeBytes: number;
+  shmSizeBytes: number;
+  totalSizeBytes: number;
+  logCount: number;
+  consoleSessionCount: number;
+  threatRunCount: number;
+  journalMode: string;
+}
+
 

@@ -141,13 +141,13 @@ export const BuildTelemetryView: React.FC<BuildTelemetryViewProps> = ({
   return (
     <div className="p-6 w-full min-w-0 max-w-[1920px] mx-auto space-y-6">
       {/* Header & Filter Toolbar */}
-      <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4">
+      <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2.5">
+            <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2.5 tracking-tight">
               <BarChart3 className="w-6 h-6 text-[var(--color-brand-text)]" />
               <span>Build &amp; Deploy Telemetry</span>
-            </h2>
+            </h1>
             <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">
               Durable historical deploy timings across GUI &amp; CLI releases, end-to-end stage waterfalls, context budgets, and BuildKit disk usage.
             </p>

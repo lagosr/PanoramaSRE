@@ -208,8 +208,23 @@ pub struct WafRuleOverrideRow {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SreDbStats {
+    pub db_path: String,
+    pub db_size_bytes: u64,
+    pub wal_size_bytes: u64,
+    pub shm_size_bytes: u64,
+    pub total_size_bytes: u64,
+    pub log_count: i64,
+    pub console_session_count: i64,
+    pub threat_run_count: i64,
+    pub journal_mode: String,
+}
+
 pub struct SreDatabase {
     conn: Connection,
+    db_path: PathBuf,
     log_file_path: PathBuf,
 }
 
@@ -235,7 +250,11 @@ impl SreDatabase {
              PRAGMA busy_timeout = 5000;"
         )?;
 
-        let db = SreDatabase { conn, log_file_path };
+        let db = SreDatabase {
+            conn,
+            db_path: path_ref.to_path_buf(),
+            log_file_path,
+        };
         db.init_tables()?;
         Ok(db)
     }
@@ -664,6 +683,60 @@ impl SreDatabase {
             let _ = file.write_all(b"");
         }
         Ok(())
+    }
+
+    pub fn get_db_stats(&self) -> Result<SreDbStats> {
+        let base_display = self.db_path.display().to_string();
+        let wal_path = PathBuf::from(format!("{}-wal", base_display));
+        let shm_path = PathBuf::from(format!("{}-shm", base_display));
+
+        let db_size_bytes = fs::metadata(&self.db_path).map(|m| m.len()).unwrap_or(0);
+        let wal_size_bytes = fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0);
+        let shm_size_bytes = fs::metadata(&shm_path).map(|m| m.len()).unwrap_or(0);
+        let total_size_bytes = db_size_bytes
+            .saturating_add(wal_size_bytes)
+            .saturating_add(shm_size_bytes);
+
+        let log_count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM system_logs", [], |r| r.get(0))
+            .unwrap_or(0);
+        let console_session_count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM console_sessions", [], |r| r.get(0))
+            .unwrap_or(0);
+        let threat_run_count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM threat_audit_runs", [], |r| r.get(0))
+            .unwrap_or(0);
+        let journal_mode: String = self
+            .conn
+            .query_row("PRAGMA journal_mode;", [], |r| r.get(0))
+            .unwrap_or_else(|_| "unknown".to_string());
+
+        Ok(SreDbStats {
+            db_path: base_display,
+            db_size_bytes,
+            wal_size_bytes,
+            shm_size_bytes,
+            total_size_bytes,
+            log_count,
+            console_session_count,
+            threat_run_count,
+            journal_mode,
+        })
+    }
+
+    pub fn vacuum_and_checkpoint(&self) -> Result<SreDbStats> {
+        self.conn
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")?;
+        let _ = self.log_action(
+            "SYSTEM",
+            "INFO",
+            "Executed WAL checkpoint (TRUNCATE) and SQLite VACUUM on sre.sqlite",
+            None,
+        );
+        self.get_db_stats()
     }
 
     pub fn get_setting(&self, key: &str) -> Result<Option<String>> {

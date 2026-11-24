@@ -1,4 +1,4 @@
-use crate::db::{ConsoleSessionRecord, SreDatabase, SystemLogEntry};
+use crate::db::{ConsoleSessionRecord, SreDatabase, SreDbStats, SystemLogEntry};
 use std::sync::{Arc, Mutex};
 use tauri::State;
 
@@ -18,6 +18,22 @@ pub async fn clear_system_logs(
 ) -> Result<(), String> {
     let guard = db.lock().map_err(|e| e.to_string())?;
     guard.clear_logs().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_sre_db_stats(
+    db: State<'_, Arc<Mutex<SreDatabase>>>,
+) -> Result<SreDbStats, String> {
+    let guard = db.lock().map_err(|e| e.to_string())?;
+    guard.get_db_stats().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn vacuum_sre_db(
+    db: State<'_, Arc<Mutex<SreDatabase>>>,
+) -> Result<SreDbStats, String> {
+    let guard = db.lock().map_err(|e| e.to_string())?;
+    guard.vacuum_and_checkpoint().map_err(|e| e.to_string())
 }
 
 #[tauri::command]

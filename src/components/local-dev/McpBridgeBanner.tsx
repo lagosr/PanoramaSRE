@@ -18,7 +18,7 @@ export const McpBridgeBanner: React.FC<McpBridgeBannerProps> = ({ status }) => {
   const lastAction = status.lastAction;
 
   return (
-    <div className="rounded-xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm p-4.5 transition-all">
+    <div className="rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm p-4.5 transition-all tabular-nums space-y-3">
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         {/* Left: Identity and Transport */}
         <div className="flex items-center gap-3">
@@ -101,6 +101,16 @@ export const McpBridgeBanner: React.FC<McpBridgeBannerProps> = ({ status }) => {
             </div>
           )}
         </div>
+      </div>
+
+      {/* Reserved Antigravity MCP Handoffs Seam (AI Agent SRE Phase 4) */}
+      <div className="pt-2.5 border-t border-slate-100 dark:border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-slate-600 dark:text-slate-400">
+        <span>
+          Antigravity MCP Handoffs (<code className="font-mono">sre_agent_handoffs</code>): 0 pending handoff packets
+        </span>
+        <span className="px-2 py-0.5 rounded bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400">
+          Ready for AI Agent SRE
+        </span>
       </div>
     </div>
   );

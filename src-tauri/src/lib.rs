@@ -140,6 +140,8 @@ pub fn run() {
             get_ssl_fleet_status,
             get_system_logs,
             clear_system_logs,
+            get_sre_db_stats,
+            vacuum_sre_db,
             save_console_session,
             get_saved_console_sessions,
             delete_console_session,

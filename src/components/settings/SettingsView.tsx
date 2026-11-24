@@ -22,6 +22,11 @@ import {
   AlertTriangle,
   RotateCcw,
   Server,
+  KeyRound,
+  Cpu,
+  PanelBottom,
+  PanelRight,
+  Bot,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
@@ -31,16 +36,27 @@ import { formatConsoleLine, stripAnsiCodes } from '../layout/ConsoleColorizer';
 import { useSmartAutoScroll } from '../../hooks/useSmartAutoScroll';
 import { APP_VERSION_INFO } from '../../lib/version';
 import {
+  ConsoleAutoOpenMode,
+  ConsoleDockSide,
   PushoverPreferences,
   PushoverSendReceipt,
   PushoverSettingsViewDto,
   SaveThreatIntelSettingsInput,
+  SreDbStats,
   TerminalTab,
   ThreatIntelPreferences,
   ThreatIntelSettingsViewDto,
   WshSnapshot,
 } from '../../lib/types';
 import { useTheme } from '../../context/ThemeContext';
+
+function formatStorageBytes(bytes: number | null | undefined): string {
+  if (!bytes || bytes <= 0) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
 
 type ConnectorCheckStatus = 'idle' | 'testing' | 'pass' | 'fail';
 
@@ -107,7 +123,13 @@ interface SettingsViewProps {
   onThreatSettingsChanged?: (dto: ThreatIntelSettingsViewDto) => void;
   wshSnapshot?: WshSnapshot | null;
   onNavigateToRelease?: (slug: string) => void;
-  onReapplyHardening?: () => void;
+  onNavigateToHardening?: () => void;
+  autoOpenMode?: ConsoleAutoOpenMode;
+  onChangeAutoOpenMode?: (mode: ConsoleAutoOpenMode) => void;
+  dockSide?: ConsoleDockSide;
+  onChangeDockSide?: (side: ConsoleDockSide) => void;
+  sidebarCollapsed?: boolean;
+  onChangeSidebarCollapsed?: (collapsed: boolean) => void;
 }
 
 interface SystemLogEntry {
@@ -119,7 +141,7 @@ interface SystemLogEntry {
   created_at: string;
 }
 
-export type SettingsTab = 'general' | 'security' | 'notifications' | 'sync' | 'logs';
+export type SettingsTab = 'general' | 'security' | 'notifications' | 'sync' | 'logs' | 'about';
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
   initialTab,
@@ -136,7 +158,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onThreatSettingsChanged,
   wshSnapshot = null,
   onNavigateToRelease,
-  onReapplyHardening,
+  onNavigateToHardening,
+  autoOpenMode: propAutoOpenMode,
+  onChangeAutoOpenMode,
+  dockSide: propDockSide,
+  onChangeDockSide,
+  sidebarCollapsed: propSidebarCollapsed,
+  onChangeSidebarCollapsed,
 }) => {
   const { theme, resolvedTheme, setTheme } = useTheme();
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab ?? 'general');
@@ -146,13 +174,59 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       setActiveTab(initialTab);
     }
   }, [initialTab, initialTabNonce]);
+
+  const [instantSavedToast, setInstantSavedToast] = useState<string | null>(null);
+  const triggerInstantSaved = useCallback((label: string) => {
+    setInstantSavedToast(label);
+    setTimeout(() => {
+      setInstantSavedToast((cur) => (cur === label ? null : cur));
+    }, 2400);
+  }, []);
+
+  const [localAutoOpen, setLocalAutoOpen] = useState<ConsoleAutoOpenMode>(() => {
+    try {
+      const saved = localStorage.getItem('panoramasre_console_auto_open');
+      return saved === 'errors' || saved === 'manual' ? saved : 'smart';
+    } catch {
+      return 'smart';
+    }
+  });
+  const [localDockSide, setLocalDockSide] = useState<ConsoleDockSide>(() => {
+    try {
+      return localStorage.getItem('panoramasre_console_dock_side') === 'right' ? 'right' : 'bottom';
+    } catch {
+      return 'bottom';
+    }
+  });
+  const [localSidebarCollapsed, setLocalSidebarCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('panoramasre_sidebar_collapsed') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const effectiveAutoOpenMode = propAutoOpenMode ?? localAutoOpen;
+  const effectiveDockSide = propDockSide ?? localDockSide;
+  const effectiveSidebarCollapsed = propSidebarCollapsed ?? localSidebarCollapsed;
+
   const [minimizeToTray, setMinimizeToTray] = useState(true);
   const [toastAlerts, setToastAlerts] = useState(true);
   const [pollInterval, setPollInterval] = useState<string>(() => {
-    return propPollInterval || localStorage.getItem('panoramasre_tier1_poll_interval') || '15';
+    if (propPollInterval) return propPollInterval;
+    try {
+      return localStorage.getItem('panoramasre_tier1_poll_interval') || '15';
+    } catch {
+      return '15';
+    }
   });
   const [securityAuditInterval, setSecurityAuditInterval] = useState<string>(() => {
-    return propSecurityAuditInterval || localStorage.getItem('panoramasre_security_audit_interval') || '5';
+    if (propSecurityAuditInterval) return propSecurityAuditInterval;
+    try {
+      return localStorage.getItem('panoramasre_security_audit_interval') || '5';
+    } catch {
+      return '5';
+    }
   });
 
   useEffect(() => {
@@ -166,9 +240,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       setSecurityAuditInterval(propSecurityAuditInterval);
     }
   }, [propSecurityAuditInterval, securityAuditInterval]);
-  const [isSaved, setIsSaved] = useState(false);
   const [workspaceRoot, setWorkspaceRoot] = useState<string>('');
+  const [savedWorkspaceRoot, setSavedWorkspaceRoot] = useState<string>('');
+  const [isSavingWorkspace, setIsSavingWorkspace] = useState<boolean>(false);
   const [workspaceFeedback, setWorkspaceFeedback] = useState<string | null>(null);
+
+  // Local SQLite Telemetry Storage & VACUUM state
+  const [dbStats, setDbStats] = useState<SreDbStats | null>(null);
+  const [isLoadingDbStats, setIsLoadingDbStats] = useState<boolean>(false);
+  const [isVacuumingDb, setIsVacuumingDb] = useState<boolean>(false);
+  const [dbFeedback, setDbFeedback] = useState<{ text: string; tone: 'ok' | 'err' } | null>(null);
 
   // Pushover Mobile Notifications & Trusted-Network Gate state
   const [pushoverDto, setPushoverDto] = useState<PushoverSettingsViewDto | null>(null);
@@ -550,12 +631,56 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         const root = await invoke<string>('get_workspace_setting');
         if (root) {
           setWorkspaceRoot(root);
+          setSavedWorkspaceRoot(root);
         }
       } catch (err) {
         console.warn('Failed to load workspace setting:', err);
       }
     })();
   }, []);
+
+  const fetchDbStats = useCallback(async () => {
+    setIsLoadingDbStats(true);
+    try {
+      const stats = await invoke<SreDbStats>('get_sre_db_stats');
+      setDbStats(stats);
+    } catch (err) {
+      console.warn('Failed to load sre.sqlite telemetry stats:', err);
+    } finally {
+      setIsLoadingDbStats(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'sync') {
+      void fetchDbStats();
+    }
+  }, [activeTab, fetchDbStats]);
+
+  const handleVacuumDb = async () => {
+    if (isVacuumingDb) return;
+    setIsVacuumingDb(true);
+    setDbFeedback(null);
+    try {
+      const stats = await invoke<SreDbStats>('vacuum_sre_db');
+      setDbStats(stats);
+      setDbFeedback({
+        text: `WAL truncated & vacuumed (${formatStorageBytes(stats.totalSizeBytes)})`,
+        tone: 'ok',
+      });
+      setTimeout(() => setDbFeedback(null), 4500);
+      onEmitSettingsStream?.('VACUUM & Truncate WAL (sre.sqlite)', [
+        '[PanoramaSRE] Executing PRAGMA wal_checkpoint(TRUNCATE); VACUUM; on sre.sqlite...',
+        `[PASS] Database compacted cleanly (Total: ${formatStorageBytes(stats.totalSizeBytes)} | WAL: ${formatStorageBytes(stats.walSizeBytes)}).`,
+      ]);
+    } catch (err) {
+      const msg = String(err);
+      setDbFeedback({ text: `VACUUM failed: ${msg}`, tone: 'err' });
+      onEmitSettingsStream?.('VACUUM & Truncate WAL (sre.sqlite)', [`[ERROR] ${msg}`], 1);
+    } finally {
+      setIsVacuumingDb(false);
+    }
+  };
 
   const handleSelectWorkspaceFolder = async () => {
     try {
@@ -572,6 +697,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           workspaceRoot: selected,
         });
         setWorkspaceRoot(resolved);
+        setSavedWorkspaceRoot(resolved);
         setWorkspaceFeedback('Workspace directory updated');
         setTimeout(() => setWorkspaceFeedback(null), 3000);
         if (onWorkspaceChanged) {
@@ -584,11 +710,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   const handleSaveWorkspaceRoot = async () => {
+    setIsSavingWorkspace(true);
     try {
       const resolved = await invoke<string>('save_workspace_setting', {
         workspaceRoot: workspaceRoot,
       });
       setWorkspaceRoot(resolved);
+      setSavedWorkspaceRoot(resolved);
       setWorkspaceFeedback('Workspace directory saved');
       setTimeout(() => setWorkspaceFeedback(null), 3000);
       if (onWorkspaceChanged) {
@@ -597,6 +725,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     } catch (err) {
       setWorkspaceFeedback(`Error: ${String(err)}`);
       setTimeout(() => setWorkspaceFeedback(null), 4000);
+    } finally {
+      setIsSavingWorkspace(false);
     }
   };
 
@@ -696,117 +826,155 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
   }, [filteredLogs]);
 
-  const handleSave = () => {
-    localStorage.setItem('panoramasre_tier1_poll_interval', pollInterval);
-    localStorage.setItem('panoramasre_security_audit_interval', securityAuditInterval);
-    if (onPollIntervalChanged) {
-      onPollIntervalChanged(pollInterval);
-    }
-    if (onSecurityAuditIntervalChanged) {
-      onSecurityAuditIntervalChanged(securityAuditInterval);
-    }
-    onEmitSettingsStream?.('Save SRE Governance Settings', [
-      '[PanoramaSRE] Persisting workstation governance preferences...',
-      `[INFO] Tier 1 local interval: ${pollInterval}s | Tier 2 LAN/schedule: 60s | Tier 3 WSH/fleet: ${securityAuditInterval}m | Tier 4 hourly checks: 1h.`,
-      '[PASS] Governance settings updated.',
-    ]);
-    setIsSaved(true);
-    setTimeout(() => setIsSaved(false), 2000);
+  const isWorkspaceDirty = workspaceRoot.trim() !== savedWorkspaceRoot.trim();
+  const isSecurityDirty = Boolean(
+    threatDto && JSON.stringify(threatPrefs) !== JSON.stringify(threatDto.preferences)
+  );
+  const isNotificationsDirty = Boolean(
+    pushoverDto && JSON.stringify(pushoverPrefs) !== JSON.stringify(pushoverDto.preferences)
+  );
+
+  const dirtyByTab: Record<SettingsTab, boolean> = {
+    general: isWorkspaceDirty,
+    security: isSecurityDirty,
+    notifications: isNotificationsDirty,
+    sync: false,
+    logs: false,
+    about: false,
   };
 
-  const handleHeaderSave = () => {
+  const activeTabDirty = dirtyByTab[activeTab];
+  const activeTabSaving =
+    (activeTab === 'general' && isSavingWorkspace) ||
+    (activeTab === 'security' && isSavingThreat) ||
+    (activeTab === 'notifications' && isSavingPushover);
+
+  const handleDiscardActiveTab = () => {
+    if (activeTab === 'general') {
+      setWorkspaceRoot(savedWorkspaceRoot);
+    } else if (activeTab === 'security' && threatDto) {
+      setThreatPrefs(threatDto.preferences);
+    } else if (activeTab === 'notifications' && pushoverDto) {
+      setPushoverPrefs(pushoverDto.preferences);
+    }
+  };
+
+  const handleSaveActiveTab = () => {
+    if (activeTab === 'general') {
+      void handleSaveWorkspaceRoot();
+      return;
+    }
     if (activeTab === 'security') {
       void handleSaveThreatSettings();
       return;
     }
     if (activeTab === 'notifications') {
       void handleSavePushover();
-      return;
     }
-    handleSave();
   };
+
+  const settingsCategories: Array<{
+    id: SettingsTab;
+    label: string;
+    subtitle: string;
+    icon: React.ComponentType<{ className?: string }>;
+  }> = [
+    { id: 'general', label: 'General & Console', subtitle: 'Theme, tray & dock defaults', icon: Sliders },
+    {
+      id: 'security',
+      label: 'AI, Credentials & Connectors',
+      subtitle: 'Gemini budgets & SSOT keys',
+      icon: ShieldAlert,
+    },
+    { id: 'notifications', label: 'Notifications & Gate', subtitle: 'Pushover & roaming gate', icon: Bell },
+    { id: 'sync', label: 'Sync, Host & Storage', subtitle: '4-tier schedule & sre.sqlite', icon: Server },
+    { id: 'logs', label: 'Application Logs', subtitle: 'Live SQLite audit tail', icon: Terminal },
+    { id: 'about', label: 'About & Provenance', subtitle: 'Version & suite parity', icon: Info },
+  ];
 
   return (
     <div className="flex-1 flex flex-col h-full bg-slate-50 dark:bg-slate-950 overflow-hidden">
-      {/* View Header */}
+      {/* View Header (No duplicate Save CTA; instant local saves show subtle toast) */}
       <div className="h-14 border-b border-slate-200 dark:border-slate-800 px-6 flex items-center justify-between gap-3 bg-white dark:bg-slate-900 shrink-0">
-        <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-          Settings &amp; SRE Governance
-        </h2>
-        {activeTab !== 'logs' && (
-          <button
-            type="button"
-            onClick={handleHeaderSave}
-            disabled={
-              (activeTab === 'security' && isSavingThreat) ||
-              (activeTab === 'notifications' && isSavingPushover)
-            }
-            className="btn-primary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-          >
-            {(activeTab === 'general' || activeTab === 'sync') && isSaved ? (
+        <div className="flex items-center gap-2.5 min-w-0">
+          <Sliders className="w-4 h-4 text-[var(--color-brand-text)] shrink-0" />
+          <h1 className="text-base font-bold text-slate-900 dark:text-slate-100 truncate tracking-tight">
+            Settings &amp; SRE Governance
+          </h1>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          {instantSavedToast && (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-mono font-semibold bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30 whitespace-nowrap">
               <Check className="w-3.5 h-3.5" />
-            ) : (
-              <RefreshCw
-                className={`w-3.5 h-3.5 ${
-                  (activeTab === 'security' && isSavingThreat) ||
-                  (activeTab === 'notifications' && isSavingPushover)
-                    ? 'animate-spin'
-                    : ''
-                }`}
-              />
-            )}
-            <span>
-              {activeTab === 'security'
-                ? isSavingThreat
-                  ? 'Saving...'
-                  : 'Save Threat Settings'
-                : activeTab === 'notifications'
-                ? isSavingPushover
-                  ? 'Saving...'
-                  : 'Save Pushover Settings'
-                : isSaved
-                ? 'Saved!'
-                : 'Save Changes'}
+              <span>Saved · {instantSavedToast}</span>
             </span>
-          </button>
-        )}
+          )}
+          {activeTabDirty && (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-mono font-semibold bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-500/35 whitespace-nowrap">
+              <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+              <span>Unsaved changes</span>
+            </span>
+          )}
+        </div>
       </div>
 
-      {/* Focused 5-Tab Bar */}
-      <div className="border-b border-slate-200 dark:border-slate-800 px-6 flex space-x-6 bg-white dark:bg-slate-900 overflow-x-auto shrink-0">
-        {(
-          [
-            { id: 'general', label: 'General', icon: Sliders },
-            { id: 'security', label: 'Security & AI', icon: ShieldAlert },
-            { id: 'notifications', label: 'Notifications', icon: Bell },
-            { id: 'sync', label: 'Sync & Host', icon: Server },
-            { id: 'logs', label: 'Application Logs', icon: Terminal },
-          ] as const
-        ).map((tab) => {
-          const Icon = tab.icon;
-          const isActive = activeTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setActiveTab(tab.id)}
-              className={`py-3 min-h-[44px] text-sm font-medium border-b-2 flex items-center space-x-2 transition-colors whitespace-nowrap flex-shrink-0 cursor-pointer ${
-                isActive
-                  ? 'border-[var(--color-brand)] text-[var(--color-brand-text)] font-semibold'
-                  : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-              }`}
-            >
-              <Icon className="w-4 h-4 shrink-0" />
-              <span>{tab.label}</span>
-            </button>
-          );
-        })}
-      </div>
+      {/* 2-Column Vertical Sub-Nav Architecture */}
+      <div className="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden">
+        {/* Left Vertical Sub-Nav (228px desktop / horizontal fallback compact) */}
+        <aside className="w-full md:w-[228px] shrink-0 border-b md:border-b-0 md:border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col justify-between overflow-y-auto">
+          <nav className="p-2.5 flex md:flex-col gap-1 overflow-x-auto md:overflow-x-visible" aria-label="Settings Categories">
+            {settingsCategories.map((cat) => {
+              const Icon = cat.icon;
+              const isActive = activeTab === cat.id;
+              const isDirty = dirtyByTab[cat.id];
+              return (
+                <button
+                  key={cat.id}
+                  type="button"
+                  onClick={() => setActiveTab(cat.id)}
+                  className={`flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl text-left transition-all shrink-0 md:w-full cursor-pointer border ${
+                    isActive
+                      ? 'bg-[var(--color-brand-subtle)] text-[var(--color-brand-text)] border-[var(--color-brand-ring)] shadow-xs'
+                      : 'border-transparent text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/70 hover:text-slate-900 dark:hover:text-slate-100'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <Icon className="w-4 h-4 shrink-0" />
+                    <div className="min-w-0">
+                      <div className="text-xs font-semibold truncate">{cat.label}</div>
+                      <div className="hidden md:block text-[10px] opacity-75 truncate">{cat.subtitle}</div>
+                    </div>
+                  </div>
+                  {isDirty && (
+                    <span
+                      className="w-2 h-2 rounded-full bg-amber-500 shrink-0"
+                      title="Unsaved changes in this category"
+                    />
+                  )}
+                </button>
+              );
+            })}
+          </nav>
 
-      {/* Tab Contents */}
-      <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-5">
+          {/* Clean Governance Boundary Callout */}
+          <div className="hidden md:block m-2.5 p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-[11px] space-y-1">
+            <div className="font-mono font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+              <Bot className="w-3.5 h-3.5 text-[var(--color-accent-text)] shrink-0" />
+              <span>AI Agent SRE Policy</span>
+            </div>
+            <p className="text-slate-500 dark:text-slate-400 leading-snug">
+              Settings owns credentials, budgets, and alerts. Autonomy tiers L0–L4 &amp; kill-switches live in{' '}
+              <span className="font-mono text-slate-700 dark:text-slate-300">AI Agent SRE</span>.
+            </p>
+          </div>
+        </aside>
+
+        {/* Right Scrollable Form Canvas + Sticky Dirty-State Bar */}
+        <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+      <div className="flex-1 overflow-y-auto p-6 space-y-6">
         {activeTab === 'general' && (
-          <div className="w-full max-w-[1920px] mx-auto space-y-5">
+          <div className="w-full max-w-[1600px] mx-auto space-y-5">
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
               {/* Appearance & Theme Preference */}
               <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4 shadow-sm">
@@ -816,7 +984,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       Appearance &amp; Theme Preference
                     </h3>
                     <p className="text-xs text-slate-600 dark:text-slate-400">
-                      Select your preferred user theme. Synchronized across PanoramaDrSuite.
+                      Applies immediately and synchronizes across PanoramaDrSuite.
                     </p>
                   </div>
                   <span className="text-xs font-mono px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 uppercase whitespace-nowrap flex-shrink-0">
@@ -828,7 +996,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   activeVariant="brand"
                   fullWidth
                   value={theme}
-                  onChange={setTheme}
+                  onChange={(val) => {
+                    setTheme(val);
+                    triggerInstantSaved('Theme');
+                  }}
                   options={[
                     { value: 'dark', label: 'Dark Mode', icon: <Moon className="w-4 h-4" /> },
                     { value: 'light', label: 'Light Mode', icon: <Sun className="w-4 h-4" /> },
@@ -837,52 +1008,93 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 />
               </div>
 
-              {/* Build Provenance */}
-              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-3 shadow-sm">
+              {/* Unified Console Dock Defaults (Instant Local Preferences) */}
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4 shadow-sm">
                 <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center space-x-2">
-                    <Info className="w-4 h-4 text-[var(--color-brand-text)] shrink-0" />
+                  <div>
                     <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                      PanoramaSRE Build Provenance
+                      Unified Console Dock Defaults
                     </h3>
+                    <p className="text-xs text-slate-600 dark:text-slate-400">
+                      Controls auto-open policy, split placement, and compact rail state (saves immediately).
+                    </p>
                   </div>
-                  <span className="px-2 py-0.5 rounded text-xs font-mono font-semibold bg-[var(--color-brand-subtle)] text-[var(--color-brand-text)] border border-[var(--color-brand-ring)] tabular-nums whitespace-nowrap flex-shrink-0">
-                    {APP_VERSION_INFO.fullVersionString}
-                  </span>
+                  <StatusBadge label="Instant" variant="success" />
                 </div>
-                <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-100 dark:border-slate-800 font-mono text-xs tabular-nums">
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <span className="text-slate-600 dark:text-slate-400 block text-[11px]">
-                      Semantic Version:
-                    </span>
-                    <span className="text-slate-800 dark:text-slate-300 font-semibold">
-                      {APP_VERSION_INFO.version}
-                    </span>
+                    <label className="block text-[11px] font-mono text-slate-600 dark:text-slate-400 mb-1">
+                      Default Auto-Open Mode
+                    </label>
+                    <SegmentedControl<ConsoleAutoOpenMode>
+                      activeVariant="brand"
+                      fullWidth
+                      size="sm"
+                      value={effectiveAutoOpenMode}
+                      onChange={(val) => {
+                        setLocalAutoOpen(val);
+                        try {
+                          localStorage.setItem('panoramasre_console_auto_open', val);
+                        } catch {}
+                        onChangeAutoOpenMode?.(val);
+                        triggerInstantSaved('Console auto-open');
+                      }}
+                      options={[
+                        { value: 'smart', label: 'Smart' },
+                        { value: 'errors', label: 'Errors' },
+                        { value: 'manual', label: 'Manual' },
+                      ]}
+                    />
                   </div>
+
                   <div>
-                    <span className="text-slate-600 dark:text-slate-400 block text-[11px]">
-                      Git Commit SHA:
-                    </span>
-                    <span className="text-[var(--color-accent-text)] font-semibold">
-                      {APP_VERSION_INFO.buildHash}
-                    </span>
+                    <label className="block text-[11px] font-mono text-slate-600 dark:text-slate-400 mb-1">
+                      Default Dock Placement
+                    </label>
+                    <SegmentedControl<ConsoleDockSide>
+                      activeVariant="brand"
+                      fullWidth
+                      size="sm"
+                      value={effectiveDockSide}
+                      onChange={(val) => {
+                        setLocalDockSide(val);
+                        try {
+                          localStorage.setItem('panoramasre_console_dock_side', val);
+                        } catch {}
+                        onChangeDockSide?.(val);
+                        triggerInstantSaved('Dock placement');
+                      }}
+                      options={[
+                        { value: 'bottom', label: 'Bottom', icon: <PanelBottom className="w-3.5 h-3.5" /> },
+                        { value: 'right', label: 'Right', icon: <PanelRight className="w-3.5 h-3.5" /> },
+                      ]}
+                    />
                   </div>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 pt-2 border-t border-slate-100 dark:border-slate-800">
                   <div>
-                    <span className="text-slate-600 dark:text-slate-400 block text-[11px]">
-                      Build Timestamp:
-                    </span>
-                    <span className="text-slate-800 dark:text-slate-300">
-                      {APP_VERSION_INFO.buildDate || 'Local Dev'}
-                    </span>
+                    <div className="text-xs font-medium text-slate-800 dark:text-slate-200">
+                      Compact Sidebar Rail (Icon-Only)
+                    </div>
+                    <div className="text-[11px] text-slate-600 dark:text-slate-400">
+                      Collapses left navigation rail to w-16 icons (click app logo to re-expand).
+                    </div>
                   </div>
-                  <div>
-                    <span className="text-slate-600 dark:text-slate-400 block text-[11px]">
-                      Build Identifier:
-                    </span>
-                    <span className="text-slate-800 dark:text-slate-300">
-                      {APP_VERSION_INFO.buildNumber}
-                    </span>
-                  </div>
+                  <ToggleSwitch
+                    size="sm"
+                    checked={effectiveSidebarCollapsed}
+                    onChange={(val) => {
+                      setLocalSidebarCollapsed(val);
+                      try {
+                        localStorage.setItem('panoramasre_sidebar_collapsed', String(val));
+                      } catch {}
+                      onChangeSidebarCollapsed?.(val);
+                      triggerInstantSaved('Sidebar rail');
+                    }}
+                    activeColor="brand"
+                  />
                 </div>
               </div>
 
@@ -917,17 +1129,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       type="button"
                       onClick={handleSelectWorkspaceFolder}
                       className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-                      title="Browse for folder"
+                      title="Browse and immediately apply folder"
                     >
                       <FolderOpen className="w-4 h-4" />
                       <span>Browse...</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleSaveWorkspaceRoot}
-                      className="btn-primary text-xs whitespace-nowrap flex-shrink-0"
-                    >
-                      Apply
                     </button>
                   </div>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
@@ -956,7 +1161,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </div>
                   <ToggleSwitch
                     checked={minimizeToTray}
-                    onChange={setMinimizeToTray}
+                    onChange={(val) => {
+                      setMinimizeToTray(val);
+                      triggerInstantSaved('Tray close');
+                    }}
                     activeColor="brand"
                   />
                 </div>
@@ -972,7 +1180,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </div>
                   <ToggleSwitch
                     checked={toastAlerts}
-                    onChange={setToastAlerts}
+                    onChange={(val) => {
+                      setToastAlerts(val);
+                      triggerInstantSaved('Toast alerts');
+                    }}
                     activeColor="brand"
                   />
                 </div>
@@ -988,7 +1199,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </div>
                   <ToggleSwitch
                     checked={windowsAutostart}
-                    onChange={(val) => void handleToggleWindowsAutostart(val)}
+                    onChange={(val) => {
+                      void handleToggleWindowsAutostart(val);
+                      triggerInstantSaved('Autostart');
+                    }}
                     activeColor="brand"
                   />
                 </div>
@@ -1016,7 +1230,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     />
                   </div>
                   <p className="text-xs text-slate-600 dark:text-slate-400">
-                    Autonomous 6-hour security audits powered by read-only SSOT credentials (.env.local.keys / Windows DPAPI).
+                    Gemini 4 triage engine &amp; shared daily escalation budgets across Threat Intel and future AI Agent SRE (read-only SSOT credentials).
                   </p>
                 </div>
 
@@ -1287,23 +1501,28 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         );
                       })}
                     </div>
+
+                    {/* Reserved 5th Connector Seam: AI Agent Forced-Command Gatekeeper Key */}
+                    <div className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-dashed border-slate-300 dark:border-slate-700 flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <KeyRound className="w-4 h-4 text-[var(--color-accent-text)] shrink-0" />
+                        <div className="min-w-0">
+                          <div className="font-semibold text-slate-900 dark:text-slate-100 truncate">
+                            sre-agent-wsh Ed25519 Forced-Command Gatekeeper Key
+                          </div>
+                          <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                            Dedicated allowlisted SSH identity reserved for AI Agent SRE (never shares interactive root deployment key)
+                          </div>
+                        </div>
+                      </div>
+                      <StatusBadge label="Standby" variant="neutral" />
+                    </div>
                   </div>
                 );
               })()}
 
-              {/* Footer */}
-              <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
-                <button
-                  type="button"
-                  onClick={() => void handleSaveThreatSettings()}
-                  disabled={isSavingThreat}
-                  className="btn-primary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-                >
-                  <Check className="w-3.5 h-3.5" />
-                  <span>{isSavingThreat ? 'Saving...' : 'Save Threat Intel Settings'}</span>
-                </button>
-
-                {threatFeedback && (
+              {threatFeedback && (
+                <div className="pt-2 border-t border-slate-200 dark:border-slate-800 flex items-center justify-end">
                   <span
                     className={`text-xs font-mono px-2.5 py-1 rounded border whitespace-nowrap flex-shrink-0 ${
                       threatFeedback.tone === 'ok'
@@ -1313,8 +1532,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   >
                     {threatFeedback.text}
                   </span>
-                )}
-              </div>
+                </div>
+              )}
             </div>
 
             {(() => {
@@ -1568,19 +1787,34 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
               </div>
 
-              {/* Action Footer */}
+              {/* Reserved Autonomous Agent Alert Channels */}
+              <div className="pt-2 border-t border-slate-200 dark:border-slate-800 space-y-2">
+                <div className="text-[11px] font-mono font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                  Autonomous AI Agent Channels (Standby)
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 text-xs">
+                  {[
+                    { title: 'L2 Auto-Actions Digest', desc: 'Quiet confirmation when autonomous playbooks remediate drift.' },
+                    { title: 'L3 Approvals Required', desc: 'High-priority mobile notification for operator sign-off.' },
+                    { title: 'Attack Onset Escalation', desc: 'Immediate bypass alert if multi-vector attack circuit breaker trips.' },
+                  ].map((ch) => (
+                    <div
+                      key={ch.title}
+                      className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-dashed border-slate-300 dark:border-slate-800 space-y-1"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold text-slate-800 dark:text-slate-200">{ch.title}</span>
+                        <StatusBadge label="Standby" variant="neutral" />
+                      </div>
+                      <div className="text-[11px] text-slate-500 dark:text-slate-400">{ch.desc}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Action Footer (Non-Save Operational Actions) */}
               <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
                 <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={handleSavePushover}
-                    disabled={isSavingPushover}
-                    className="btn-primary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-                  >
-                    <Check className="w-3.5 h-3.5" />
-                    <span>{isSavingPushover ? 'Saving...' : 'Save Pushover Settings'}</span>
-                  </button>
-
                   <button
                     type="button"
                     onClick={handleSendTestPushover}
@@ -1661,6 +1895,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       setPollInterval(val);
                       localStorage.setItem('panoramasre_tier1_poll_interval', val);
                       onPollIntervalChanged?.(val);
+                      triggerInstantSaved('Tier 1 polling');
                     }}
                     options={[
                       { value: '5', label: '5 seconds (High Frequency / Debug)' },
@@ -1686,6 +1921,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       if (onSecurityAuditIntervalChanged) {
                         onSecurityAuditIntervalChanged(val);
                       }
+                      triggerInstantSaved('Tier 3 fleet sync');
                     }}
                     options={[
                       { value: '1', label: '1 minute (High Frequency / Verification)' },
@@ -1742,7 +1978,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
             {/* Bottom 2-Column Host & Database Cards */}
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
-              {/* Target WSH SSH Connection */}
+              {/* Target WSH SSH Connection (Contextual Jump to WSH Hardening) */}
               <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-3 shadow-sm">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
@@ -1751,14 +1987,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       Target WSH Host SSH Connection
                     </h3>
                   </div>
-                  {onReapplyHardening && (
+                  {onNavigateToHardening && (
                     <button
                       type="button"
-                      onClick={onReapplyHardening}
-                      className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                      onClick={onNavigateToHardening}
+                      className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
                     >
                       <ShieldCheck className="w-3.5 h-3.5" />
-                      <span>Re-Apply WSH Firewall</span>
+                      <span>Open WSH Hardening →</span>
                     </button>
                   )}
                 </div>
@@ -1772,7 +2008,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
                     <div className="text-[11px] text-slate-500">Auth Mode</div>
                     <div className="text-slate-800 dark:text-slate-200 font-semibold">
-                      OpenSSH Private Key (RSA)
+                      OpenSSH Private Key (RSA / Ed25519)
                     </div>
                   </div>
                   <div className="sm:col-span-2 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 truncate">
@@ -1784,30 +2020,109 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
               </div>
 
-              {/* Local SQLite Telemetry Storage */}
+              {/* Local SQLite Telemetry Storage + Live Stats + VACUUM */}
               <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-3 shadow-sm">
-                <div className="flex items-center gap-2">
-                  <Database className="w-4 h-4 text-[var(--color-brand-text)] shrink-0" />
-                  <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                    Local SQLite Telemetry Storage
-                  </h3>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Database className="w-4 h-4 text-[var(--color-brand-text)] shrink-0" />
+                    <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                      Local SQLite Telemetry Storage
+                    </h3>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void fetchDbStats()}
+                      disabled={isLoadingDbStats}
+                      className="btn-ghost text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isLoadingDbStats ? 'animate-spin' : ''}`} />
+                      <span>Refresh</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleVacuumDb()}
+                      disabled={isVacuumingDb}
+                      className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                    >
+                      <Database className="w-3.5 h-3.5" />
+                      <span>{isVacuumingDb ? 'Compacting...' : 'Run VACUUM & Truncate WAL'}</span>
+                    </button>
+                  </div>
                 </div>
                 <p className="text-xs text-slate-600 dark:text-slate-400">
-                  Stores threat actors, findings, audit logs, system telemetry, and command run history locally in WAL mode.
+                  Stores threat actors, findings, audit logs, and console run history locally in WAL mode.
                 </p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 font-mono text-xs tabular-nums">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 font-mono text-xs tabular-nums">
                   <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
-                    <div className="text-[11px] text-slate-500">Database &amp; Journal</div>
+                    <div className="text-[11px] text-slate-500">sre.sqlite</div>
                     <div className="text-slate-800 dark:text-slate-200 font-semibold">
-                      data/sre.sqlite (WAL)
+                      {dbStats ? formatStorageBytes(dbStats.dbSizeBytes) : '—'}
                     </div>
                   </div>
                   <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
-                    <div className="text-[11px] text-slate-500">Auto-Purge Retention</div>
+                    <div className="text-[11px] text-slate-500">-wal / -shm</div>
                     <div className="text-slate-800 dark:text-slate-200 font-semibold">
-                      Logs: 28d • Audits: 90d
+                      {dbStats
+                        ? formatStorageBytes(dbStats.walSizeBytes + dbStats.shmSizeBytes)
+                        : '—'}
                     </div>
                   </div>
+                  <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                    <div className="text-[11px] text-slate-500">Rows (Logs / Runs)</div>
+                    <div className="text-slate-800 dark:text-slate-200 font-semibold">
+                      {dbStats ? `${dbStats.logCount} / ${dbStats.threatRunCount}` : '—'}
+                    </div>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                    <div className="text-[11px] text-slate-500">Journal &amp; Retention</div>
+                    <div className="text-slate-800 dark:text-slate-200 font-semibold uppercase">
+                      {dbStats?.journalMode || 'WAL'} · 28d/90d
+                    </div>
+                  </div>
+                </div>
+                {dbFeedback && (
+                  <div
+                    className={`text-xs font-mono px-2.5 py-1.5 rounded-lg border ${
+                      dbFeedback.tone === 'ok'
+                        ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
+                        : 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border-rose-500/30'
+                    }`}
+                  >
+                    {dbFeedback.text}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Reserved Seam: Workstation Resource Guardrails (AI Agent SRE) */}
+            <div className="bg-white dark:bg-slate-900 border border-dashed border-slate-300 dark:border-slate-800 rounded-2xl p-5 space-y-3 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Cpu className="w-4 h-4 text-[var(--color-accent-text)] shrink-0" />
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                      Workstation Resource Guardrails
+                    </h3>
+                    <p className="text-xs text-slate-600 dark:text-slate-400">
+                      Host thermal, power, and free-disk gates enforced before autonomous worktree builds run.
+                    </p>
+                  </div>
+                </div>
+                <StatusBadge label="Standby (Agent Phase 3)" variant="neutral" />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 font-mono text-xs tabular-nums">
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                  <div className="text-[11px] text-slate-500">Battery Power Guard</div>
+                  <div className="font-semibold text-slate-800 dark:text-slate-200">Pause Heavy Builds &lt; 25%</div>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                  <div className="text-[11px] text-slate-500">CPU / Build Concurrency</div>
+                  <div className="font-semibold text-slate-800 dark:text-slate-200">Max 1 Active Docker Build</div>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                  <div className="text-[11px] text-slate-500">Workstation Free Disk Floor</div>
+                  <div className="font-semibold text-slate-800 dark:text-slate-200">Require &ge; 20 GB Free</div>
                 </div>
               </div>
             </div>
@@ -1846,6 +2161,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       { value: 'MONITOR', label: 'MONITOR' },
                       { value: 'NOTIFY', label: 'NOTIFY' },
                       { value: 'OPT_IN', label: 'OPT_IN' },
+                      { value: 'AGENT_AUDIT', label: 'AGENT_AUDIT' },
                     ]}
                   />
                 </div>
@@ -1983,6 +2299,115 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
         )}
+
+        {activeTab === 'about' && (
+          <div className="w-full max-w-[1600px] mx-auto space-y-5">
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+              {/* Build Provenance */}
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-3 shadow-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center space-x-2">
+                    <Info className="w-4 h-4 text-[var(--color-brand-text)] shrink-0" />
+                    <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                      PanoramaSRE Build Provenance
+                    </h3>
+                  </div>
+                  <span className="px-2 py-0.5 rounded text-xs font-mono font-semibold bg-[var(--color-brand-subtle)] text-[var(--color-brand-text)] border border-[var(--color-brand-ring)] tabular-nums whitespace-nowrap flex-shrink-0">
+                    {APP_VERSION_INFO.fullVersionString}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-100 dark:border-slate-800 font-mono text-xs tabular-nums">
+                  <div>
+                    <span className="text-slate-600 dark:text-slate-400 block text-[11px]">
+                      Semantic Version:
+                    </span>
+                    <span className="text-slate-800 dark:text-slate-300 font-semibold">
+                      {APP_VERSION_INFO.version}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-600 dark:text-slate-400 block text-[11px]">
+                      Git Commit SHA:
+                    </span>
+                    <span className="text-[var(--color-accent-text)] font-semibold">
+                      {APP_VERSION_INFO.buildHash}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-600 dark:text-slate-400 block text-[11px]">
+                      Build Timestamp:
+                    </span>
+                    <span className="text-slate-800 dark:text-slate-300">
+                      {APP_VERSION_INFO.buildDate || 'Local Dev'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-600 dark:text-slate-400 block text-[11px]">
+                      Build Identifier:
+                    </span>
+                    <span className="text-slate-800 dark:text-slate-300">
+                      {APP_VERSION_INFO.buildNumber}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Suite Architecture Alignment */}
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-3 shadow-sm">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-emerald-500 shrink-0" />
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                    Suite Control Plane Alignment
+                  </h3>
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                  PanoramaSRE Control Plane coordinates local Next.js dev supervision, 4-stage ARM64 host builds, 360° threat intelligence, GFS SQLite DR, and Windows Named Pipe MCP tooling across PanoramaDrSuite.
+                </p>
+                <div className="grid grid-cols-2 gap-2.5 text-xs font-mono pt-1">
+                  <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                    <div className="text-[11px] text-slate-500">Design Brand</div>
+                    <div className="font-semibold text-slate-800 dark:text-slate-200">sre (Solar Orange)</div>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                    <div className="text-[11px] text-slate-500">IPC Surface</div>
+                    <div className="font-semibold text-slate-800 dark:text-slate-200">Tauri v2 + Named Pipe</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Single Consistent Sticky Dirty-State Save Bar */}
+      {activeTabDirty && (
+        <div className="border-t border-amber-500/40 bg-white dark:bg-slate-900 px-6 py-3 flex flex-wrap items-center justify-between gap-3 shrink-0 shadow-lg">
+          <div className="flex items-center gap-2 text-xs font-medium text-slate-800 dark:text-slate-200">
+            <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0 animate-pulse" />
+            <span>You have unsaved changes in this category</span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={handleDiscardActiveTab}
+              disabled={activeTabSaving}
+              className="btn-secondary text-xs whitespace-nowrap flex-shrink-0"
+            >
+              Discard
+            </button>
+            <button
+              type="button"
+              onClick={handleSaveActiveTab}
+              disabled={activeTabSaving}
+              className="btn-primary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+            >
+              <Check className="w-3.5 h-3.5" />
+              <span>{activeTabSaving ? 'Saving...' : 'Save Changes'}</span>
+            </button>
+          </div>
+        </div>
+      )}
+        </div>
       </div>
     </div>
   );
