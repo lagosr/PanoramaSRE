@@ -69,6 +69,7 @@ interface UnifiZoneFlowExplorerProps {
   onToggleLanTrust?: (client: LanClientBaselineRow, trusted: boolean) => void;
   renderPolicyRow?: (pol: UnifiPolicyDto, showZones?: boolean) => React.ReactNode;
   onOpenUnifiFirewall?: () => void;
+  initialSelectedZoneIds?: string[];
 }
 
 const VIEW_MODE_STORAGE_KEY = 'panoramasre_zbf_flow_view_mode';
@@ -181,8 +182,15 @@ export const UnifiZoneFlowExplorer: React.FC<UnifiZoneFlowExplorerProps> = ({
   lanClients = [],
   onToggleLanTrust,
   onOpenUnifiFirewall,
+  initialSelectedZoneIds,
 }) => {
-  const [selectedZoneIds, setSelectedZoneIds] = useState<string[]>([]);
+  const [selectedZoneIds, setSelectedZoneIds] = useState<string[]>(() =>
+    initialSelectedZoneIds && initialSelectedZoneIds.length > 0
+      ? initialSelectedZoneIds
+      : matrix.zones.length > 0
+      ? pickDefaultFlowZoneIds(matrix, 3)
+      : []
+  );
   const [showReturnWires, setShowReturnWires] = useState<boolean>(false);
   const [showBlockedWires, setShowBlockedWires] = useState<boolean>(false);
   const [customRulesOnly, setCustomRulesOnly] = useState<boolean>(false);
@@ -233,7 +241,9 @@ export const UnifiZoneFlowExplorer: React.FC<UnifiZoneFlowExplorerProps> = ({
 
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const cardRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
-  const seededTopologyRef = useRef<boolean>(false);
+  const seededTopologyRef = useRef<boolean>(
+    Boolean((initialSelectedZoneIds && initialSelectedZoneIds.length > 0) || matrix.zones.length > 0)
+  );
   const dragSessionRef = useRef<{
     zoneId: string;
     pointerId: number;
@@ -1342,39 +1352,58 @@ export const UnifiZoneFlowExplorer: React.FC<UnifiZoneFlowExplorerProps> = ({
                     onPointerUp={(e) => handleDragEnd(e, zone.id)}
                     onPointerCancel={(e) => handleDragEnd(e, zone.id)}
                     title="Drag header to reposition zone container"
-                    className={`px-3.5 py-2.5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2 bg-white dark:bg-slate-900 select-none ${
+                    className={`px-3.5 py-2.5 border-b border-slate-200 dark:border-slate-800 flex flex-col gap-2 bg-white dark:bg-slate-900 select-none ${
                       isDragging ? 'cursor-grabbing' : 'cursor-grab'
                     }`}
                   >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <GripVertical className="w-4 h-4 text-slate-400 dark:text-slate-500 shrink-0" />
-                      <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${style.dotClass}`} />
-                      <h4 className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">
-                        {zone.name}
-                      </h4>
-                      {zone.vlanIds.length > 0 ? (
-                        zone.vlanIds.map((vid) => {
-                          const vs = getVlanBadgeStyle(`VLAN ${vid}`);
-                          return (
-                            <span
-                              key={vid}
-                              className={`px-1.5 py-0.5 rounded border font-mono text-[10px] font-semibold tabular-nums shrink-0 ${vs.chipClass}`}
-                            >
-                              VLAN {vid}
-                            </span>
-                          );
-                        })
-                      ) : (
-                        <StatusBadge label="System" variant="neutral" />
-                      )}
+                    <div className="flex items-start justify-between gap-2 min-w-0">
+                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                        <GripVertical className="w-4 h-4 text-slate-400 dark:text-slate-500 shrink-0" />
+                        <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${style.dotClass}`} />
+                        <h4
+                          className="text-sm font-bold text-slate-900 dark:text-slate-100 leading-snug break-words"
+                          title={zone.name}
+                        >
+                          {zone.name}
+                        </h4>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => toggleZoneSelection(zone.id)}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        aria-label={`Remove ${zone.name} from flow view`}
+                        title={`Hide ${zone.name}`}
+                        className="min-w-[28px] min-h-[28px] flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer shrink-0 -mt-0.5 -mr-1"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
                     </div>
 
-                    <div
-                      className="flex items-center gap-1.5 shrink-0"
-                      onPointerDown={(e) => e.stopPropagation()}
-                    >
+                    <div className="flex flex-wrap items-center justify-between gap-2 pl-6">
+                      <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                        {zone.vlanIds.length > 0 ? (
+                          zone.vlanIds.map((vid) => {
+                            const vs = getVlanBadgeStyle(`VLAN ${vid}`);
+                            return (
+                              <span
+                                key={vid}
+                                className={`px-1.5 py-0.5 rounded border font-mono text-[10px] font-semibold tabular-nums shrink-0 ${vs.chipClass}`}
+                              >
+                                VLAN {vid}
+                              </span>
+                            );
+                          })
+                        ) : (
+                          <StatusBadge label="System" variant="neutral" />
+                        )}
+                      </div>
+
                       {/* Per-Zone View Level Switch */}
-                      <div className="inline-flex rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 p-0.5 text-[10px] font-mono">
+                      <div
+                        className="inline-flex rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 p-0.5 text-[10px] font-mono shrink-0"
+                        onPointerDown={(e) => e.stopPropagation()}
+                      >
                         <button
                           type="button"
                           onClick={() =>
@@ -1402,16 +1431,6 @@ export const UnifiZoneFlowExplorer: React.FC<UnifiZoneFlowExplorerProps> = ({
                           Inspect
                         </button>
                       </div>
-
-                      <button
-                        type="button"
-                        onClick={() => toggleZoneSelection(zone.id)}
-                        aria-label={`Remove ${zone.name} from flow view`}
-                        title={`Hide ${zone.name}`}
-                        className="min-w-[28px] min-h-[28px] flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer shrink-0"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
                     </div>
                   </div>
 
@@ -1989,15 +2008,15 @@ export const UnifiZoneFlowExplorer: React.FC<UnifiZoneFlowExplorerProps> = ({
                   >
                     <GripVertical className="w-3 h-3 text-slate-400 shrink-0" />
                     <span className="font-bold">{style.shortLabel}</span>
-                    <span className="max-w-[78px] truncate text-slate-700 dark:text-slate-200">
+                    <span className="max-w-[70px] truncate text-slate-700 dark:text-slate-200">
                       {connection.sourceZoneName}
                     </span>
                     <ArrowRight className="w-3 h-3 shrink-0" />
-                    <span className="max-w-[78px] truncate text-slate-700 dark:text-slate-200">
+                    <span className="max-w-[70px] truncate text-slate-700 dark:text-slate-200">
                       {connection.destinationZoneName}
                     </span>
                     {ruleSuffix && (
-                      <span className="max-w-[130px] truncate font-normal text-slate-500 dark:text-slate-400">
+                      <span className="max-w-[100px] truncate font-normal text-slate-500 dark:text-slate-400">
                         · {ruleSuffix}
                       </span>
                     )}

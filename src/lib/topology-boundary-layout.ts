@@ -154,15 +154,15 @@ export const HOST_DOCKER_PRESET_ZONE_IDS: readonly BoundaryZoneId[] = [
 
 export const BOUNDARY_HIGH_LEVEL_WIDTH = 360;
 export const BOUNDARY_INSPECTION_WIDTH = 520;
-export const BOUNDARY_ESTIMATED_HIGH_LEVEL_HEIGHT = 330;
+export const BOUNDARY_ESTIMATED_HIGH_LEVEL_HEIGHT = 360;
 export const BOUNDARY_ESTIMATED_INSPECTION_HEIGHT = 580;
 export const BOUNDARY_CANVAS_PAD = 44;
-export const BOUNDARY_GUTTER_X = 210;
+export const BOUNDARY_GUTTER_X = 240;
 export const BOUNDARY_GUTTER_Y = 144;
 
-const PILL_HALF_WIDTH = 114;
+const PILL_HALF_WIDTH = 120;
 const PILL_HALF_HEIGHT = 16;
-const PILL_COLLISION_WIDTH = 232;
+const PILL_COLLISION_WIDTH = 244;
 const PILL_COLLISION_HEIGHT = 34;
 
 export function getBoundaryCardWidth(mode: BoundaryCardViewMode): number {

@@ -1,7 +1,7 @@
 {
   "name": "panorama-sre",
   "private": true,
-  "version": "1.10.9",
+  "version": "1.10.10",
   "type": "module",
   "scripts": {
     "dev": "vite",

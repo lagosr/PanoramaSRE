@@ -668,7 +668,7 @@ export const UnifiVlanZbfPanel: React.FC<UnifiVlanZbfPanelProps> = ({
                   <div className="space-y-1 min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${style.dotClass}`} />
-                      <h4 className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">
+                      <h4 className="text-sm font-bold text-slate-900 dark:text-slate-100 leading-snug break-words">
                         {net.name}
                       </h4>
                       {net.vlanId != null && (

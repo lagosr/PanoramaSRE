@@ -34,15 +34,15 @@ export interface WireGeometry {
 
 export const HIGH_LEVEL_CARD_WIDTH = 360;
 export const INSPECTION_CARD_WIDTH = 520;
-export const ESTIMATED_HIGH_LEVEL_HEIGHT = 340;
+export const ESTIMATED_HIGH_LEVEL_HEIGHT = 368;
 export const ESTIMATED_INSPECTION_HEIGHT = 640;
 export const CANVAS_PAD = 44;
-export const GUTTER_X = 220;
+export const GUTTER_X = 240;
 export const GUTTER_Y = 148;
 
-const PILL_HALF_WIDTH = 112;
+const PILL_HALF_WIDTH = 120;
 const PILL_HALF_HEIGHT = 16;
-const PILL_COLLISION_WIDTH = 230;
+const PILL_COLLISION_WIDTH = 244;
 const PILL_COLLISION_HEIGHT = 34;
 
 export function getZoneCardWidth(mode: ZoneCardViewMode): number {
