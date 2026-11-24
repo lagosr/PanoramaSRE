@@ -1,5 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { DiscoveredApp, isAppDeployCandidate } from '../../lib/types';
+import {
+  DiscoveredApp,
+  NetworkPosture,
+  isAppCritical,
+  isAppDeployCandidate,
+} from '../../lib/types';
 import { 
   Rocket, 
   X, 
@@ -28,6 +33,8 @@ interface BatchDeployModalProps {
   onConfirm: (options: BatchDeployOptions) => void;
   onCancel: () => void;
   isProcessing?: boolean;
+  isInitialSyncComplete?: boolean;
+  networkPosture?: NetworkPosture;
 }
 
 const BUMP_OPTIONS: SelectOption[] = [
@@ -43,6 +50,8 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
   onConfirm,
   onCancel,
   isProcessing = false,
+  isInitialSyncComplete = true,
+  networkPosture,
 }) => {
   // Maintain ordered list of all apps
   const [orderedApps, setOrderedApps] = useState<DiscoveredApp[]>([]);
@@ -218,8 +227,7 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
             const isAuth = app.manifest.slug === 'auth';
             const undeployedCount = app.composition?.undeployed_commits?.length || 0;
             const hasDrift = undeployedCount > 0 || app.composition?.local_dirty;
-            const isHealthy = app.health?.status === 'healthy';
-            const isCritical = !isHealthy || app.provenanceState === 'PROD_UNREACHABLE' || app.provenanceState === 'DIRTY_PROD';
+            const isCritical = isAppCritical(app, { isInitialSyncComplete, networkPosture });
             const queuePosition = executionQueue.findIndex((a) => a.manifest.slug === app.manifest.slug);
 
             return (

@@ -42,8 +42,8 @@ export function buildSyncAlertEvaluationInput(
         (a) =>
           !(
             a.manifest.hostingTarget === 'wsh-docker-service' &&
-            a.manifest.service?.optionalDeployment &&
-            a.health?.status === 'not_deployed'
+            (!a.health ||
+              (a.manifest.service?.optionalDeployment && a.health.status === 'not_deployed'))
           )
       )
       .map((a) => {

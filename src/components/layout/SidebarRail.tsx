@@ -35,6 +35,7 @@ interface SidebarRailProps {
   unreadOptInsCount?: number;
   threatAlertCount?: number;
   threatAlertSeverity?: 'error' | 'warning' | null;
+  isInitialSyncComplete?: boolean;
 }
 
 export const SidebarRail: React.FC<SidebarRailProps> = ({
@@ -54,6 +55,7 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
   unreadOptInsCount = 0,
   threatAlertCount = 0,
   threatAlertSeverity = null,
+  isInitialSyncComplete = true,
 }) => {
   const effectiveTopologyBadge =
     topologyAlertCount !== undefined ? topologyAlertCount : securityViolationCount;
@@ -150,7 +152,9 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
             </div>
             <span
               className={`w-2.5 h-2.5 rounded-full absolute -top-0.5 -right-0.5 ring-2 ring-white dark:ring-slate-950 ${
-                unhealthyCount > 0
+                !isInitialSyncComplete
+                  ? 'bg-slate-400 dark:bg-slate-500 animate-pulse'
+                  : unhealthyCount > 0
                   ? 'bg-rose-500 animate-ping'
                   : 'bg-emerald-500 dark:bg-emerald-400 animate-pulse'
               }`}
@@ -172,7 +176,7 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
-            const isAlertTab = item.id === 'hud' && unhealthyCount > 0;
+            const isAlertTab = isInitialSyncComplete && item.id === 'hud' && unhealthyCount > 0;
 
             return (
               <button
@@ -194,7 +198,7 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
                 }`} />
                 <span className="ml-3 hidden md:inline whitespace-nowrap">{item.label}</span>
 
-                {item.badge !== undefined && item.badge > 0 && (
+                {isInitialSyncComplete && item.badge !== undefined && item.badge > 0 && (
                   <>
                     <span
                       className={`md:hidden absolute top-2 right-2 w-2 h-2 rounded-full ${

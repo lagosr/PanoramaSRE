@@ -5,9 +5,12 @@ import {
   BatchSmokeFailureReport,
   CloudflareDeployment,
   DiscoveredApp,
+  NetworkPosture,
   TerminalTab,
   UnifiSiemEnvConfigDto,
   WshSnapshot,
+  getAppOperationalHealth,
+  isAppCritical,
   isAppDeployCandidate,
 } from '../../lib/types';
 import { 
@@ -85,6 +88,8 @@ interface ReleasePipelineViewProps {
   onOpenSmokeTests?: () => void;
   onOpenTelemetry?: (appSlug: string) => void;
   wshSnapshot?: WshSnapshot | null;
+  isInitialSyncComplete?: boolean;
+  networkPosture?: NetworkPosture;
   onTriggerServiceAction?: (
     app: DiscoveredApp,
     action: 'verify_local' | 'test' | 'status' | 'stop'
@@ -115,6 +120,8 @@ export function ReleasePipelineView({
   onOpenSmokeTests,
   onOpenTelemetry,
   wshSnapshot = null,
+  isInitialSyncComplete = true,
+  networkPosture = 'LAN_DIRECT',
   onTriggerServiceAction,
   onReapplyHardening,
 }: ReleasePipelineViewProps) {
@@ -772,7 +779,9 @@ export function ReleasePipelineView({
             </h3>
           </div>
           <span className="text-xs font-mono text-slate-600 dark:text-slate-400 tabular-nums">
-            {apps.filter(isAppDeployCandidate).length} of {apps.length} apps have undeployed changes or need remediation
+            {isInitialSyncComplete
+              ? `${apps.filter(isAppDeployCandidate).length} of ${apps.length} apps have undeployed changes or need remediation`
+              : `Syncing initial telemetry for ${apps.length} apps...`}
           </span>
         </div>
 
@@ -780,10 +789,10 @@ export function ReleasePipelineView({
           {apps.map((app) => {
             const appComp = app.composition;
             const appIsService = app.manifest.hostingTarget === 'wsh-docker-service';
-            const appIsOptionalNotDeployed =
-              appIsService &&
-              Boolean(app.manifest.service?.optionalDeployment) &&
-              app.health?.status === 'not_deployed';
+            const opHealth = getAppOperationalHealth(app, { isInitialSyncComplete, networkPosture });
+            const appIsPendingSync = opHealth === 'pending_sync';
+            const appIsTelemetryUnavailable = opHealth === 'telemetry_unavailable';
+            const appIsOptionalNotDeployed = opHealth === 'optional_not_deployed';
             const undeployedCount = appComp?.undeployed_commits?.length || 0;
             const isLocalDirty = !!appComp?.local_dirty;
             const needsDeploy =
@@ -796,10 +805,8 @@ export function ReleasePipelineView({
             const isDeploying = !!getAppDeployJob(app.manifest.slug);
             const appLatestJob = getAllAppDeployJobs(app.manifest.slug)[0];
             const isSelected = selectedApp?.manifest.slug === app.manifest.slug;
-            const isHealthy = app.health?.status === 'healthy';
-            const isCritical =
-              !appIsOptionalNotDeployed &&
-              (!isHealthy || app.provenanceState === 'PROD_UNREACHABLE' || app.provenanceState === 'DIRTY_PROD');
+            const isHealthy = opHealth === 'healthy';
+            const isCritical = isAppCritical(app, { isInitialSyncComplete, networkPosture });
             const isWipOnly = !isCritical && undeployedCount === 0 && isLocalDirty;
             const appIdent = app.manifest.containerName || app.manifest.slug || app.manifest.appId;
             const appResolvedTel = resolveActiveBuildTelemetry(app.health?.release, appComp);
@@ -835,7 +842,9 @@ export function ReleasePipelineView({
                         className={`w-2 h-2 rounded-full shrink-0 ${
                           isHealthy
                             ? 'bg-emerald-400'
-                            : appIsOptionalNotDeployed
+                            : appIsPendingSync
+                            ? 'bg-slate-400 animate-pulse'
+                            : appIsTelemetryUnavailable || appIsOptionalNotDeployed
                             ? 'bg-slate-400'
                             : 'bg-rose-500 animate-ping'
                         }`}
@@ -850,11 +859,21 @@ export function ReleasePipelineView({
                     <span className="text-[10px] text-slate-500 font-mono block truncate tabular-nums">
                       {appIsService
                         ? `${app.manifest.service?.bindIp || '172.25.25.5'}:${app.manifest.port}/${app.manifest.service?.protocol || 'udp'} • ${app.manifest.service?.networkName || app.manifest.composeProject}`
+                        : appIsPendingSync && !app.health
+                        ? 'Checking live production health...'
                         : `Prod: ${app.health?.release?.semver || app.health?.version || 'v1.0.0'} (${app.health?.release?.commit_short || 'unstamped'})`}
                     </span>
                   </div>
 
-                  {appIsOptionalNotDeployed ? (
+                  {appIsPendingSync ? (
+                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 shrink-0">
+                      SYNCING...
+                    </span>
+                  ) : appIsTelemetryUnavailable ? (
+                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 shrink-0">
+                      {networkPosture === 'WAN_CLOUDFLARE' ? 'LAN ONLY' : 'NO WSH DATA'}
+                    </span>
+                  ) : appIsOptionalNotDeployed ? (
                     <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 shrink-0">
                       NOT DEPLOYED
                     </span>
@@ -2213,6 +2232,8 @@ export function ReleasePipelineView({
       <BatchDeployModal
         isOpen={showDeployAllModal}
         apps={apps}
+        isInitialSyncComplete={isInitialSyncComplete}
+        networkPosture={networkPosture}
         onConfirm={(options: BatchDeployOptions) => {
           setShowDeployAllModal(false);
           onTriggerDeployAll(

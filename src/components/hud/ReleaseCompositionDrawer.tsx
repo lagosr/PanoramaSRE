@@ -85,10 +85,20 @@ export function ReleaseCompositionDrawer({ app, isOpen, onClose }: ReleaseCompos
             <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
               <p className="text-[11px] font-semibold uppercase text-slate-600 dark:text-slate-400 mb-1">Live on WSH</p>
               <p className="font-mono text-sm text-slate-900 dark:text-slate-200 font-medium truncate">
-                {comp?.prod_release_id || 'Unreachable'}
+                {app.manifest.hostingTarget === 'wsh-docker-service'
+                  ? app.health?.status === 'healthy'
+                    ? app.health.deployed_at || 'Running on WSH'
+                    : app.health?.status === 'not_deployed'
+                    ? 'Not Deployed'
+                    : !app.health
+                    ? 'Awaiting WSH Snapshot'
+                    : app.health.deployed_at || 'Stopped'
+                  : comp?.prod_release_id || 'Unreachable'}
               </p>
               <p className="text-[11px] text-slate-600 dark:text-slate-400 font-mono truncate mt-0.5">
-                SHA: {comp?.prod_sha ? comp.prod_sha.substring(0, 7) : 'None'}
+                {app.manifest.hostingTarget === 'wsh-docker-service'
+                  ? `${app.manifest.service?.bindIp || '172.25.25.5'}:${app.manifest.port}/${app.manifest.service?.protocol || 'udp'}`
+                  : `SHA: ${comp?.prod_sha ? comp.prod_sha.substring(0, 7) : 'None'}`}
               </p>
             </div>
 

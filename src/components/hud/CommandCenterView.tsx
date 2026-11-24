@@ -9,6 +9,8 @@ import {
   TerminalTab,
   OptInComplianceSnapshot,
   FleetCronAuditSummary,
+  NetworkPosture,
+  isAppUnhealthy,
 } from '../../lib/types';
 import { FleetAppCard } from './FleetAppCard';
 import { ApplianceStatusStrip } from './ApplianceStatusStrip';
@@ -26,6 +28,8 @@ interface CommandCenterViewProps {
   cronSummary?: FleetCronAuditSummary | null;
   terminalTabs?: TerminalTab[];
   isLoading: boolean;
+  isInitialSyncComplete?: boolean;
+  networkPosture?: NetworkPosture;
   onNavigateToBackups?: () => void;
   onNavigateToOptIns?: () => void;
   onNavigateToCrons?: () => void;
@@ -51,6 +55,8 @@ export function CommandCenterView({
   cronSummary,
   terminalTabs = [],
   isLoading,
+  isInitialSyncComplete = true,
+  networkPosture = 'LAN_DIRECT',
   onNavigateToBackups,
   onNavigateToOptIns,
   onNavigateToCrons,
@@ -79,16 +85,9 @@ export function CommandCenterView({
     setSelectedApp(app);
   };
 
-  const unhealthyApps = apps.filter((a) => {
-    if (
-      a.manifest.hostingTarget === 'wsh-docker-service' &&
-      a.manifest.service?.optionalDeployment &&
-      a.health?.status === 'not_deployed'
-    ) {
-      return false;
-    }
-    return a.health?.status !== 'healthy' || a.provenanceState === 'PROD_UNREACHABLE';
-  });
+  const unhealthyApps = isInitialSyncComplete
+    ? apps.filter((a) => isAppUnhealthy(a, { isInitialSyncComplete, networkPosture }))
+    : [];
 
   // Detect Automated Database Backup Failures (Red Flag Incident)
   const isLastBackupFailed = backupLedger?.last_run_status?.toLowerCase() === 'failed';
@@ -102,16 +101,19 @@ export function CommandCenterView({
     (p) => p.status !== 'Success'
   );
   const hasBackupIncident =
+    isInitialSyncComplete &&
     !isBackupIncidentDismissed &&
     ((isLastBackupFailed && failedBackupApps.length > 0) || (backupLedger?.failed_runs_7d || 0) > 0);
 
   return (
     <div className="p-4 sm:p-6 md:p-8 max-w-[1920px] mx-auto w-full min-w-0 space-y-6 overflow-hidden">
       {/* Home Lab Appliances Status Banner */}
-      <ApplianceStatusStrip appliances={appliances} sslFleet={sslFleet} />
+      {isInitialSyncComplete && (
+        <ApplianceStatusStrip appliances={appliances} sslFleet={sslFleet} />
+      )}
 
       {/* Critical WSH Network & Container Security Incident Banner (Red Flag) */}
-      {securityViolationCount > 0 && (
+      {isInitialSyncComplete && securityViolationCount > 0 && (
         <div className="rounded-xl border border-rose-500/80 bg-rose-50 dark:bg-rose-950/40 p-4 sm:p-5 shadow-[0_0_25px_rgba(244,63,94,0.15)] dark:shadow-[0_0_25px_rgba(244,63,94,0.35)] ring-1 ring-rose-500/50 space-y-3">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div className="flex items-start sm:items-center gap-3">
@@ -292,7 +294,7 @@ export function CommandCenterView({
       )}
 
       {/* Host Scheduled Cron & Heartbeat Drift Alert */}
-      {cronSummary && cronSummary.attentionCount > 0 && (
+      {isInitialSyncComplete && cronSummary && cronSummary.attentionCount > 0 && (
         <div className="rounded-xl border border-amber-400/70 dark:border-amber-500/40 bg-amber-50 dark:bg-amber-950/30 p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div className="flex items-start sm:items-center gap-3">
             <div className="w-9 h-9 rounded-lg bg-amber-500/20 border border-amber-500/40 flex items-center justify-center shrink-0">
@@ -338,6 +340,12 @@ export function CommandCenterView({
         </div>
 
         <div className="flex items-center gap-3 shrink-0">
+          {!isInitialSyncComplete && (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 whitespace-nowrap">
+              <RefreshCw className="w-3 h-3 animate-spin text-[var(--color-brand-text)] shrink-0" />
+              <span>Syncing initial telemetry...</span>
+            </span>
+          )}
           <span className="text-xs font-mono tabular-nums text-slate-600 dark:text-slate-400">
             {apps.length} Applications Registered
           </span>
@@ -372,6 +380,8 @@ export function CommandCenterView({
                 optInSnapshot={
                   app.manifest.hostingTarget === 'cloudflare-pages' ? optInSnapshot : undefined
                 }
+                isInitialSyncComplete={isInitialSyncComplete}
+                networkPosture={networkPosture}
                 onOpenApp={handleOpenApp}
                 onInspectComposition={handleInspectComposition}
                 onNavigateToOptIns={onNavigateToOptIns}

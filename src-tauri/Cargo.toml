@@ -1,6 +1,6 @@
 [package]
 name = "panorama-sre"
-version = "1.10.8"
+version = "1.10.9"
 description = "PanoramaSRE Desktop Control Plane"
 edition = "2021"
 

@@ -46,6 +46,9 @@ import {
   ParakithOptInRecord,
   NavSectionId,
   WorkStreamSource,
+  getAppOperationalHealth,
+  isAppUnhealthy,
+  isAppEvaluableForFleetCount,
   isAppDeployCandidate,
   reconcileServiceAppsFromSnapshot,
   BatchPreDeploySnapshot,
@@ -91,6 +94,9 @@ export const App: React.FC = () => {
   const [apps, setApps] = useState<DiscoveredApp[]>([]);
   const [appliances, setAppliances] = useState<ApplianceStatus[]>([]);
   const [networkPosture, setNetworkPosture] = useState<NetworkPosture>('LAN_DIRECT');
+  const [hasResolvedPosture, setHasResolvedPosture] = useState<boolean>(false);
+  const [hasCompletedInitialSync, setHasCompletedInitialSync] = useState<boolean>(false);
+  const [isInitialSyncing, setIsInitialSyncing] = useState<boolean>(true);
   const [isManualSyncing, setIsManualSyncing] = useState<boolean>(false);
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
   const [securityAuditInterval, setSecurityAuditInterval] = useState<string>(() => {
@@ -333,20 +339,19 @@ export const App: React.FC = () => {
   const refreshDeployTelemetryRef = useRef<(() => Promise<void>) | null>(null);
 
   // Hydrate global dismissed backup incident keys from sre.sqlite (and migrate any legacy localStorage key)
-  useEffect(() => {
-    (async () => {
-      try {
-        const dbKeys = await invoke<string[]>('get_dismissed_backup_incidents');
-        let merged = Array.isArray(dbKeys) ? [...dbKeys] : [];
-        const legacy = localStorage.getItem('panorama_sre_dismissed_backup_incident');
-        if (legacy && !merged.includes(legacy)) {
-          merged = await invoke<string[]>('dismiss_backup_incident', { incidentKey: legacy });
-        }
-        setDismissedBackupIncidentKeys(merged);
-      } catch (err) {
-        console.warn('Failed to load dismissed backup incidents from SQLite:', err);
+  const hydrateDismissedBackupIncidents = useCallback(async () => {
+    try {
+      const dbKeys = await invoke<string[]>('get_dismissed_backup_incidents');
+      let merged = Array.isArray(dbKeys) ? [...dbKeys] : [];
+      const legacy = localStorage.getItem('panorama_sre_dismissed_backup_incident');
+      if (legacy && !merged.includes(legacy)) {
+        merged = await invoke<string[]>('dismiss_backup_incident', { incidentKey: legacy });
       }
-    })();
+      dismissedBackupKeysRef.current = merged;
+      setDismissedBackupIncidentKeys(merged);
+    } catch (err) {
+      console.warn('Failed to load dismissed backup incidents from SQLite:', err);
+    }
   }, []);
 
   const computeBackupIncidentKey = useCallback((ledger: BackupLedgerSummary | null | undefined) => {
@@ -440,6 +445,7 @@ export const App: React.FC = () => {
     try {
       const posture = await invoke<NetworkPosture>('detect_network_posture', {});
       setNetworkPosture(posture);
+      setHasResolvedPosture(true);
 
       if (posture === 'LAN_DIRECT') {
         const snap = await invoke<WshSnapshot>('fetch_wsh_snapshot', {
@@ -646,6 +652,7 @@ export const App: React.FC = () => {
       // 1. Posture check
       const posture = await invoke<NetworkPosture>('detect_network_posture', {});
       setNetworkPosture(posture);
+      setHasResolvedPosture(true);
       pushSyncTrace(`[INFO] Network posture resolved: ${posture}`);
 
       // 2. Discover apps via panorama.app.json
@@ -768,6 +775,7 @@ export const App: React.FC = () => {
       let capturedRunningRaw: string | undefined =
         wshSnapshotRef.current?.cloudflared?.version_raw;
       if (includeWshSnapshot && posture === 'LAN_DIRECT') {
+        setIsLoadingWsh(true);
         try {
           const snap = await invoke<WshSnapshot>('fetch_wsh_snapshot', {
             mode: '--fast',
@@ -781,6 +789,8 @@ export const App: React.FC = () => {
         } catch (snapErr) {
           console.warn('[PanoramaSRE] WSH snapshot warning:', snapErr);
           pushSyncTrace(`[WARN] WSH snapshot partial warning: ${snapErr}`);
+        } finally {
+          setIsLoadingWsh(false);
         }
       }
 
@@ -832,8 +842,10 @@ export const App: React.FC = () => {
       void invoke('evaluate_and_notify_sync', { input: alertInput }).catch(() => {});
 
       // Keep smoke test history & build telemetry synced with headless/CLI runs
-      void refreshSmokeHistoryRef.current?.();
-      void refreshDeployTelemetryRef.current?.();
+      await Promise.allSettled([
+        refreshSmokeHistoryRef.current?.(),
+        refreshDeployTelemetryRef.current?.(),
+      ]);
 
       if (syncJobId) {
         const finishedAt = new Date().toISOString();
@@ -933,11 +945,34 @@ export const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    loadCachedOptIns();
-    syncFullTelemetry(false, true, 'hud', true);
-    refreshMcpStatus();
-    void refreshThreatIntelState();
-  }, [loadCachedOptIns, syncFullTelemetry, refreshMcpStatus, refreshThreatIntelState]);
+    let cancelled = false;
+    (async () => {
+      setIsInitialSyncing(true);
+      try {
+        await hydrateDismissedBackupIncidents();
+        await Promise.allSettled([
+          loadCachedOptIns(),
+          refreshMcpStatus(),
+          refreshThreatIntelState(),
+          syncFullTelemetry(false, true, 'hud', true),
+        ]);
+      } finally {
+        if (!cancelled) {
+          setHasCompletedInitialSync(true);
+          setIsInitialSyncing(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    hydrateDismissedBackupIncidents,
+    loadCachedOptIns,
+    syncFullTelemetry,
+    refreshMcpStatus,
+    refreshThreatIntelState,
+  ]);
 
   useEffect(() => {
     let unlistenThreat: (() => void) | undefined;
@@ -2508,17 +2543,20 @@ export const App: React.FC = () => {
     (a) => a.devServer?.status === 'RUNNING_MANAGED' || a.devServer?.status === 'RUNNING_EXTERNAL'
   ).length;
 
-  const unhealthyCount = apps.filter(
-    (a) =>
-      a.health &&
-      a.health.status !== 'healthy' &&
-      !(
-        a.manifest.hostingTarget === 'wsh-docker-service' &&
-        a.manifest.service?.optionalDeployment &&
-        a.health.status === 'not_deployed'
-      )
+  const healthEvalOpts = useMemo(
+    () => ({ isInitialSyncComplete: hasCompletedInitialSync, networkPosture }),
+    [hasCompletedInitialSync, networkPosture]
+  );
+
+  const unhealthyCount = hasCompletedInitialSync
+    ? apps.filter((a) => isAppUnhealthy(a, healthEvalOpts)).length
+    : 0;
+  const evaluableAppCount = apps.filter((a) =>
+    isAppEvaluableForFleetCount(a, healthEvalOpts)
   ).length;
-  const prodHealthyCount = apps.filter((a) => a.health?.status === 'healthy').length;
+  const prodHealthyCount = apps.filter(
+    (a) => getAppOperationalHealth(a, healthEvalOpts) === 'healthy'
+  ).length;
 
   const {
     rawFailures: rawBackupFailureCount,
@@ -2526,7 +2564,8 @@ export const App: React.FC = () => {
     isDismissed: isBackupIncidentDismissed,
   } = computeBackupIncidentKey(backupLedger);
 
-  const backupFailureCount = isBackupIncidentDismissed ? 0 : rawBackupFailureCount;
+  const backupFailureCount =
+    hasCompletedInitialSync && !isBackupIncidentDismissed ? rawBackupFailureCount : 0;
 
   const handleDismissBackupIncident = useCallback(() => {
     if (!backupIncidentKey) return;
@@ -2550,7 +2589,9 @@ export const App: React.FC = () => {
   }, [backupIncidentKey]);
 
   // Count apps requiring release deployment (drifted, ahead, dirty, diverged, or unhealthy/unreachable)
-  const behindReleasesCount = apps.filter(isAppDeployCandidate).length;
+  const behindReleasesCount = hasCompletedInitialSync
+    ? apps.filter(isAppDeployCandidate).length
+    : 0;
 
   const topology = React.useMemo(
     () => synthesizeTopology(apps, wshSnapshot, tunnelVersionStatus),
@@ -2560,8 +2601,12 @@ export const App: React.FC = () => {
     () => computeTopologyBadges(topology, wshSnapshot !== null),
     [topology, wshSnapshot]
   );
-  const securityViolationCount = wshSnapshot ? topology.securityAudit.securityViolationCount : 0;
-  const failingInvariants = wshSnapshot ? topology.securityAudit.invariants.filter((i) => i.status === 'FAIL') : [];
+  const securityViolationCount =
+    hasCompletedInitialSync && wshSnapshot ? topology.securityAudit.securityViolationCount : 0;
+  const failingInvariants =
+    hasCompletedInitialSync && wshSnapshot
+      ? topology.securityAudit.invariants.filter((i) => i.status === 'FAIL')
+      : [];
   const smokeFailureCount = smokeRuns[0]?.failed || 0;
   const fleetCronSummary = useMemo(() => auditFleetCrons(apps, wshSnapshot), [apps, wshSnapshot]);
   const dietpiBadges = useMemo(
@@ -3457,6 +3502,7 @@ export const App: React.FC = () => {
           unreadOptInsCount={optInSnapshot?.unreadCount ?? 0}
           threatAlertCount={threatBadge.count}
           threatAlertSeverity={threatBadge.severity}
+          isInitialSyncComplete={hasCompletedInitialSync}
         />
 
         <main className="flex-1 flex flex-col h-full overflow-hidden relative">
@@ -3464,11 +3510,15 @@ export const App: React.FC = () => {
             networkPosture={networkPosture}
             devRunningCount={devRunningCount}
             totalAppCount={apps.length}
+            evaluableAppCount={evaluableAppCount}
             prodHealthyCount={prodHealthyCount}
+            unhealthyCount={unhealthyCount}
             lastSyncTime={lastSyncTime}
             lastSecurityAuditTime={lastSecurityAuditTime}
             securityAuditInterval={securityAuditInterval}
-            isSyncing={isManualSyncing}
+            isSyncing={isManualSyncing || isInitialSyncing}
+            isInitialSyncComplete={hasCompletedInitialSync}
+            hasResolvedPosture={hasResolvedPosture}
             onRefresh={() => syncFullTelemetry(true, true, activeTab, true)}
             backupFailureCount={backupFailureCount}
             onNavigateToBackups={() => setActiveTab('backups')}
@@ -3490,6 +3540,8 @@ export const App: React.FC = () => {
               cronSummary={fleetCronSummary}
               terminalTabs={terminalTabs}
               isLoading={apps.length === 0}
+              isInitialSyncComplete={hasCompletedInitialSync}
+              networkPosture={networkPosture}
               onNavigateToBackups={() => setActiveTab('backups')}
               onNavigateToOptIns={() => setActiveTab('opt-ins')}
               onNavigateToCrons={() => {
@@ -3538,7 +3590,7 @@ export const App: React.FC = () => {
               terminalTabs={terminalTabs}
               tunnelVersionStatus={tunnelVersionStatus}
               isCheckingTunnelVersion={isCheckingTunnelVersion}
-              isLoading={isManualSyncing}
+              isLoading={isManualSyncing || isInitialSyncing}
               onRefresh={handleManualTopologyRefresh}
               onRunPenetrationAudit={() => handleRunPenetrationAudit('topology')}
               onReapplyHardening={() => handleReapplyHardening('topology')}
@@ -3592,7 +3644,7 @@ export const App: React.FC = () => {
               onSelectSubTab={setDietpiSubTab}
               isCronActionBusy={isCronActionBusy}
               terminalTabs={terminalTabs}
-              isLoading={isLoadingWsh}
+              isLoading={isLoadingWsh || isInitialSyncing}
               onRefresh={handleManualDietPiRefresh}
               onTriggerCronAction={handleTriggerCronAction}
               onTriggerReboot={handleRebootWshWithVerification}
@@ -3704,6 +3756,8 @@ export const App: React.FC = () => {
                 setActiveTab('telemetry');
               }}
               wshSnapshot={wshSnapshot}
+              isInitialSyncComplete={hasCompletedInitialSync}
+              networkPosture={networkPosture}
               onTriggerServiceAction={(app, action) => void handleTriggerServiceAction(app, action)}
               onReapplyHardening={() => handleReapplyHardening('releases')}
             />
@@ -3732,7 +3786,8 @@ export const App: React.FC = () => {
               apps={apps}
               ledger={backupLedger}
               terminalTabs={terminalTabs}
-              isLoading={isManualSyncing}
+              isLoading={isManualSyncing || isInitialSyncing}
+              isInitialSyncComplete={hasCompletedInitialSync}
               onRefresh={handleManualBackupRefresh}
               onTriggerFullGfsBackup={() => handleTriggerFullGfsBackup('backups')}
               onTriggerAppBackup={handleTriggerAppBackup}

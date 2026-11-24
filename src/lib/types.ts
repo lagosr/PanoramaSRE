@@ -693,19 +693,89 @@ export interface SslFleetSummary {
   probed_at: string;
 }
 
+export type AppOperationalHealth =
+  | 'healthy'
+  | 'unhealthy'
+  | 'optional_not_deployed'
+  | 'pending_sync'
+  | 'telemetry_unavailable';
+
+export interface AppHealthEvalOptions {
+  isInitialSyncComplete?: boolean;
+  networkPosture?: NetworkPosture;
+}
+
+/**
+ * Canonical evaluation of a discovered app's operational health across initial startup
+ * sync, optional/telemetry-unavailable WSH services, and live HTTP or container probes.
+ */
+export function getAppOperationalHealth(
+  app: DiscoveredApp,
+  options: AppHealthEvalOptions = {}
+): AppOperationalHealth {
+  const isInitialSyncComplete = options.isInitialSyncComplete !== false;
+  const isWshService = app.manifest?.hostingTarget === 'wsh-docker-service';
+  const isHealthy = app.health?.status === 'healthy';
+
+  if (!isInitialSyncComplete) {
+    return isHealthy && app.provenanceState !== 'PROD_UNREACHABLE' ? 'healthy' : 'pending_sync';
+  }
+
+  if (isWshService) {
+    if (isHealthy) {
+      return 'healthy';
+    }
+    if (
+      app.health?.status === 'not_deployed' &&
+      Boolean(app.manifest?.service?.optionalDeployment)
+    ) {
+      return 'optional_not_deployed';
+    }
+    if (!app.health) {
+      return 'telemetry_unavailable';
+    }
+    return 'unhealthy';
+  }
+
+  return isHealthy && app.provenanceState !== 'PROD_UNREACHABLE' ? 'healthy' : 'unhealthy';
+}
+
+export function isAppUnhealthy(
+  app: DiscoveredApp,
+  options: AppHealthEvalOptions = {}
+): boolean {
+  return getAppOperationalHealth(app, options) === 'unhealthy';
+}
+
+export function isAppCritical(
+  app: DiscoveredApp,
+  options: AppHealthEvalOptions = {}
+): boolean {
+  const op = getAppOperationalHealth(app, options);
+  const isInitialSyncComplete = options.isInitialSyncComplete !== false;
+  return (
+    op === 'unhealthy' ||
+    (isInitialSyncComplete && op === 'healthy' && app.provenanceState === 'DIRTY_PROD')
+  );
+}
+
+export function isAppEvaluableForFleetCount(
+  app: DiscoveredApp,
+  options: AppHealthEvalOptions = {}
+): boolean {
+  const op = getAppOperationalHealth(app, options);
+  return op === 'healthy' || op === 'unhealthy';
+}
+
 /**
  * Authoritative check to determine if an app has unreleased changes, local drift,
  * or is in an unhealthy / unreachable production state that requires deployment.
  */
 export function isAppDeployCandidate(app: DiscoveredApp): boolean {
-  const isOptionalNotDeployedService =
-    app.manifest?.hostingTarget === 'wsh-docker-service' &&
-    Boolean(app.manifest?.service?.optionalDeployment) &&
-    app.health?.status === 'not_deployed';
-  const isHealthy = app.health?.status === 'healthy';
+  const opHealth = getAppOperationalHealth(app, { isInitialSyncComplete: true });
   const isCritical =
-    !isOptionalNotDeployedService &&
-    (!isHealthy || app.provenanceState === 'PROD_UNREACHABLE' || app.provenanceState === 'DIRTY_PROD');
+    opHealth === 'unhealthy' ||
+    (opHealth === 'healthy' && app.provenanceState === 'DIRTY_PROD');
   const hasDrift =
     (app.composition?.undeployed_commits?.length || 0) > 0 ||
     (app.composition?.ahead_count || 0) > 0 ||
@@ -767,7 +837,10 @@ export function reconcileServiceAppsFromSnapshot(
     }
 
     if (!snapshot) {
-      return app;
+      return {
+        ...app,
+        provenanceState: dirty ? 'LOCAL_WIP' : hasPending ? 'AHEAD' : 'UNKNOWN',
+      };
     }
 
     return {

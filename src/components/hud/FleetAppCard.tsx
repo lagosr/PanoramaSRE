@@ -1,4 +1,11 @@
-import { DiscoveredApp, AppBackupDetail, OptInComplianceSnapshot } from '../../lib/types';
+import {
+  DiscoveredApp,
+  AppBackupDetail,
+  OptInComplianceSnapshot,
+  NetworkPosture,
+  getAppOperationalHealth,
+  isAppCritical,
+} from '../../lib/types';
 import { ProvenanceBadge } from '../ui/ProvenanceBadge';
 import { BlastRadiusBadge } from '../ui/BlastRadiusBadge';
 import { AlertCircle, HardDriveDownload, XCircle, Globe, MessageSquare, Server } from 'lucide-react';
@@ -7,6 +14,8 @@ interface FleetAppCardProps {
   app: DiscoveredApp;
   backupStatus?: AppBackupDetail | null;
   optInSnapshot?: OptInComplianceSnapshot | null;
+  isInitialSyncComplete?: boolean;
+  networkPosture?: NetworkPosture;
   onOpenApp: (url: string) => void;
   onInspectComposition: (app: DiscoveredApp) => void;
   onNavigateToOptIns?: () => void;
@@ -17,6 +26,8 @@ export function FleetAppCard({
   app,
   backupStatus,
   optInSnapshot,
+  isInitialSyncComplete = true,
+  networkPosture,
   onOpenApp,
   onInspectComposition,
   onNavigateToOptIns,
@@ -24,21 +35,22 @@ export function FleetAppCard({
 }: FleetAppCardProps) {
   const isEdgePages = app.manifest.hostingTarget === 'cloudflare-pages';
   const isWshService = app.manifest.hostingTarget === 'wsh-docker-service';
-  const isOptionalNotDeployed =
-    isWshService &&
-    Boolean(app.manifest.service?.optionalDeployment) &&
-    app.health?.status === 'not_deployed';
+  const opHealth = getAppOperationalHealth(app, { isInitialSyncComplete, networkPosture });
+  const isPendingSync = opHealth === 'pending_sync';
+  const isTelemetryUnavailable = opHealth === 'telemetry_unavailable';
+  const isOptionalNotDeployed = opHealth === 'optional_not_deployed';
   const appPublicUrl = isEdgePages
     ? app.manifest.cloudflare?.primaryUrl || 'https://www.parakith.com'
     : `https://wsh.panoramadr.com${app.manifest.basePath}`;
-  const isHealthy = app.health?.status === 'healthy';
+  const isHealthy = opHealth === 'healthy';
   const release = app.health?.release;
   const latency = app.latencyMs ?? 0;
   const isBackupFailed =
-    !isEdgePages && !isWshService && backupStatus?.status?.toLowerCase() === 'failed';
-  const isCritical =
-    !isOptionalNotDeployed &&
-    (!isHealthy || app.provenanceState === 'PROD_UNREACHABLE' || app.provenanceState === 'DIRTY_PROD');
+    isInitialSyncComplete &&
+    !isEdgePages &&
+    !isWshService &&
+    backupStatus?.status?.toLowerCase() === 'failed';
+  const isCritical = isAppCritical(app, { isInitialSyncComplete, networkPosture });
 
   return (
     <article
@@ -125,11 +137,26 @@ export function FleetAppCard({
 
           <div className="flex flex-col items-end gap-1.5 shrink-0">
             <ProvenanceBadge
-              state={app.provenanceState}
+              state={isPendingSync ? 'UNKNOWN' : app.provenanceState}
               aheadCount={app.composition?.ahead_count}
               behindCount={app.composition?.behind_count}
             />
-            {isOptionalNotDeployed ? (
+            {isPendingSync ? (
+              <span className="text-[10px] font-mono tabular-nums px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 font-semibold">
+                SYNCING...
+              </span>
+            ) : isTelemetryUnavailable ? (
+              <span
+                className="text-[10px] font-mono tabular-nums px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 font-semibold"
+                title={
+                  networkPosture === 'WAN_CLOUDFLARE'
+                    ? 'WSH container health checks require a LAN connection to DietPi.'
+                    : 'WSH host snapshot was unavailable during the last sync.'
+                }
+              >
+                {networkPosture === 'WAN_CLOUDFLARE' ? 'LAN ONLY' : 'NO WSH DATA'}
+              </span>
+            ) : isOptionalNotDeployed ? (
               <span className="text-[10px] font-mono tabular-nums px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 font-semibold">
                 NOT DEPLOYED
               </span>
@@ -177,7 +204,15 @@ export function FleetAppCard({
                 isCritical ? 'text-rose-800 dark:text-rose-300' : 'text-slate-900 dark:text-slate-200'
               }`}
             >
-              {isWshService
+              {isPendingSync
+                ? isWshService
+                  ? 'Checking WSH...'
+                  : 'Checking...'
+                : isTelemetryUnavailable
+                ? networkPosture === 'WAN_CLOUDFLARE'
+                  ? 'LAN Telemetry Required'
+                  : 'WSH Snapshot Unavailable'
+                : isWshService
                 ? isOptionalNotDeployed
                   ? 'Not Deployed (Optional)'
                   : app.health?.deployed_at || 'Deployed on WSH'

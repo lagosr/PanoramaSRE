@@ -41,6 +41,7 @@ interface BackupsRecoveryViewProps {
   onAbortJob?: (tabId: string) => void;
   onClearTab?: (tabId: string) => void;
   isApplying?: boolean;
+  isInitialSyncComplete?: boolean;
   isIncidentDismissed?: boolean;
   onDismissIncident?: () => void;
 }
@@ -140,6 +141,7 @@ export function BackupsRecoveryView({
   onAbortJob,
   onClearTab,
   isApplying = false,
+  isInitialSyncComplete = true,
   isIncidentDismissed = false,
   onDismissIncident,
 }: BackupsRecoveryViewProps) {
@@ -391,7 +393,7 @@ export function BackupsRecoveryView({
       </div>
 
       {/* Critical Automated Backup Incident Alert Banner */}
-      {!isIncidentDismissed && (ledger?.last_run_status?.toLowerCase() === 'failed' || (ledger?.failed_runs_7d || 0) > 0) && (() => {
+      {isInitialSyncComplete && !isIncidentDismissed && (ledger?.last_run_status?.toLowerCase() === 'failed' || (ledger?.failed_runs_7d || 0) > 0) && (() => {
         const isLastFailed = ledger?.last_run_status?.toLowerCase() === 'failed';
         const dailyPips = ledger?.daily_pips_7d || [];
         const todayPip = dailyPips.length > 0 ? dailyPips[dailyPips.length - 1] : undefined;

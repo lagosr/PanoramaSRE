@@ -6,11 +6,15 @@ interface TopLiveSyncBarProps {
   networkPosture: NetworkPosture;
   devRunningCount: number;
   totalAppCount: number;
+  evaluableAppCount?: number;
   prodHealthyCount: number;
+  unhealthyCount?: number;
   lastSyncTime: string | null;
   lastSecurityAuditTime?: string | null;
   securityAuditInterval?: string;
   isSyncing: boolean;
+  isInitialSyncComplete?: boolean;
+  hasResolvedPosture?: boolean;
   onRefresh: () => void;
   backupFailureCount?: number;
   onNavigateToBackups?: () => void;
@@ -24,11 +28,15 @@ export function TopLiveSyncBar({
   networkPosture,
   devRunningCount,
   totalAppCount,
+  evaluableAppCount,
   prodHealthyCount,
+  unhealthyCount,
   lastSyncTime,
   lastSecurityAuditTime,
   securityAuditInterval = '5',
   isSyncing,
+  isInitialSyncComplete = true,
+  hasResolvedPosture = true,
   onRefresh,
   backupFailureCount = 0,
   onNavigateToBackups,
@@ -38,7 +46,13 @@ export function TopLiveSyncBar({
   onNavigateToDev,
 }: TopLiveSyncBarProps) {
   const { theme, resolvedTheme, toggleTheme } = useTheme();
-  const hasFleetAlert = totalAppCount > 0 && prodHealthyCount < totalAppCount;
+  const effectiveEvaluableCount = evaluableAppCount ?? totalAppCount;
+  const effectiveUnhealthyCount =
+    unhealthyCount !== undefined
+      ? unhealthyCount
+      : Math.max(0, effectiveEvaluableCount - prodHealthyCount);
+  const hasFleetAlert =
+    isInitialSyncComplete && effectiveEvaluableCount > 0 && effectiveUnhealthyCount > 0;
 
   return (
     <header className="h-16 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 sm:px-4 lg:px-6 flex items-center justify-between gap-3 lg:gap-4 z-10 select-none overflow-hidden">
@@ -49,33 +63,45 @@ export function TopLiveSyncBar({
           <div className="flex items-center gap-2 sm:gap-2.5 shrink-0 min-w-0">
             {/* Network Posture Pill */}
             <div className="flex items-center shrink-0">
-              {networkPosture === 'LAN_DIRECT' && (
+              {!hasResolvedPosture ? (
                 <span
-                  className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-500/15 text-emerald-800 dark:text-emerald-400 border border-emerald-500/30 whitespace-nowrap shrink-0"
-                  title="Network Posture: LAN DIRECT (Host 172.25.25.5 on WSH private subnet)"
+                  className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 whitespace-nowrap shrink-0"
+                  title="Detecting network posture..."
                 >
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 dark:bg-emerald-400 animate-pulse shrink-0" />
-                  <span>LAN DIRECT</span>
-                  <span className="font-mono font-medium tabular-nums text-emerald-800 dark:text-emerald-300"> (172.25.25.5)</span>
+                  <RefreshCw className="w-3 h-3 animate-spin text-slate-500 dark:text-slate-400 shrink-0" />
+                  <span>Checking network...</span>
                 </span>
-              )}
-              {networkPosture === 'WAN_CLOUDFLARE' && (
-                <span
-                  className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-500/15 text-amber-900 dark:text-amber-400 border border-amber-500/30 whitespace-nowrap shrink-0"
-                  title="Network Posture: WAN (Proxied via Cloudflare Zero Trust Tunnel)"
-                >
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-600 dark:bg-amber-400 shrink-0" />
-                  <span>WAN (Cloudflare)</span>
-                </span>
-              )}
-              {networkPosture === 'OFFLINE' && (
-                <span
-                  className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-semibold bg-rose-500/15 text-rose-800 dark:text-rose-400 border border-rose-500/30 whitespace-nowrap shrink-0"
-                  title="Network Posture: Host is unreachable or offline"
-                >
-                  <span className="w-1.5 h-1.5 rounded-full bg-rose-600 dark:bg-rose-400 shrink-0" />
-                  <span>HOST OFFLINE</span>
-                </span>
+              ) : (
+                <>
+                  {networkPosture === 'LAN_DIRECT' && (
+                    <span
+                      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-500/15 text-emerald-800 dark:text-emerald-400 border border-emerald-500/30 whitespace-nowrap shrink-0"
+                      title="Network Posture: LAN DIRECT (Host 172.25.25.5 on WSH private subnet)"
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 dark:bg-emerald-400 animate-pulse shrink-0" />
+                      <span>LAN DIRECT</span>
+                      <span className="font-mono font-medium tabular-nums text-emerald-800 dark:text-emerald-300"> (172.25.25.5)</span>
+                    </span>
+                  )}
+                  {networkPosture === 'WAN_CLOUDFLARE' && (
+                    <span
+                      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-500/15 text-amber-900 dark:text-amber-400 border border-amber-500/30 whitespace-nowrap shrink-0"
+                      title="Network Posture: WAN (Proxied via Cloudflare Zero Trust Tunnel)"
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-600 dark:bg-amber-400 shrink-0" />
+                      <span>WAN (Cloudflare)</span>
+                    </span>
+                  )}
+                  {networkPosture === 'OFFLINE' && (
+                    <span
+                      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-semibold bg-rose-500/15 text-rose-800 dark:text-rose-400 border border-rose-500/30 whitespace-nowrap shrink-0"
+                      title="Network Posture: Host is unreachable or offline"
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full bg-rose-600 dark:bg-rose-400 shrink-0" />
+                      <span>HOST OFFLINE</span>
+                    </span>
+                  )}
+                </>
               )}
             </div>
 
@@ -101,19 +127,24 @@ export function TopLiveSyncBar({
             {/* Production Fleet Health Counter / Alert */}
             <div
               className="flex items-center gap-1 text-[11px] text-slate-600 dark:text-slate-400 border-l border-slate-200 dark:border-slate-800 pl-2 sm:pl-2.5 shrink-0 whitespace-nowrap"
-              title={`Production Fleet: ${prodHealthyCount} of ${totalAppCount} containers healthy`}
+              title={`Production Fleet: ${prodHealthyCount} of ${effectiveEvaluableCount} containers healthy`}
             >
               <span className="font-medium text-slate-600 dark:text-slate-400">Prod:</span>
-              {hasFleetAlert ? (
+              {!isInitialSyncComplete ? (
+                <span className="inline-flex items-center gap-1 font-mono font-medium text-slate-600 dark:text-slate-400 shrink-0">
+                  <RefreshCw className="w-3 h-3 animate-spin shrink-0" />
+                  <span>Syncing...</span>
+                </span>
+              ) : hasFleetAlert ? (
                 <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-rose-500/20 text-rose-800 dark:text-rose-300 border border-rose-500/50 shadow-[0_0_8px_rgba(244,63,94,0.3)] animate-pulse font-semibold tabular-nums shrink-0">
                   <AlertCircle className="w-3 h-3 text-rose-600 dark:text-rose-400 shrink-0" />
-                  <span>CRITICAL: {totalAppCount - prodHealthyCount} DOWN</span>
+                  <span>CRITICAL: {effectiveUnhealthyCount} DOWN</span>
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1 shrink-0">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 dark:bg-emerald-400 shrink-0" />
                   <span className="font-mono font-medium tabular-nums text-emerald-700 dark:text-emerald-400">
-                    {prodHealthyCount}/{totalAppCount} healthy
+                    {prodHealthyCount}/{effectiveEvaluableCount} healthy
                   </span>
                 </span>
               )}
@@ -162,7 +193,7 @@ export function TopLiveSyncBar({
             )}
 
             {/* Database Automated Backup Failure Red Flag Banner */}
-            {backupFailureCount > 0 && (
+            {isInitialSyncComplete && backupFailureCount > 0 && (
               <button
                 onClick={onNavigateToBackups}
                 className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/20 hover:bg-rose-500/30 text-rose-700 dark:text-rose-300 border border-rose-500/60 shadow-[0_0_8px_rgba(244,63,94,0.4)] animate-pulse font-semibold tabular-nums text-[11px] transition-colors cursor-pointer whitespace-nowrap shrink-0"
@@ -174,7 +205,7 @@ export function TopLiveSyncBar({
             )}
 
             {/* WSH Network & Container Hardening Security Violation Red Flag */}
-            {securityViolationCount > 0 && (
+            {isInitialSyncComplete && securityViolationCount > 0 && (
               <button
                 onClick={onNavigateToTopology}
                 className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/20 hover:bg-rose-500/30 text-rose-700 dark:text-rose-300 border border-rose-500/60 shadow-[0_0_8px_rgba(244,63,94,0.4)] animate-pulse font-semibold tabular-nums text-[11px] transition-colors cursor-pointer whitespace-nowrap shrink-0"
