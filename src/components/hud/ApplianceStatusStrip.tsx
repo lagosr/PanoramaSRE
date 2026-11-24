@@ -1,22 +1,40 @@
+import { ArrowRight } from 'lucide-react';
 import { ApplianceStatus, SslFleetSummary } from '../../lib/types';
 
 interface ApplianceStatusStripProps {
   appliances: ApplianceStatus[];
   sslFleet?: SslFleetSummary | null;
+  onNavigateToPki?: () => void;
 }
 
-export function ApplianceStatusStrip({ appliances, sslFleet }: ApplianceStatusStripProps) {
+export function ApplianceStatusStrip({
+  appliances,
+  sslFleet,
+  onNavigateToPki,
+}: ApplianceStatusStripProps) {
   if (!appliances || appliances.length === 0) return null;
 
   return (
-    <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm mb-6">
-      <div className="flex items-center justify-between mb-3">
+    <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
         <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
           Home Lab Appliances (LAN)
         </h4>
-        <span className="text-[11px] font-mono text-slate-400">
-          {appliances.filter((a) => a.status === 'ONLINE').length} / {appliances.length} Online
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="text-[11px] font-mono tabular-nums text-slate-500 dark:text-slate-400">
+            {appliances.filter((a) => a.status === 'ONLINE').length} / {appliances.length} Online
+          </span>
+          {onNavigateToPki && (
+            <button
+              type="button"
+              onClick={onNavigateToPki}
+              className="inline-flex items-center gap-1 text-[11px] font-mono font-semibold text-[var(--color-brand-text)] hover:underline whitespace-nowrap cursor-pointer"
+            >
+              <span>7-Domain PKI Matrix</span>
+              <ArrowRight className="w-3 h-3" />
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 w-full min-w-0">
@@ -31,7 +49,7 @@ export function ApplianceStatusStrip({ appliances, sslFleet }: ApplianceStatusSt
           return (
             <div
               key={appliance.key}
-              className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 dark:bg-slate-950/60 border border-slate-100 dark:border-slate-800/80"
+              className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200/70 dark:border-slate-800/80"
             >
               <div className="min-w-0 pr-2">
                 <p className="text-xs font-semibold text-slate-900 dark:text-slate-200 truncate">
@@ -49,7 +67,7 @@ export function ApplianceStatusStrip({ appliances, sslFleet }: ApplianceStatusSt
                   }`}
                 />
                 <span
-                  className={`text-[10px] font-semibold font-mono ${
+                  className={`text-[10px] font-semibold font-mono tabular-nums ${
                     isOnline ? 'text-emerald-700 dark:text-emerald-400' : 'text-rose-700 dark:text-rose-400'
                   }`}
                 >
@@ -58,7 +76,7 @@ export function ApplianceStatusStrip({ appliances, sslFleet }: ApplianceStatusSt
 
                 {sslItem && sslItem.live_cert.reachable && (
                   <span
-                    className={`text-[10px] font-mono px-1.5 py-0.5 rounded border whitespace-nowrap flex-shrink-0 ${
+                    className={`text-[10px] font-mono tabular-nums px-1.5 py-0.5 rounded border whitespace-nowrap flex-shrink-0 ${
                       sslItem.drift_status === 'DRIFT_DETECTED'
                         ? 'bg-amber-500/15 text-amber-900 dark:text-amber-400 border-amber-500/40'
                         : sslItem.live_cert.status === 'CRITICAL'

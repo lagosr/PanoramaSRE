@@ -4153,31 +4153,46 @@ export const App: React.FC = () => {
             <CommandCenterView
               apps={apps}
               appliances={appliances}
+              wshSnapshot={wshSnapshot}
+              tunnelVersionStatus={tunnelVersionStatus}
               sslFleet={sslFleet}
               backupLedger={backupLedger}
               isBackupIncidentDismissed={isBackupIncidentDismissed}
               optInSnapshot={optInSnapshot}
               cronSummary={fleetCronSummary}
+              smokeRuns={smokeRuns}
+              latestThreatRun={latestThreatDetail?.run ?? threatRuns[0] ?? null}
+              threatAlertCount={threatBadge.count}
+              threatAlertSeverity={threatBadge.severity}
               terminalTabs={terminalTabs}
               isLoading={apps.length === 0}
               isInitialSyncComplete={hasCompletedInitialSync}
               networkPosture={networkPosture}
-              onNavigateToBackups={() => setActiveTab('backups')}
-              onNavigateToOptIns={() => setActiveTab('opt-ins')}
-              onNavigateToCrons={() => {
-                setDietpiSubTab('crons');
-                setActiveTab('dietpi');
-              }}
-              onNavigateToRelease={(slug) => {
-                setSelectedReleaseAppSlug(slug);
-                setActiveTab('releases');
-              }}
+              onNavigateToBackups={() => navigateTo('backups', { returnFromCurrent: true })}
+              onNavigateToOptIns={() => navigateTo('opt-ins', { returnFromCurrent: true })}
+              onNavigateToCrons={() =>
+                navigateTo('dietpi', { tab: 'crons', returnFromCurrent: true })
+              }
+              onNavigateToDietPi={() =>
+                navigateTo('dietpi', { tab: 'host', returnFromCurrent: true })
+              }
+              onNavigateToRelease={(slug) =>
+                navigateTo('releases', { appSlug: slug, returnFromCurrent: true })
+              }
               onTriggerFullGfsBackup={() => handleTriggerFullGfsBackup('hud')}
               securityViolationCount={securityViolationCount}
               failingInvariants={failingInvariants}
+              hardeningPassingCount={hardeningPassingCount}
+              hardeningTotalCount={hardeningTotalCount}
               onReapplyHardening={() => handleReapplyHardening('hud')}
               onRunPenetrationAudit={() => handleRunPenetrationAudit('hud')}
-              onNavigateToTopology={() => setActiveTab('topology')}
+              onNavigateToTopology={() => navigateTo('topology', { returnFromCurrent: true })}
+              onNavigateToHardening={() => navigateTo('hardening', { returnFromCurrent: true })}
+              onNavigateToThreat={() => navigateTo('security', { returnFromCurrent: true })}
+              onNavigateToSmoke={() => navigateTo('smoke', { returnFromCurrent: true })}
+              onNavigateToPki={() => navigateTo('edge', { returnFromCurrent: true })}
+              isDeployingAll={isDeployingAll}
+              onTriggerDeployAll={handleDeployAllApps}
               onOpenInBottomConsole={handleOpenInBottomConsole}
               onAbortJob={handleAbortJob}
               onClearTab={handleClearTab}
