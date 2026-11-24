@@ -2299,4 +2299,216 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&temp_root);
     }
+
+    #[test]
+    fn test_unifi_cef_client_extraction_dedup_and_admin_ssh_correlation() {
+        use panorama_sre_lib::commands::threat_intel_ops::{
+            parse_unifi_cef_ndjson, WshSecuritySnapshot,
+        };
+
+        let sample_ndjson = [
+            r#"{"receivedAt":"2026-11-24T09:04:27.976Z","sourceIp":"10.10.1.2","cefVersion":0,"vendor":"Ubiquiti","product":"UniFi Network","productVersion":"11.0.104","signatureId":"200","name":"Threat Detected","severity":"7","category":"Security","risk":"medium","dstIp":"172.25.25.5","srcPort":"60170","dstPort":"22","proto":"TCP","action":"allowed","ipsSignature":"ET SCAN Potential SSH Scan OUTBOUND","ipsSignatureId":"2003068","policyName":"Scanning Activity","utcTime":"2026-11-24T09:04:27.798Z","extensions":{"UNIFIsrcClientAlias":"Rodrigo's laptop","UNIFIsrcClientHostname":"rodrigo-aero-16","UNIFIsrcClientMac":"6c:1f:f7:1a:da:53","UNIFIsrcZone":"Adult","UNIFIdstZone":"Compute systems","UNIFIdirection":"local","UNIFIipsSignature":"ET SCAN Potential SSH Scan OUTBOUND","UNIFIipsSignatureId":"2003068"}}"#,
+            r#"{"receivedAt":"2026-11-24T09:04:27.982Z","sourceIp":"10.10.1.2","cefVersion":0,"vendor":"Ubiquiti","product":"UniFi Network","productVersion":"11.0.104","signatureId":"200","name":"Threat Detected","severity":"7","category":"Security","risk":"medium","dstIp":"172.25.25.5","srcPort":"61629","dstPort":"22","proto":"TCP","action":"allowed","ipsSignature":"ET SCAN Potential SSH Scan OUTBOUND","ipsSignatureId":"2003068","policyName":"Scanning Activity","utcTime":"2026-11-24T09:04:27.814Z","extensions":{"UNIFIsrcClientAlias":"Rodrigo's laptop","UNIFIsrcClientHostname":"rodrigo-aero-16","UNIFIsrcClientMac":"6c:1f:f7:1a:da:53","UNIFIsrcZone":"Adult","UNIFIdstZone":"Compute systems","UNIFIdirection":"local","UNIFIipsSignature":"ET SCAN Potential SSH Scan OUTBOUND","UNIFIipsSignatureId":"2003068"}}"#,
+            // Stale event (>6h earlier) should be skipped when hours == 6
+            r#"{"receivedAt":"2026-11-24T01:00:00.000Z","sourceIp":"10.10.1.2","signatureId":"200","name":"Threat Detected","severity":"7","category":"Security","risk":"medium","dstIp":"172.25.25.5","srcPort":"55000","dstPort":"22","action":"allowed","ipsSignature":"ET SCAN Potential SSH Scan OUTBOUND","ipsSignatureId":"2003068","utcTime":"2026-11-24T01:00:00.000Z","extensions":{"UNIFIsrcClientMac":"AA:BB:CC:DD:EE:99","UNIFIsrcZone":"Untrusted & IoT systems"}}"#,
+        ]
+        .join("\n");
+
+        let parsed = parse_unifi_cef_ndjson(&sample_ndjson);
+        assert_eq!(parsed.len(), 3);
+        assert_eq!(
+            parsed[0].resolved_src_mac().as_deref(),
+            Some("6C:1F:F7:1A:DA:53")
+        );
+        assert_eq!(
+            parsed[0].resolved_src_alias().as_deref(),
+            Some("Rodrigo's laptop")
+        );
+        assert_eq!(parsed[0].ips_signature_id.as_deref(), Some("2003068"));
+
+        let prior_lan = vec![LanClientBaselineRow {
+            mac_address: "6C:1F:F7:1A:DA:53".into(),
+            ip_address: Some("172.16.200.98".into()),
+            hostname: Some("rodrigo-aero-16".into()),
+            network_vlan: Some("Adult".into()),
+            oui_vendor: Some("Intel".into()),
+            first_seen_at: "2026-11-24T01:00:00Z".into(),
+            last_seen_at: "2026-11-24T09:04:00Z".into(),
+            is_trusted: true,
+            label: "Rodrigo's laptop".into(),
+        }];
+
+        let now_iso = "2026-11-24T09:10:00Z";
+        let clean_wsh = WshSecuritySnapshot {
+            hostname: "wsh".into(),
+            captured_at: now_iso.into(),
+            hours: 6,
+            ssh_logs_raw: "2026-11-24T09:00:12+00:00 wsh sshd-session[1]: Accepted publickey for root from 172.16.200.98 port 60185 ssh2: RSA SHA256:test".into(),
+            unifi_siem_present: true,
+            unifi_cef_events: parsed.clone(),
+            ..Default::default()
+        };
+
+        // Case 1: Trusted admin workstation -> WSH :22 with clean publickey logs collapses into 1 LOW finding
+        let benign_triage = evaluate_stage0_triage(
+            "run-cef-benign",
+            now_iso,
+            None,
+            None,
+            Some(&clean_wsh),
+            &[],
+            &prior_lan,
+            &[],
+        );
+        assert!(!benign_triage.hard_hit);
+        assert_eq!(benign_triage.overall_severity, "LOW");
+        assert_eq!(
+            benign_triage
+                .internal_summary
+                .get("unifiCefSecurityAlerts")
+                .and_then(|v| v.as_u64()),
+            Some(0)
+        );
+        assert_eq!(
+            benign_triage
+                .internal_summary
+                .get("unifiCefBenignAdminSshEvents")
+                .and_then(|v| v.as_u64()),
+            Some(2)
+        );
+        let burst_finding = benign_triage
+            .findings
+            .iter()
+            .find(|f| f.rule_id == "UNIFI_CEF_ADMIN_SSH_BURST")
+            .expect("grouped benign admin ssh burst finding");
+        assert_eq!(burst_finding.severity, "LOW");
+        assert_eq!(burst_finding.actor_ip.as_deref(), Some("172.16.200.98"));
+        assert!(!burst_finding.summary.contains("src=None"));
+        assert!(burst_finding.summary.contains("Rodrigo's laptop"));
+
+        // Case 2: Any failed SSH auth on WSH escalates the same SID 2003068 burst to grouped HIGH
+        let mut failed_wsh = clean_wsh.clone();
+        failed_wsh.ssh_logs_raw =
+            "2026-11-24T09:02:00+00:00 wsh sshd-session[2]: Failed password for root from 172.16.200.98 port 60190 ssh2".into();
+        let failed_triage = evaluate_stage0_triage(
+            "run-cef-fail-ssh",
+            now_iso,
+            None,
+            None,
+            Some(&failed_wsh),
+            &[],
+            &prior_lan,
+            &[],
+        );
+        assert!(failed_triage.hard_hit);
+        let ips_alert = failed_triage
+            .findings
+            .iter()
+            .find(|f| f.rule_id == "UNIFI_CEF_IPS_ALERT")
+            .expect("escalated grouped IPS finding");
+        assert_eq!(ips_alert.severity, "HIGH");
+        assert!(ips_alert.title.contains("(2 events)"));
+
+        // Case 3: Untrusted/unknown MAC triggers HIGH grouped UNIFI_CEF_IPS_ALERT
+        let unknown_triage = evaluate_stage0_triage(
+            "run-cef-unknown",
+            now_iso,
+            None,
+            None,
+            Some(&clean_wsh),
+            &[],
+            &[],
+            &[],
+        );
+        assert!(unknown_triage.hard_hit);
+        assert!(unknown_triage
+            .findings
+            .iter()
+            .any(|f| f.rule_id == "UNIFI_CEF_IPS_ALERT" && f.severity == "HIGH"));
+
+        // Case 4: LAN_MAC allowlist suppresses CEF alerts cleanly
+        let mac_allowlist = vec![ThreatAllowlistRow {
+            id: "allow-mac-1".into(),
+            entry_type: "LAN_MAC".into(),
+            value: "6C:1F:F7:1A:DA:53".into(),
+            label: "Admin laptop".into(),
+            created_at: now_iso.into(),
+        }];
+        let allowlisted_triage = evaluate_stage0_triage(
+            "run-cef-allow",
+            now_iso,
+            None,
+            None,
+            Some(&clean_wsh),
+            &mac_allowlist,
+            &[],
+            &[],
+        );
+        assert!(allowlisted_triage.findings.is_empty());
+
+        // Case 5: Startup DB hygiene resolves legacy src=None Potential SSH Scan OUTBOUND rows
+        let db = SreDatabase::new(":memory:").expect("init in-memory db");
+        let run = ThreatAuditRunRow {
+            id: "run-legacy-cef".into(),
+            started_at: now_iso.into(),
+            completed_at: Some(now_iso.into()),
+            window_start: now_iso.into(),
+            window_end: now_iso.into(),
+            window_hours: 6,
+            trigger_source: "scheduled".into(),
+            status: "COMPLETED".into(),
+            overall_severity: "HIGH".into(),
+            intrusion_verdict: "SUSPICIOUS_ACTIVITY".into(),
+            tier1_model: None,
+            tier2_model: None,
+            escalated_to_tier2: true,
+            escalation_reasons_json: None,
+            collector_statuses_json: None,
+            zones_summary_json: None,
+            zero_trust_summary_json: None,
+            internal_summary_json: None,
+            gemini_brief_json: None,
+            token_usage_json: None,
+            error_message: None,
+        };
+        db.save_threat_audit_run(&run).unwrap();
+        let legacy_finding = ThreatFindingRow {
+            id: "f-legacy-ssh".into(),
+            run_id: "run-legacy-cef".into(),
+            source_layer: "UNIFI".into(),
+            rule_id: "UNIFI_CEF_IPS_ALERT".into(),
+            severity: "HIGH".into(),
+            category: "HTTP_ATTACK".into(),
+            title: "UniFi SIEM CEF: ET SCAN Potential SSH Scan OUTBOUND".into(),
+            summary: r#"src=None -> dst=Some("172.25.25.5"):Some("22") action=Some("allowed") policy=Some("Scanning Activity")"#.into(),
+            host: Some("172.25.25.5".into()),
+            actor_ip: None,
+            actor_asn: None,
+            ray_ids_json: "[]".into(),
+            evidence_json: r#"{"srcMac":"6C:1F:F7:1A:DA:53"}"#.into(),
+            created_at: now_iso.into(),
+            disposition: "ACTIVE".into(),
+            snoozed_until: None,
+            resolved_at: None,
+            resolution_note: None,
+        };
+        let real_finding = ThreatFindingRow {
+            id: "f-real-exploit".into(),
+            summary: "172.16.20.44 -> 10.10.1.5:443 exploit".into(),
+            title: "UniFi SIEM CEF: ET EXPLOIT Attempt".into(),
+            ..legacy_finding.clone()
+        };
+        db.replace_threat_findings_for_run("run-legacy-cef", &[legacy_finding, real_finding])
+            .unwrap();
+        db.run_threat_hygiene_pass(now_iso).unwrap();
+        let rows = db.list_threat_findings_for_run("run-legacy-cef").unwrap();
+        assert_eq!(
+            rows.iter().find(|r| r.id == "f-legacy-ssh").unwrap().disposition,
+            "RESOLVED"
+        );
+        assert_eq!(
+            rows.iter().find(|r| r.id == "f-real-exploit").unwrap().disposition,
+            "ACTIVE"
+        );
+    }
 }

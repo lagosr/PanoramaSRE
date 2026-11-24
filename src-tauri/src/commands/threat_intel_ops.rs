@@ -17,7 +17,7 @@ use crate::scrubber::scrub_secrets;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::process::Command;
@@ -1357,17 +1357,78 @@ pub struct UnifiCefEvent {
     #[serde(default)]
     pub dst_ip: Option<String>,
     #[serde(default)]
+    pub src_port: Option<String>,
+    #[serde(default)]
     pub dst_port: Option<String>,
+    #[serde(default)]
+    pub proto: Option<String>,
     #[serde(default)]
     pub action: Option<String>,
     #[serde(default)]
     pub ips_signature: Option<String>,
     #[serde(default)]
+    pub ips_signature_id: Option<String>,
+    #[serde(default)]
     pub policy_name: Option<String>,
     #[serde(default)]
     pub src_region: Option<String>,
     #[serde(default)]
+    pub utc_time: Option<String>,
+    #[serde(default)]
     pub message: Option<String>,
+    #[serde(default)]
+    pub extensions: HashMap<String, String>,
+}
+
+impl UnifiCefEvent {
+    pub fn ext(&self, key: &str) -> Option<&str> {
+        self.extensions
+            .get(key)
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+    }
+
+    pub fn resolved_src_mac(&self) -> Option<String> {
+        self.ext("UNIFIsrcClientMac")
+            .or_else(|| self.ext("smac"))
+            .map(|m| m.to_ascii_uppercase())
+    }
+
+    pub fn resolved_src_alias(&self) -> Option<String> {
+        self.ext("UNIFIsrcClientAlias")
+            .or_else(|| self.ext("UNIFIsrcClientHostname"))
+            .map(|s| s.to_string())
+    }
+
+    pub fn resolved_src_zone(&self) -> Option<String> {
+        self.ext("UNIFIsrcZone")
+            .or_else(|| self.ext("deviceInboundInterface"))
+            .map(|s| s.to_string())
+    }
+
+    pub fn resolved_dst_zone(&self) -> Option<String> {
+        self.ext("UNIFIdstZone")
+            .or_else(|| self.ext("deviceOutboundInterface"))
+            .map(|s| s.to_string())
+    }
+
+    pub fn event_timestamp(&self) -> Option<DateTime<Utc>> {
+        self.utc_time
+            .as_deref()
+            .or_else(|| self.ext("UNIFIutcTime"))
+            .and_then(|s| DateTime::parse_from_rfc3339(s.trim()).ok())
+            .map(|dt| dt.with_timezone(&Utc))
+            .or_else(|| {
+                let raw = self.received_at.trim();
+                if raw.is_empty() {
+                    None
+                } else {
+                    DateTime::parse_from_rfc3339(raw)
+                        .ok()
+                        .map(|dt| dt.with_timezone(&Utc))
+                }
+            })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1956,6 +2017,66 @@ pub fn evaluate_stage0_triage(
     let mut suspect_macs: BTreeSet<String> = BTreeSet::new();
     let mut rollups: HashMap<String, IpRollup> = HashMap::new();
 
+    let mut mac_to_ip: HashMap<String, String> = HashMap::new();
+    let mut mac_to_label: HashMap<String, String> = HashMap::new();
+    let mut mac_to_zone: HashMap<String, String> = HashMap::new();
+    for cli in prior_lan_clients {
+        let mac = cli.mac_address.trim().to_ascii_uppercase();
+        if mac.is_empty() {
+            continue;
+        }
+        if let Some(ref ip) = cli.ip_address {
+            let trimmed = ip.trim();
+            if !trimmed.is_empty() {
+                mac_to_ip.insert(mac.clone(), trimmed.to_string());
+            }
+        }
+        if let Some(ref hn) = cli.hostname {
+            let trimmed = hn.trim();
+            if !trimmed.is_empty() {
+                mac_to_label.insert(mac.clone(), trimmed.to_string());
+            }
+        }
+        if let Some(ref net) = cli.network_vlan {
+            let trimmed = net.trim();
+            if !trimmed.is_empty() {
+                mac_to_zone.insert(mac.clone(), trimmed.to_string());
+            }
+        }
+    }
+    if let Some(unifi) = unifi_opt {
+        for cli in &unifi.clients {
+            let mac = cli.mac_address.trim().to_ascii_uppercase();
+            if mac.is_empty() {
+                continue;
+            }
+            if let Some(ref ip) = cli.ip_address {
+                let trimmed = ip.trim();
+                if !trimmed.is_empty() {
+                    mac_to_ip.insert(mac.clone(), trimmed.to_string());
+                }
+            }
+            if let Some(label) = cli
+                .name
+                .as_deref()
+                .or(cli.hostname.as_deref())
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+            {
+                mac_to_label.insert(mac.clone(), label.to_string());
+            }
+            if let Some(zone) = cli
+                .zone_name
+                .as_deref()
+                .or(cli.network_name.as_deref())
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+            {
+                mac_to_zone.insert(mac, zone.to_string());
+            }
+        }
+    }
+
     let trusted_macs: HashSet<String> = prior_lan_clients
         .iter()
         .filter(|c| c.is_trusted)
@@ -2518,6 +2639,7 @@ pub fn evaluate_stage0_triage(
     // 2. UniFi CloudKey Local Integration API Analysis
     // ------------------------------------------------------------------------
     let mut new_macs_detected = Vec::new();
+    let mut new_macs_set: HashSet<String> = HashSet::new();
     let mut offline_unifi_devices = Vec::new();
 
     if let Some(unifi) = unifi_opt {
@@ -2556,6 +2678,7 @@ pub fn evaluate_stage0_triage(
             let is_known_trusted = trusted_macs.contains(&mac) || known_macs.contains(&mac);
             if baseline_seeded && !is_known_trusted && !allowlisted {
                 new_macs_detected.push(mac.clone());
+                new_macs_set.insert(mac.clone());
                 let ip_disp = cli.ip_address.as_deref().unwrap_or("unassigned");
                 let vendor_disp = cli.oui_vendor.as_deref().unwrap_or("Unknown / Randomized MAC");
                 let net_disp = cli.network_name.as_deref().unwrap_or("Unknown VLAN");
@@ -2617,6 +2740,7 @@ pub fn evaluate_stage0_triage(
     let mut panorama_auth_anom_count = 0usize;
     let mut ssh_anomaly_lines = Vec::new();
     let mut cef_ips_count = 0usize;
+    let mut cef_benign_ssh_events = 0usize;
 
     if let Some(wsh) = wsh_opt {
         panorama_auth_anom_count = wsh.panorama_auth.anomalies.len();
@@ -2686,13 +2810,22 @@ pub fn evaluate_stage0_triage(
         }
 
         // Host SSH logs inspection
+        let mut wsh_has_ssh_auth_failure = false;
+        let mut wsh_has_accepted_admin_ssh = false;
         for line in wsh.ssh_logs_raw.lines() {
             let lower = line.to_ascii_lowercase();
-            if lower.contains("failed password")
+            let is_failure = lower.contains("failed password")
                 || lower.contains("invalid user")
                 || lower.contains("authentication failure")
-                || lower.contains("accepted publickey")
-            {
+                || lower.contains("failed publickey")
+                || lower.contains("maximum authentication attempts exceeded");
+            if is_failure {
+                wsh_has_ssh_auth_failure = true;
+            }
+            if lower.contains("accepted publickey for root from 172.16.200.") {
+                wsh_has_accepted_admin_ssh = true;
+            }
+            if is_failure || lower.contains("accepted publickey") {
                 let is_benign_deploy = lower.contains("accepted publickey for root from 172.16.200.");
                 if !is_benign_deploy && ssh_anomaly_lines.len() < 15 {
                     ssh_anomaly_lines.push(sanitize_bounded(line, 200));
@@ -2700,6 +2833,7 @@ pub fn evaluate_stage0_triage(
             }
         }
         if !ssh_anomaly_lines.is_empty() {
+            wsh_has_ssh_auth_failure = true;
             let has_unexpected_accept = ssh_anomaly_lines
                 .iter()
                 .any(|l| l.to_ascii_lowercase().contains("accepted "));
@@ -2718,45 +2852,335 @@ pub fn evaluate_stage0_triage(
             );
         }
 
-        // UniFi SIEM CEF NDJSON analysis
+        // UniFi SIEM CEF NDJSON analysis: resolve LAN client identity, deduplicate bursts,
+        // and correlate benign admin SSH automation bursts against WSH sshd auth telemetry.
+        #[derive(Default)]
+        struct CefBurstGroup {
+            sig_label: String,
+            ips_signature_id: Option<String>,
+            is_ips: bool,
+            is_local: bool,
+            is_benign_admin_ssh: bool,
+            src_ip: Option<String>,
+            src_mac: Option<String>,
+            src_alias: Option<String>,
+            src_zone: Option<String>,
+            dst_ip: Option<String>,
+            dst_port: Option<String>,
+            dst_zone: Option<String>,
+            action: Option<String>,
+            policy_name: Option<String>,
+            count: usize,
+            first_seen: Option<String>,
+            last_seen: Option<String>,
+            sample_src_ports: BTreeSet<String>,
+            samples: Vec<UnifiCefEvent>,
+        }
+
+        let cef_cutoff = if wsh.hours > 0 {
+            Some(now_ref_dt - ChronoDuration::hours(wsh.hours as i64))
+        } else {
+            None
+        };
+        let mut cef_groups: BTreeMap<String, CefBurstGroup> = BTreeMap::new();
+
         for cef in &wsh.unifi_cef_events {
+            if let (Some(cutoff), Some(ev_ts)) = (cef_cutoff, cef.event_timestamp()) {
+                if ev_ts < cutoff {
+                    continue;
+                }
+            }
+
             let sub = cef.sub_category.as_deref().unwrap_or("").to_ascii_lowercase();
             let risk = cef.risk.as_deref().unwrap_or("").to_ascii_lowercase();
             let is_ips = sub.contains("intrusion")
                 || cef.ips_signature.is_some()
                 || cef.name.to_ascii_lowercase().contains("threat detected");
             let is_high_fw = risk == "high" || risk == "critical" || risk == "medium";
+            if !is_ips && !is_high_fw {
+                continue;
+            }
 
-            if let Some(ref src_ip) = cef.src_ip {
-                if is_allowlisted(allowlist, Some(src_ip), None, None, None) {
-                    continue;
+            let src_mac = cef.resolved_src_mac();
+            let src_ip = cef
+                .src_ip
+                .as_deref()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .or_else(|| src_mac.as_ref().and_then(|m| mac_to_ip.get(m).cloned()));
+            let src_alias = cef
+                .resolved_src_alias()
+                .or_else(|| src_mac.as_ref().and_then(|m| mac_to_label.get(m).cloned()));
+            let src_zone = cef
+                .resolved_src_zone()
+                .or_else(|| src_mac.as_ref().and_then(|m| mac_to_zone.get(m).cloned()));
+            let dst_zone = cef.resolved_dst_zone();
+
+            if is_allowlisted(
+                allowlist,
+                src_ip.as_deref(),
+                None,
+                None,
+                src_mac.as_deref(),
+            ) {
+                continue;
+            }
+
+            let sig_label = cef
+                .ips_signature
+                .as_deref()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .unwrap_or(cef.name.trim())
+                .to_string();
+            let sig_id_clean = cef
+                .ips_signature_id
+                .as_deref()
+                .or_else(|| cef.ext("UNIFIipsSignatureId"))
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+
+            let dst_ip_clean = cef
+                .dst_ip
+                .as_deref()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            let dst_port_clean = cef
+                .dst_port
+                .as_deref()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+
+            let is_ssh_scan_sig = sig_id_clean.as_deref() == Some("2003068")
+                || sig_label.to_ascii_lowercase().contains("potential ssh scan");
+            let is_wsh_ssh_dst =
+                dst_ip_clean.as_deref() == Some("172.25.25.5") && dst_port_clean.as_deref() == Some("22");
+            let is_trusted_admin_src = match src_mac.as_deref() {
+                Some(mac) => {
+                    !new_macs_set.contains(mac)
+                        && (trusted_macs.contains(mac)
+                            || (known_macs.contains(mac)
+                                && (src_ip
+                                    .as_deref()
+                                    .map(|ip| ip.starts_with("172.16.200."))
+                                    .unwrap_or(false)
+                                    || src_zone
+                                        .as_deref()
+                                        .map(|z| z.to_ascii_lowercase().contains("adult"))
+                                        .unwrap_or(false))))
+                }
+                None => false,
+            };
+            let wsh_ssh_corroborated = !wsh_has_ssh_auth_failure
+                && (wsh.ssh_logs_raw.trim().is_empty() || wsh_has_accepted_admin_ssh);
+            let is_benign_admin_ssh =
+                is_ssh_scan_sig && is_wsh_ssh_dst && is_trusted_admin_src && wsh_ssh_corroborated;
+
+            let is_local_dir = cef
+                .ext("UNIFIdirection")
+                .map(|d| d.eq_ignore_ascii_case("local"))
+                .unwrap_or(false)
+                || dst_port_clean.as_deref() == Some("22");
+
+            let src_identity = src_mac
+                .as_deref()
+                .or(src_ip.as_deref())
+                .or(src_alias.as_deref())
+                .unwrap_or("unknown");
+            let sig_key = sig_id_clean.as_deref().unwrap_or(&sig_label);
+            let group_key = format!(
+                "{}|{}|{}|{}|{}|{}",
+                sig_key,
+                src_identity,
+                dst_ip_clean.as_deref().unwrap_or(""),
+                dst_port_clean.as_deref().unwrap_or(""),
+                cef.action.as_deref().unwrap_or(""),
+                if is_benign_admin_ssh { "benign" } else { "alert" }
+            );
+
+            let entry = cef_groups.entry(group_key).or_insert_with(|| CefBurstGroup {
+                sig_label: sig_label.clone(),
+                ips_signature_id: sig_id_clean.clone(),
+                is_ips,
+                is_local: is_local_dir,
+                is_benign_admin_ssh,
+                src_ip: src_ip.clone(),
+                src_mac: src_mac.clone(),
+                src_alias: src_alias.clone(),
+                src_zone: src_zone.clone(),
+                dst_ip: dst_ip_clean.clone(),
+                dst_port: dst_port_clean.clone(),
+                dst_zone: dst_zone.clone(),
+                action: cef.action.clone(),
+                policy_name: cef.policy_name.clone(),
+                count: 0,
+                first_seen: None,
+                last_seen: None,
+                sample_src_ports: BTreeSet::new(),
+                samples: Vec::new(),
+            });
+
+            entry.is_ips |= is_ips;
+            entry.is_local |= is_local_dir;
+            if entry.src_ip.is_none() {
+                entry.src_ip = src_ip;
+            }
+            if entry.src_alias.is_none() {
+                entry.src_alias = src_alias;
+            }
+            if entry.src_zone.is_none() {
+                entry.src_zone = src_zone;
+            }
+            entry.count += 1;
+
+            if let Some(sp) = cef
+                .src_port
+                .as_deref()
+                .or_else(|| cef.ext("spt"))
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+            {
+                if entry.sample_src_ports.len() < 8 {
+                    entry.sample_src_ports.insert(sp.to_string());
                 }
             }
 
-            if is_ips || is_high_fw {
-                cef_ips_count += 1;
-                if let Some(ref src_ip) = cef.src_ip {
-                    suspect_ips.insert(src_ip.clone());
+            if let Some(ts_str) = cef
+                .utc_time
+                .as_deref()
+                .or_else(|| {
+                    let r = cef.received_at.trim();
+                    if r.is_empty() { None } else { Some(r) }
+                })
+            {
+                if entry
+                    .first_seen
+                    .as_deref()
+                    .map(|cur| ts_str < cur)
+                    .unwrap_or(true)
+                {
+                    entry.first_seen = Some(ts_str.to_string());
                 }
-                let sev = if is_ips { "HIGH" } else { "MEDIUM" };
+                if entry
+                    .last_seen
+                    .as_deref()
+                    .map(|cur| ts_str > cur)
+                    .unwrap_or(true)
+                {
+                    entry.last_seen = Some(ts_str.to_string());
+                }
+            }
+
+            if entry.samples.len() < 3 {
+                entry.samples.push(cef.clone());
+            }
+        }
+
+        for (_, grp) in cef_groups {
+            let src_display = match (&grp.src_alias, &grp.src_ip, &grp.src_mac) {
+                (Some(a), Some(ip), Some(mac)) => format!("{} ({}, MAC {})", a, ip, mac),
+                (Some(a), None, Some(mac)) => format!("{} (MAC {})", a, mac),
+                (None, Some(ip), Some(mac)) => format!("{} (MAC {})", ip, mac),
+                (None, Some(ip), None) => ip.clone(),
+                (None, None, Some(mac)) => format!("MAC {}", mac),
+                (Some(a), Some(ip), None) => format!("{} ({})", a, ip),
+                (Some(a), None, None) => a.clone(),
+                (None, None, None) => "unknown source".to_string(),
+            };
+            let dst_display = match (&grp.dst_ip, &grp.dst_port) {
+                (Some(ip), Some(port)) => format!("{}:{}", ip, port),
+                (Some(ip), None) => ip.clone(),
+                (None, Some(port)) => format!("port {}", port),
+                (None, None) => "unknown target".to_string(),
+            };
+            let zone_pair = match (&grp.src_zone, &grp.dst_zone) {
+                (Some(sz), Some(dz)) => format!(" | Zones: {} -> {}", sz, dz),
+                (Some(sz), None) => format!(" | Source Zone: {}", sz),
+                (None, Some(dz)) => format!(" | Dest Zone: {}", dz),
+                (None, None) => String::new(),
+            };
+
+            let evidence_payload = json!({
+                "eventCount": grp.count,
+                "ipsSignature": grp.sig_label,
+                "ipsSignatureId": grp.ips_signature_id,
+                "srcIp": grp.src_ip,
+                "srcMac": grp.src_mac,
+                "srcAlias": grp.src_alias,
+                "srcZone": grp.src_zone,
+                "dstIp": grp.dst_ip,
+                "dstPort": grp.dst_port,
+                "dstZone": grp.dst_zone,
+                "action": grp.action,
+                "policyName": grp.policy_name,
+                "firstSeen": grp.first_seen,
+                "lastSeen": grp.last_seen,
+                "sampleSrcPorts": grp.sample_src_ports.iter().cloned().collect::<Vec<_>>(),
+                "samples": grp.samples,
+            });
+
+            if grp.is_benign_admin_ssh {
+                cef_benign_ssh_events += grp.count;
+                make_finding(
+                    "UNIFI",
+                    "UNIFI_CEF_ADMIN_SSH_BURST",
+                    "LOW",
+                    "ZERO_TRUST",
+                    format!(
+                        "UniFi SIEM: Automated Admin SSH Burst ({} event(s)) — Verified Benign",
+                        grp.count
+                    ),
+                    format!(
+                        "{} -> {} matched Suricata '{}' (SID {}) during rapid automation SSH bursts (backups/SRE/tests). WSH sshd confirmed publickey root auth with 0 failed logins{}.",
+                        src_display,
+                        dst_display,
+                        grp.sig_label,
+                        grp.ips_signature_id.as_deref().unwrap_or("2003068"),
+                        zone_pair
+                    ),
+                    grp.dst_ip,
+                    grp.src_ip,
+                    None,
+                    vec![],
+                    evidence_payload,
+                );
+            } else {
+                cef_ips_count += grp.count;
+                if let Some(ref ip) = grp.src_ip {
+                    suspect_ips.insert(ip.clone());
+                }
+                if let Some(ref mac) = grp.src_mac {
+                    if !trusted_macs.contains(mac) {
+                        suspect_macs.insert(mac.clone());
+                    }
+                }
+                let sev = if grp.is_ips { "HIGH" } else { "MEDIUM" };
+                let cat = if grp.is_local { "ZERO_TRUST" } else { "HTTP_ATTACK" };
+                let title = if grp.count > 1 {
+                    format!("UniFi SIEM CEF: {} ({} events)", grp.sig_label, grp.count)
+                } else {
+                    format!("UniFi SIEM CEF: {}", grp.sig_label)
+                };
                 make_finding(
                     "UNIFI",
                     "UNIFI_CEF_IPS_ALERT",
                     sev,
-                    "HTTP_ATTACK",
+                    cat,
+                    title,
                     format!(
-                        "UniFi SIEM CEF: {}",
-                        cef.ips_signature.as_deref().unwrap_or(&cef.name)
+                        "{} -> {} | action={} | policy={}{}",
+                        src_display,
+                        dst_display,
+                        grp.action.as_deref().unwrap_or("unknown"),
+                        grp.policy_name.as_deref().unwrap_or("IPS/Firewall"),
+                        zone_pair
                     ),
-                    format!(
-                        "src={:?} -> dst={:?}:{:?} action={:?} policy={:?}",
-                        cef.src_ip, cef.dst_ip, cef.dst_port, cef.action, cef.policy_name
-                    ),
-                    cef.dst_ip.clone(),
-                    cef.src_ip.clone(),
+                    grp.dst_ip,
+                    grp.src_ip,
                     None,
                     vec![],
-                    json!(cef),
+                    evidence_payload,
                 );
             }
         }
@@ -2888,6 +3312,7 @@ pub fn evaluate_stage0_triage(
         "sshAnomalyCount": ssh_anomaly_lines.len(),
         "unifiSiemCefEvents": wsh_opt.map(|w| w.unifi_cef_events.len()).unwrap_or(0),
         "unifiCefSecurityAlerts": cef_ips_count,
+        "unifiCefBenignAdminSshEvents": cef_benign_ssh_events,
     });
 
     let top_actors_for_llm: Vec<Value> = actor_candidates

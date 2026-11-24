@@ -1536,6 +1536,37 @@ impl SreDatabase {
         self.resolve_findings_by_ids(&ids, note)
     }
 
+    pub fn resolve_findings_for_allowlisted_mac(&self, mac: &str, note: &str) -> Result<usize> {
+        let mac_norm = mac.trim().to_ascii_uppercase();
+        if mac_norm.is_empty() {
+            return Ok(0);
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT id, summary, evidence_json
+             FROM threat_findings
+             WHERE rule_id IN ('UNIFI_ROGUE_LAN_CLIENT', 'UNIFI_CEF_IPS_ALERT', 'UNIFI_CEF_ADMIN_SSH_BURST')
+               AND UPPER(COALESCE(disposition, 'ACTIVE')) = 'ACTIVE'",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        let mut ids = Vec::new();
+        for r in rows {
+            let (id, summary, ev) = r?;
+            if ev.to_ascii_uppercase().contains(&mac_norm)
+                || summary.to_ascii_uppercase().contains(&mac_norm)
+            {
+                ids.push(id);
+            }
+        }
+        drop(stmt);
+        self.resolve_findings_by_ids(&ids, note)
+    }
+
     pub fn resolve_all_rogue_lan_findings(&self, note: &str) -> Result<usize> {
         let resolved_ts = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let updated = self.conn.execute(
@@ -1564,7 +1595,7 @@ impl SreDatabase {
         }
         let resolved_ts = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         match norm_type.as_str() {
-            "LAN_MAC" => self.resolve_findings_for_mac(clean_val, note),
+            "LAN_MAC" => self.resolve_findings_for_allowlisted_mac(clean_val, note),
             "IP" => {
                 let updated = self.conn.execute(
                     "UPDATE threat_findings
@@ -1755,11 +1786,32 @@ impl SreDatabase {
         Ok(resolved)
     }
 
+    pub fn resolve_legacy_unparsed_admin_ssh_cef_findings(&self) -> Result<usize> {
+        let resolved_ts = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let updated = self.conn.execute(
+            "UPDATE threat_findings
+             SET disposition = 'RESOLVED',
+                 snoozed_until = NULL,
+                 resolved_at = ?1,
+                 resolution_note = ?2
+             WHERE rule_id = 'UNIFI_CEF_IPS_ALERT'
+               AND UPPER(COALESCE(disposition, 'ACTIVE')) = 'ACTIVE'
+               AND title LIKE '%Potential SSH Scan OUTBOUND%'
+               AND summary LIKE 'src=None -> dst=Some(\"172.25.25.5\"):Some(\"22\")%'",
+            params![
+                resolved_ts,
+                "Auto-resolved legacy unparsed admin SSH burst finding (superseded by CEF client correlation)"
+            ],
+        )?;
+        Ok(updated)
+    }
+
     pub fn run_threat_hygiene_pass(&self, now_iso: &str) -> Result<(usize, usize, usize)> {
         let benign_deleted = self.delete_benign_crawler_actors().unwrap_or(0);
         let expired_actors = self.expire_stale_noise_actors(now_iso, 7).unwrap_or(0);
         let downgraded = self.downgrade_isolated_zone_rogue_findings().unwrap_or(0);
         let _ = self.auto_resolve_already_trusted_rogue_findings();
+        let _ = self.resolve_legacy_unparsed_admin_ssh_cef_findings();
         let _ = self.expire_due_snoozed_actors(now_iso);
         let _ = self.expire_due_snoozed_findings(now_iso);
         Ok((benign_deleted, expired_actors, downgraded))
