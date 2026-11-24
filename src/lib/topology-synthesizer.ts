@@ -778,10 +778,16 @@ export interface TopologyBadgeSummary {
   errorCount: number;
   /** Total distinct update/warning count (e.g., upstream cloudflared update available) */
   updateCount: number;
-  /** Combined count for the SidebarRail "Topology & Stacks" badge */
+  /** Combined count for legacy Topology & Stacks aggregation */
   totalCount: number;
   /** 'error' (rose) when errorCount > 0, 'warning' (amber) when only updateCount > 0, null when 0 */
   severity: TopologyAlertSeverity;
+  /** Ingress-scoped error count (unhealthy routes + tunnel errors, excluding WSH Hardening & hardware NIC) */
+  ingressErrorCount: number;
+  /** Combined ingress alert count for Topology & Ingress sidebar badge */
+  ingressTotalCount: number;
+  /** Severity for Topology & Ingress sidebar badge */
+  ingressSeverity: TopologyAlertSeverity;
   /** Per-subpage badge counts and severities for TopologyStacksView tabs */
   tabs: {
     visual: TopologyTabBadge;
@@ -866,11 +872,19 @@ export function computeTopologyBadges(
   const severity: TopologyAlertSeverity =
     errorCount > 0 ? 'error' : updateCount > 0 ? 'warning' : null;
 
+  const ingressErrorCount = unhealthyRoutesCount + tunnelErrorCount;
+  const ingressTotalCount = ingressErrorCount + tunnelUpdateCount;
+  const ingressSeverity: TopologyAlertSeverity =
+    ingressErrorCount > 0 ? 'error' : tunnelUpdateCount > 0 ? 'warning' : null;
+
   return {
     errorCount,
     updateCount,
     totalCount,
     severity,
+    ingressErrorCount,
+    ingressTotalCount,
+    ingressSeverity,
     tabs: {
       visual: visualBadge,
       matrix: matrixBadge,

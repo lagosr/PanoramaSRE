@@ -4,7 +4,6 @@ import { openUrl } from '@tauri-apps/plugin-opener';
 import {
   SegmentedControl,
   StatusBadge,
-  ToggleSwitch,
 } from '@lagosr/panorama-ui-kit';
 import {
   ShieldAlert,
@@ -29,16 +28,16 @@ import {
   Save,
   ArrowRight,
   ArrowLeftRight,
-  Info,
   Filter,
+  Shield,
+  Waypoints,
   X,
 } from 'lucide-react';
 import { CustomSelect } from '../ui/CustomSelect';
 import { CopyableAddressText, CopyableValue } from '../ui/CopyableValue';
 import { SnoozeSplitButton } from './SnoozeSplitButton';
-import { UnifiVlanZbfPanel } from './UnifiVlanZbfPanel';
+import type { UnifiZbfPanelTab } from './UnifiVlanZbfPanel';
 import { formatLocalDateTime, formatRelativeTime, parseUtcDate } from '../../lib/formatters';
-import { getVlanBadgeStyle } from '../../lib/unifi-zbf';
 import {
   buildActorCountryOptions,
   buildActorVectorOptions,
@@ -56,9 +55,7 @@ import {
   collectorStatusToBadgeVariant,
   filterExternalCampaigns,
   filterExternalFindings,
-  filterLanClients,
   filterThreatActors,
-  formatCompactBytes,
   formatSnoozeRemaining,
   normalizeHostname,
   safeParseJson,
@@ -94,7 +91,6 @@ import type {
   ThreatFindingRow,
   ThreatIntelSettingsViewDto,
   ThreatRunDetailDto,
-  UnifiTopologySnapshotDto,
   WshSnapshot,
   ZeroTrustSummary,
 } from '../../lib/types';
@@ -133,6 +129,11 @@ interface ThreatIntelViewProps {
   onRefreshAll: () => Promise<void>;
   onNavigateToSettings: () => void;
   onNavigateToSiemRelease?: () => void;
+  onNavigateToHardening?: () => void;
+  onNavigateToUnifiZbf?: (tab?: UnifiZbfPanelTab, searchQuery?: string) => void;
+  hardeningPassingCount?: number;
+  hardeningTotalCount?: number;
+  securityViolationCount?: number;
   wshSnapshot?: WshSnapshot | null;
   terminalTabs?: TerminalTab[];
   onOpenInBottomConsole?: (tabId?: string) => void;
@@ -196,6 +197,11 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   onRefreshAll,
   onNavigateToSettings,
   onNavigateToSiemRelease,
+  onNavigateToHardening,
+  onNavigateToUnifiZbf,
+  hardeningPassingCount = 0,
+  hardeningTotalCount = 0,
+  securityViolationCount = 0,
   wshSnapshot = null,
   terminalTabs = [],
   onOpenInBottomConsole,
@@ -235,16 +241,9 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   const [manualWafExpr, setManualWafExpr] = useState<string>('');
   const [isSavingWafOverride, setIsSavingWafOverride] = useState<boolean>(false);
 
-  // Internal LAN Baseline, VLAN/ZBF Topology, Allowlist & UniFi SIEM .env.siem state
+  // Internal LAN Baseline & Allowlist state (promoted UniFi ZBF UI lives in UnifiNetworkZbfView)
   const [lanClients, setLanClients] = useState<LanClientBaselineRow[]>([]);
-  const [lanSearch, setLanSearch] = useState<string>('');
-  const [lanTrustFilter, setLanTrustFilter] = useState<'ALL' | 'UNREVIEWED' | 'TRUSTED'>('ALL');
-  const [lanVlanFilter, setLanVlanFilter] = useState<string>('ALL');
-  const [unifiTopology, setUnifiTopology] = useState<UnifiTopologySnapshotDto | null>(null);
-  const [isLoadingTopology, setIsLoadingTopology] = useState<boolean>(false);
-  const [topologyError, setTopologyError] = useState<string | null>(null);
   const [allowlist, setAllowlist] = useState<ThreatAllowlistRow[]>([]);
-  const [isLoadingSources, setIsLoadingSources] = useState<boolean>(false);
   const [newRuleType, setNewRuleType] = useState<string>('IP');
   const [newRuleValue, setNewRuleValue] = useState<string>('');
   const [newRuleLabel, setNewRuleLabel] = useState<string>('');
@@ -336,7 +335,6 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   }, []);
 
   const loadSourcesAndAllowlist = useCallback(async () => {
-    setIsLoadingSources(true);
     try {
       const [lan, rules] = await Promise.all([
         invoke<LanClientBaselineRow[]>('get_lan_clients_baseline'),
@@ -346,32 +344,6 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
       setAllowlist(Array.isArray(rules) ? rules : []);
     } catch (err) {
       console.warn('[PanoramaSRE] Failed loading LAN baseline & allowlist:', err);
-    } finally {
-      setIsLoadingSources(false);
-    }
-  }, []);
-
-  const loadUnifiTopology = useCallback(async (forceRefresh = false) => {
-    setIsLoadingTopology(true);
-    setTopologyError(null);
-    try {
-      const snap = await invoke<UnifiTopologySnapshotDto | null>(
-        'get_unifi_network_topology',
-        { forceRefresh }
-      );
-      setUnifiTopology(snap ?? null);
-      if (snap) {
-        const updatedLan = await invoke<LanClientBaselineRow[]>('get_lan_clients_baseline').catch(
-          () => null
-        );
-        if (Array.isArray(updatedLan)) {
-          setLanClients(updatedLan);
-        }
-      }
-    } catch (err) {
-      setTopologyError(String(err));
-    } finally {
-      setIsLoadingTopology(false);
     }
   }, []);
 
@@ -411,10 +383,6 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   useEffect(() => {
     void loadSourcesAndAllowlist();
   }, [loadSourcesAndAllowlist, activeRun?.id]);
-
-  useEffect(() => {
-    void loadUnifiTopology(false);
-  }, [loadUnifiTopology, activeRun?.id, settings?.unifiConfigured]);
 
   useEffect(() => {
     void loadWafRules(false);
@@ -712,34 +680,6 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
     [lanClients]
   );
 
-  const availableVlanOptions = useMemo(() => {
-    const counts = new Map<string, number>();
-    if (unifiTopology?.networks) {
-      for (const n of unifiTopology.networks) {
-        const label = n.vlanId != null ? `${n.name} (VLAN ${n.vlanId})` : n.name;
-        counts.set(label, n.clientCount);
-      }
-    }
-    for (const cli of lanClients) {
-      const v = (cli.networkVlan || '').trim();
-      if (!v) continue;
-      if (!counts.has(v)) {
-        counts.set(v, (counts.get(v) ?? 0) + 1);
-      }
-    }
-    const items = Array.from(counts.entries()).map(([label, count]) => ({
-      value: label,
-      label: `${label} (${count})`,
-    }));
-    items.sort((a, b) => a.label.localeCompare(b.label));
-    return [{ value: 'ALL', label: `All VLANs (${lanClients.length})` }, ...items];
-  }, [unifiTopology?.networks, lanClients]);
-
-  const filteredLanClients = useMemo(
-    () => filterLanClients(lanClients, lanSearch, lanTrustFilter, lanVlanFilter),
-    [lanClients, lanSearch, lanTrustFilter, lanVlanFilter]
-  );
-
   const externalActions = useMemo(
     () => (geminiBrief?.recommendedActions || []).filter((a) => classifyActionSurface(a.surface) === 'external'),
     [geminiBrief]
@@ -902,33 +842,6 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
       setTimeout(() => setSourceFeedback(null), 3500);
     } catch (err) {
       setSourceFeedback({ text: `Allowlist failed: ${String(err)}`, tone: 'err' });
-    }
-  };
-
-  const handleToggleLanTrust = async (client: LanClientBaselineRow, trusted: boolean) => {
-    try {
-      await invoke('set_lan_client_trusted', {
-        macAddress: client.macAddress,
-        trusted,
-        label: client.label || client.hostname || null,
-      });
-      await Promise.all([loadSourcesAndAllowlist(), onRefreshAllRef.current()]);
-    } catch (err) {
-      setSourceFeedback({ text: `Failed updating device trust: ${String(err)}`, tone: 'err' });
-    }
-  };
-
-  const handleTrustAllBaseline = async () => {
-    try {
-      const updated = await invoke<number>('trust_all_lan_clients');
-      await Promise.all([loadSourcesAndAllowlist(), onRefreshAllRef.current()]);
-      setSourceFeedback({
-        text: `Marked ${updated} LAN baseline device(s) as owner-verified trusted.`,
-        tone: 'ok',
-      });
-      setTimeout(() => setSourceFeedback(null), 4000);
-    } catch (err) {
-      setSourceFeedback({ text: `Trust baseline failed: ${String(err)}`, tone: 'err' });
     }
   };
 
@@ -1200,19 +1113,32 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
             {f.sourceLayer === 'UNIFI' && (
               <>
                 {f.ruleId === 'UNIFI_ROGUE_LAN_CLIENT' && rogueMac && (
-                  isRogueAlreadyTrusted ? (
-                    <StatusBadge label="Device Trusted" variant="success" />
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => void handleQuickTrustRogueDevice()}
-                      className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-                      title={`Mark MAC ${rogueMac} as owner-verified hardware in PanoramaSRE (read-only local inventory)`}
-                    >
-                      <ShieldCheck className="w-3.5 h-3.5" />
-                      <span>Trust Device</span>
-                    </button>
-                  )
+                  <>
+                    {isRogueAlreadyTrusted ? (
+                      <StatusBadge label="Device Trusted" variant="success" />
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => void handleQuickTrustRogueDevice()}
+                        className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                        title={`Mark MAC ${rogueMac} as owner-verified hardware in PanoramaSRE (read-only local inventory)`}
+                      >
+                        <ShieldCheck className="w-3.5 h-3.5" />
+                        <span>Trust Device</span>
+                      </button>
+                    )}
+                    {onNavigateToUnifiZbf && (
+                      <button
+                        type="button"
+                        onClick={() => onNavigateToUnifiZbf('baseline', rogueMac)}
+                        className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                        title={`Inspect ${rogueMac} inside UniFi Network & ZBF → LAN Device Baseline`}
+                      >
+                        <Waypoints className="w-3.5 h-3.5" />
+                        <span>LAN Baseline →</span>
+                      </button>
+                    )}
+                  </>
                 )}
                 <button
                   type="button"
@@ -1452,7 +1378,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   };
 
   return (
-    <div className="p-4 sm:p-6 space-y-6 w-full min-w-0 max-w-[1920px] mx-auto">
+    <div className="p-6 space-y-6 w-full min-w-0 max-w-[1920px] mx-auto">
       {/* Top 360° Command Header Card */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
@@ -1461,9 +1387,9 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
               <div className="w-9 h-9 rounded-xl bg-[var(--color-brand-subtle)] text-[var(--color-brand-text)] border border-[var(--color-brand-ring)] flex items-center justify-center shrink-0">
                 <ShieldAlert className="w-5 h-5" />
               </div>
-              <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">
-                360° Threat Intelligence &amp; Zero Trust Monitor
-              </h2>
+              <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100 tracking-tight">
+                360° Threat &amp; Zero Trust SOC
+              </h1>
               {activeRun ? (
                 <>
                   <StatusBadge
@@ -1667,7 +1593,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                 className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
               >
                 <Terminal className="w-3.5 h-3.5" />
-                <span>View Live Stream ↓</span>
+                <span>Watch Raw Stream ▴</span>
               </button>
             </div>
 
@@ -1747,6 +1673,161 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
           </div>
         )}
 
+        {/* Persistent Single-Row 4-Card Telemetry Context Ribbon (Eliminates Per-Tab Duplication) */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 pt-1 tabular-nums">
+          {/* Card 1: Cloudflare Edge */}
+          <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-mono font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400">
+                Cloudflare Edge
+              </span>
+              <StatusBadge label={`WAF ${totalWafHits}`} variant="info" />
+            </div>
+            <div className="text-lg font-bold text-slate-900 dark:text-slate-100">
+              {((panoramaZone?.totalRequests ?? 0) + (parakithZone?.totalRequests ?? 0)).toLocaleString()}{' '}
+              <span className="text-xs font-normal text-slate-500">reqs</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-mono text-slate-600 dark:text-slate-400">
+              <span className={totalOrigin200Breaches > 0 ? 'text-rose-600 dark:text-rose-400 font-bold' : ''}>
+                Origin 200s: {totalOrigin200Breaches}
+              </span>
+              <span>•</span>
+              <button
+                type="button"
+                onClick={() => {
+                  handleToggleExternalZoneFilter('panoramadr.com');
+                  setSubView('external');
+                }}
+                className={`px-1.5 py-0.5 rounded border cursor-pointer transition-colors ${
+                  activeQuickZoneFilter === 'zone:panoramadr.com'
+                    ? 'bg-[var(--color-brand-subtle)] border-[var(--color-brand-ring)] text-[var(--color-brand-text)] font-semibold'
+                    : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 hover:border-[var(--color-brand)]'
+                }`}
+                title="Filter External tables to panoramadr.com"
+              >
+                <Filter className="w-2.5 h-2.5 inline mr-1" />
+                panoramadr
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  handleToggleExternalZoneFilter('parakith.com');
+                  setSubView('external');
+                }}
+                className={`px-1.5 py-0.5 rounded border cursor-pointer transition-colors ${
+                  activeQuickZoneFilter === 'zone:parakith.com'
+                    ? 'bg-[var(--color-brand-subtle)] border-[var(--color-brand-ring)] text-[var(--color-brand-text)] font-semibold'
+                    : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 hover:border-[var(--color-brand)]'
+                }`}
+                title="Filter External tables to parakith.com"
+              >
+                <Filter className="w-2.5 h-2.5 inline mr-1" />
+                parakith
+              </button>
+            </div>
+          </div>
+
+          {/* Card 2: Zero Trust & Tunnel */}
+          <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-mono font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400">
+                Zero Trust &amp; Tunnel
+              </span>
+              <StatusBadge
+                label={`${healthyTunnelsCount}/${zeroTrustSummary.tunnels.length} Tunnels`}
+                variant={zeroTrustSummary.accessDenied > 0 ? 'warning' : 'success'}
+              />
+            </div>
+            <div className="text-lg font-bold text-slate-900 dark:text-slate-100">
+              {zeroTrustSummary.accessAllowed}
+              <span className="text-xs font-normal text-slate-400"> / </span>
+              <span className={zeroTrustSummary.accessDenied > 0 ? 'text-amber-600 dark:text-amber-400' : ''}>
+                {zeroTrustSummary.accessDenied}
+              </span>{' '}
+              <span className="text-xs font-normal text-slate-500">allow / deny</span>
+            </div>
+            <div className="text-[11px] font-mono text-slate-600 dark:text-slate-400 truncate">
+              {zeroTrustSummary.accessAppCount} Access app(s) • Mutations: {zeroTrustSummary.auditMutations}
+            </div>
+          </div>
+
+          {/* Card 3: Internal UniFi & WSH */}
+          <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-mono font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400">
+                Internal UniFi &amp; WSH
+              </span>
+              <StatusBadge
+                label={`${trustedLanCount}/${lanClients.length} Trusted`}
+                variant={
+                  actionableSummary.actionableInternalFindings.some(
+                    (f) => f.ruleId === 'UNIFI_ROGUE_LAN_CLIENT'
+                  )
+                    ? 'danger'
+                    : trustedLanCount > 0
+                    ? 'success'
+                    : 'neutral'
+                }
+              />
+            </div>
+            <div className="text-lg font-bold text-slate-900 dark:text-slate-100">
+              {internalSummary.unifiSiemCefEvents}{' '}
+              <span className="text-xs font-normal text-slate-500">CEF events</span>
+            </div>
+            <div className="text-[11px] font-mono text-slate-600 dark:text-slate-400 truncate">
+              Auth: {internalSummary.panoramaAuthAnomalies} • SSH: {internalSummary.sshAnomalyCount} • SIEM:{' '}
+              {siemContainer
+                ? siemContainer.State?.toLowerCase() === 'running'
+                  ? 'Running'
+                  : siemContainer.State
+                : 'Not Deployed'}
+            </div>
+          </div>
+
+          {/* Card 4: Clickable WSH Hardening Bridge Tile */}
+          <button
+            type="button"
+            onClick={() => onNavigateToHardening?.()}
+            disabled={!onNavigateToHardening}
+            className={`text-left p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border space-y-1.5 transition-colors ${
+              securityViolationCount > 0
+                ? 'border-rose-500/40 hover:border-rose-500'
+                : 'border-slate-200 dark:border-slate-800 hover:border-[var(--color-brand)]'
+            } ${onNavigateToHardening ? 'cursor-pointer' : ''}`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-mono font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400 flex items-center gap-1">
+                <Shield className="w-3.5 h-3.5 text-[var(--color-brand-text)]" />
+                WSH Hardening
+              </span>
+              <StatusBadge
+                label={
+                  hardeningTotalCount > 0
+                    ? securityViolationCount > 0
+                      ? `${securityViolationCount} VIOLATIONS`
+                      : `${hardeningPassingCount}/${hardeningTotalCount} PASS`
+                    : 'Standing By'
+                }
+                variant={
+                  hardeningTotalCount > 0
+                    ? securityViolationCount > 0
+                      ? 'danger'
+                      : 'success'
+                    : 'neutral'
+                }
+              />
+            </div>
+            <div className="text-lg font-bold text-slate-900 dark:text-slate-100">
+              SEC-01..SEC-09
+            </div>
+            <div className="text-[11px] font-mono text-[var(--color-brand-text)] truncate">
+              {onNavigateToHardening
+                ? 'Open WSH Firewall & Container Rules →'
+                : 'Container & iptables containment'}
+            </div>
+          </button>
+        </div>
+
         {/* Domain-Separated Sub-View Switcher */}
         <div className="pt-1 flex flex-wrap items-center justify-between gap-3">
           <SegmentedControl<SubViewTab>
@@ -1754,10 +1835,10 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
             value={subView}
             onChange={setSubView}
             options={[
-              { value: 'overview', label: 'Overview & Brief' },
+              { value: 'overview', label: 'Triage & AI Brief' },
               {
                 value: 'external',
-                label: 'External (Cloudflare)',
+                label: 'External Perimeter (CF)',
                 badge:
                   actionableSummary.externalCount > 0 ? (
                     <span className="tabular-nums font-mono">{actionableSummary.externalCount}</span>
@@ -1765,7 +1846,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
               },
               {
                 value: 'internal',
-                label: 'Internal (UniFi & WSH)',
+                label: 'Internal Events (UniFi & WSH)',
                 badge:
                   actionableSummary.internalCount > 0 ? (
                     <span className="tabular-nums font-mono">{actionableSummary.internalCount}</span>
@@ -1773,7 +1854,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
               },
               {
                 value: 'allowlist',
-                label: 'Allowlist & Controls',
+                label: 'Allowlist',
                 badge:
                   allowlist.length > 0 ? (
                     <span className="tabular-nums font-mono">{allowlist.length}</span>
@@ -1929,193 +2010,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
             </div>
           )}
 
-          {/* Separated External vs Internal Surface Overview Cards */}
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 tabular-nums">
-            {/* External Surface Card */}
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
-              <div className="flex flex-wrap items-start justify-between gap-2">
-                <div className="space-y-0.5">
-                  <div className="flex items-center gap-2">
-                    <Globe className="w-4 h-4 text-sky-600 dark:text-sky-400 shrink-0" />
-                    <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                      Out-of-LAN External Perimeter (Cloudflare)
-                    </h3>
-                  </div>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
-                    Edge HTTP/WAF, Zero Trust Access &amp; Tunnel • Actions taken in Cloudflare
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setSubView('external')}
-                  className="btn-tonal text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
-                >
-                  <span>External Tab</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </button>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5">
-                  <div className="flex items-center justify-between gap-1.5">
-                    <span className="text-[11px] font-mono font-semibold text-slate-700 dark:text-slate-300 truncate">
-                      panoramadr.com
-                    </span>
-                    <StatusBadge label="Private" variant="brand" />
-                  </div>
-                  <div className="text-xl font-bold text-slate-900 dark:text-slate-100">
-                    {panoramaZone ? panoramaZone.totalRequests.toLocaleString() : '—'}{' '}
-                    <span className="text-[11px] font-normal text-slate-500">reqs</span>
-                  </div>
-                  <div className="text-[11px] font-mono text-slate-600 dark:text-slate-400 space-y-0.5">
-                    <div>4xx/5xx: {panoramaZone?.error4xx5xx ?? 0} • WAF: {panoramaZone?.firewallEventsCount ?? 0}</div>
-                    <div className={(panoramaZone?.untrustedOrigin200s ?? 0) > 0 ? 'text-rose-600 dark:text-rose-400 font-bold' : ''}>
-                      Origin 200s: {panoramaZone?.untrustedOrigin200s ?? 0}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5">
-                  <div className="flex items-center justify-between gap-1.5">
-                    <span className="text-[11px] font-mono font-semibold text-slate-700 dark:text-slate-300 truncate">
-                      parakith.com
-                    </span>
-                    <StatusBadge label="Public" variant="info" />
-                  </div>
-                  <div className="text-xl font-bold text-slate-900 dark:text-slate-100">
-                    {parakithZone ? parakithZone.totalRequests.toLocaleString() : '—'}{' '}
-                    <span className="text-[11px] font-normal text-slate-500">reqs</span>
-                  </div>
-                  <div className="text-[11px] font-mono text-slate-600 dark:text-slate-400 space-y-0.5">
-                    <div>4xx/5xx: {parakithZone?.error4xx5xx ?? 0} • WAF: {parakithZone?.firewallEventsCount ?? 0}</div>
-                    <div>BW: {formatCompactBytes(parakithZone?.totalBytes ?? 0)}</div>
-                  </div>
-                </div>
-
-                <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5">
-                  <div className="flex items-center justify-between gap-1.5">
-                    <span className="text-[11px] font-mono font-semibold text-slate-700 dark:text-slate-300 truncate">
-                      Zero Trust
-                    </span>
-                    <StatusBadge
-                      label={`${zeroTrustSummary.accessAppCount} App`}
-                      variant={zeroTrustSummary.accessDenied > 0 ? 'warning' : 'success'}
-                    />
-                  </div>
-                  <div className="text-xl font-bold text-slate-900 dark:text-slate-100">
-                    {zeroTrustSummary.accessAllowed}
-                    <span className="text-xs font-normal text-slate-400"> / </span>
-                    <span className={zeroTrustSummary.accessDenied > 0 ? 'text-amber-600 dark:text-amber-400' : ''}>
-                      {zeroTrustSummary.accessDenied}
-                    </span>
-                    <span className="text-[11px] font-normal text-slate-500 ml-1">allow/deny</span>
-                  </div>
-                  <div className="text-[11px] font-mono text-slate-600 dark:text-slate-400 space-y-0.5">
-                    <div>Tunnels: {healthyTunnelsCount}/{zeroTrustSummary.tunnels.length} healthy</div>
-                    <div>Mutations: {zeroTrustSummary.auditMutations}</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Internal Surface Card */}
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
-              <div className="flex flex-wrap items-start justify-between gap-2">
-                <div className="space-y-0.5">
-                  <div className="flex items-center gap-2">
-                    <Wifi className="w-4 h-4 text-[var(--color-brand-text)] shrink-0" />
-                    <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                      Internal LAN &amp; Host (UniFi + WSH)
-                    </h3>
-                  </div>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
-                    LAN Hardware, Trusted Baseline, WSH SSH &amp; Auth • Actions in UniFi / WSH
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setSubView('internal')}
-                  className="btn-tonal text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
-                >
-                  <span>Internal Tab</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </button>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-[11px] font-mono font-semibold text-slate-700 dark:text-slate-300">
-                      UniFi Network Fleet
-                    </span>
-                    <StatusBadge
-                      label={`${trustedLanCount}/${lanClients.length} Trusted`}
-                      variant={
-                        actionableSummary.actionableInternalFindings.some(
-                          (f) => f.ruleId === 'UNIFI_ROGUE_LAN_CLIENT'
-                        )
-                          ? 'danger'
-                          : trustedLanCount > 0
-                          ? 'success'
-                          : 'neutral'
-                      }
-                    />
-                  </div>
-                  <div className="text-xl font-bold text-slate-900 dark:text-slate-100">
-                    {internalSummary.unifiClientsTotal}{' '}
-                    <span className="text-[11px] font-normal text-slate-500">LAN clients</span>
-                  </div>
-                  <div className="text-[11px] font-mono text-slate-600 dark:text-slate-400 space-y-0.5">
-                    <div>Infra Devices: {internalSummary.unifiDevicesTotal} ({internalSummary.unifiOfflineDevices.length} offline)</div>
-                    <div
-                      className={
-                        actionableSummary.actionableInternalFindings.some(
-                          (f) => f.ruleId === 'UNIFI_ROGUE_LAN_CLIENT'
-                        )
-                          ? 'text-rose-600 dark:text-rose-400 font-bold'
-                          : ''
-                      }
-                    >
-                      Unknown MACs: {internalSummary.newUnknownLanMacs.length} • Policies: {internalSummary.unifiPoliciesTotal}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-[11px] font-mono font-semibold text-slate-700 dark:text-slate-300">
-                      WSH Origin &amp; PanoramaAuth
-                    </span>
-                    <StatusBadge
-                      label={internalSummary.panoramaAuthAvailable ? 'Auth RO Active' : 'SSH Standby'}
-                      variant={
-                        internalSummary.panoramaAuthAnomalies > 0 || internalSummary.sshAnomalyCount > 0
-                          ? 'danger'
-                          : 'success'
-                      }
-                    />
-                  </div>
-                  <div className="text-xl font-bold text-slate-900 dark:text-slate-100">
-                    {internalSummary.unifiSiemCefEvents}{' '}
-                    <span className="text-[11px] font-normal text-slate-500">CEF events</span>
-                  </div>
-                  <div className="text-[11px] font-mono text-slate-600 dark:text-slate-400 space-y-0.5">
-                    <div>Auth Anomalies: {internalSummary.panoramaAuthAnomalies} • SSH Flagged: {internalSummary.sshAnomalyCount}</div>
-                    <div>
-                      SIEM Container:{' '}
-                      {siemContainer
-                        ? siemContainer.State?.toLowerCase() === 'running'
-                          ? 'Running'
-                          : siemContainer.State
-                        : 'Not Deployed'}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Perimeter <-> Internal Cross-Over Bridge Card */}
+          {/* Authoritative Perimeter <-> Internal Cross-Over Bridge Card */}
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
@@ -2293,6 +2188,65 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
               </button>
             </div>
           </div>
+
+          {/* Related Security & Network Surfaces (Depth-2 Deep Links) */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-3">
+            <div className="text-xs font-mono font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400">
+              Related Security &amp; Network Surfaces
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+              <button
+                type="button"
+                onClick={() => onNavigateToHardening?.()}
+                className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 hover:border-[var(--color-brand)] text-left space-y-1 transition-colors cursor-pointer"
+              >
+                <div className="flex items-center justify-between gap-2 font-semibold text-slate-900 dark:text-slate-100">
+                  <span className="flex items-center gap-1.5">
+                    <Shield className="w-4 h-4 text-[var(--color-brand-text)]" />
+                    WSH Hardening
+                  </span>
+                  <span className="font-mono text-[var(--color-brand-text)]">→</span>
+                </div>
+                <p className="text-[11px] text-slate-600 dark:text-slate-400">
+                  SEC-01..SEC-09 container invariants, WSH iptables enforcement, and penetration audits.
+                </p>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onNavigateToUnifiZbf?.('flow')}
+                className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 hover:border-[var(--color-brand)] text-left space-y-1 transition-colors cursor-pointer"
+              >
+                <div className="flex items-center justify-between gap-2 font-semibold text-slate-900 dark:text-slate-100">
+                  <span className="flex items-center gap-1.5">
+                    <Waypoints className="w-4 h-4 text-[var(--color-brand-text)]" />
+                    UniFi Network &amp; ZBF
+                  </span>
+                  <span className="font-mono text-[var(--color-brand-text)]">→</span>
+                </div>
+                <p className="text-[11px] text-slate-600 dark:text-slate-400">
+                  Interactive VLAN Zone Flow Explorer, ZBF policy matrix, and owner-verified LAN MAC baseline.
+                </p>
+              </button>
+
+              <button
+                type="button"
+                onClick={onNavigateToSettings}
+                className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 hover:border-[var(--color-brand)] text-left space-y-1 transition-colors cursor-pointer"
+              >
+                <div className="flex items-center justify-between gap-2 font-semibold text-slate-900 dark:text-slate-100">
+                  <span className="flex items-center gap-1.5">
+                    <Sliders className="w-4 h-4 text-[var(--color-brand-text)]" />
+                    Settings &gt; Security &amp; AI
+                  </span>
+                  <span className="font-mono text-[var(--color-brand-text)]">→</span>
+                </div>
+                <p className="text-[11px] text-slate-600 dark:text-slate-400">
+                  Gemini 4 Hydrogen/Carbon caps, connector verification, and autonomous audit cadence.
+                </p>
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -2347,154 +2301,6 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                 </button>
               </div>
             </div>
-
-            {/* External Telemetry Detail Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 tabular-nums pt-2 border-t border-slate-200 dark:border-slate-800">
-              <div
-                className={`p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border space-y-1.5 transition-colors ${
-                  activeQuickZoneFilter === 'zone:panoramadr.com'
-                    ? 'border-[var(--color-brand)] ring-1 ring-[var(--color-brand-ring)]'
-                    : 'border-slate-200 dark:border-slate-800'
-                }`}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-mono font-semibold text-slate-700 dark:text-slate-300">
-                    panoramadr.com
-                  </span>
-                  <StatusBadge label="Strict Private" variant="brand" />
-                </div>
-                <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">
-                  {panoramaZone ? panoramaZone.totalRequests.toLocaleString() : '—'}{' '}
-                  <span className="text-xs font-normal text-slate-500">reqs</span>
-                </div>
-                <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] font-mono text-slate-600 dark:text-slate-400">
-                  <span>4xx/5xx: {panoramaZone?.error4xx5xx ?? 0}</span>
-                  <span>WAF hits: {panoramaZone?.firewallEventsCount ?? 0}</span>
-                  <span className={(panoramaZone?.untrustedOrigin200s ?? 0) > 0 ? 'text-rose-600 dark:text-rose-400 font-bold' : ''}>
-                    Origin 200s: {panoramaZone?.untrustedOrigin200s ?? 0}
-                  </span>
-                </div>
-                <div className="pt-1 flex items-center justify-between gap-2">
-                  <button
-                    type="button"
-                    onClick={() => handleToggleExternalZoneFilter('panoramadr.com')}
-                    className={`min-h-[36px] px-2.5 py-1 rounded-lg border text-[11px] font-mono inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 transition-colors cursor-pointer ${
-                      activeQuickZoneFilter === 'zone:panoramadr.com'
-                        ? 'bg-[var(--color-brand-subtle)] border-[var(--color-brand-ring)] text-[var(--color-brand-text)] font-semibold'
-                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-[var(--color-brand)]'
-                    }`}
-                  >
-                    <Filter className="w-3 h-3 shrink-0" />
-                    <span>
-                      {activeQuickZoneFilter === 'zone:panoramadr.com'
-                        ? 'Filtering Zone ✓'
-                        : 'Filter Tables'}
-                    </span>
-                  </button>
-                </div>
-              </div>
-
-              <div
-                className={`p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border space-y-1.5 transition-colors ${
-                  activeQuickZoneFilter === 'zone:parakith.com'
-                    ? 'border-[var(--color-brand)] ring-1 ring-[var(--color-brand-ring)]'
-                    : 'border-slate-200 dark:border-slate-800'
-                }`}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-mono font-semibold text-slate-700 dark:text-slate-300">
-                    parakith.com
-                  </span>
-                  <StatusBadge label="Public Web" variant="info" />
-                </div>
-                <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">
-                  {parakithZone ? parakithZone.totalRequests.toLocaleString() : '—'}{' '}
-                  <span className="text-xs font-normal text-slate-500">reqs</span>
-                </div>
-                <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] font-mono text-slate-600 dark:text-slate-400">
-                  <span>4xx/5xx: {parakithZone?.error4xx5xx ?? 0}</span>
-                  <span>WAF hits: {parakithZone?.firewallEventsCount ?? 0}</span>
-                  <span>Bandwidth: {formatCompactBytes(parakithZone?.totalBytes ?? 0)}</span>
-                </div>
-                <div className="pt-1 flex items-center justify-between gap-2">
-                  <button
-                    type="button"
-                    onClick={() => handleToggleExternalZoneFilter('parakith.com')}
-                    className={`min-h-[36px] px-2.5 py-1 rounded-lg border text-[11px] font-mono inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 transition-colors cursor-pointer ${
-                      activeQuickZoneFilter === 'zone:parakith.com'
-                        ? 'bg-[var(--color-brand-subtle)] border-[var(--color-brand-ring)] text-[var(--color-brand-text)] font-semibold'
-                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-[var(--color-brand)]'
-                    }`}
-                  >
-                    <Filter className="w-3 h-3 shrink-0" />
-                    <span>
-                      {activeQuickZoneFilter === 'zone:parakith.com'
-                        ? 'Filtering Zone ✓'
-                        : 'Filter Tables'}
-                    </span>
-                  </button>
-                </div>
-              </div>
-
-              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-mono font-semibold text-slate-700 dark:text-slate-300">
-                    Zero Trust &amp; Account
-                  </span>
-                  <StatusBadge
-                    label={`${healthyTunnelsCount}/${zeroTrustSummary.tunnels.length} Tunnels`}
-                    variant={zeroTrustSummary.accessDenied > 0 ? 'warning' : 'success'}
-                  />
-                </div>
-                <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">
-                  {zeroTrustSummary.accessAllowed} <span className="text-xs font-normal text-slate-500">allow</span>{' '}
-                  <span className="text-slate-400">/</span>{' '}
-                  <span className={zeroTrustSummary.accessDenied > 0 ? 'text-amber-600 dark:text-amber-400' : ''}>
-                    {zeroTrustSummary.accessDenied}
-                  </span>{' '}
-                  <span className="text-xs font-normal text-slate-500">deny</span>
-                </div>
-                <div className="text-[11px] font-mono text-slate-600 dark:text-slate-400 truncate">
-                  Acct: {cfAccountId || 'auto'} • Mutations: {zeroTrustSummary.auditMutations}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Explicit Cross-Over Note: External -> Internal */}
-          <div className="bg-white dark:bg-slate-900 border border-[var(--color-accent)]/40 rounded-2xl p-4 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-2 text-xs font-mono font-bold text-slate-900 dark:text-slate-100 uppercase tracking-wider">
-                <ArrowLeftRight className="w-4 h-4 text-[var(--color-accent-text)] shrink-0" />
-                <span>Cross-Over Note: External Cloudflare → Internal LAN &amp; WSH</span>
-              </div>
-              <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                External HTTP/HTTPS requests traverse <code className="font-mono">panorama-tunnel</code> across <code className="font-mono">cf-egress-net</code> directly into host Lighttpd <code className="font-mono">:443</code> and <code className="font-mono">PanoramaAuth</code> SSO. Any non-zero Private Origin <code className="font-mono">200</code> or Access breach here must be correlated inside <strong>Internal (UniFi &amp; WSH)</strong>.
-              </p>
-              <div className="flex flex-wrap gap-2 text-[11px] font-mono tabular-nums">
-                <StatusBadge
-                  label={`Private Origin 200s: ${totalOrigin200Breaches}`}
-                  variant={totalOrigin200Breaches > 0 ? 'danger' : 'success'}
-                />
-                <StatusBadge
-                  label={`PanoramaAuth Anomalies: ${internalSummary.panoramaAuthAnomalies}`}
-                  variant={internalSummary.panoramaAuthAnomalies > 0 ? 'danger' : 'success'}
-                />
-                <StatusBadge
-                  label={`UniFi CEF Alerts: ${internalSummary.unifiCefSecurityAlerts}`}
-                  variant={internalSummary.unifiCefSecurityAlerts > 0 ? 'warning' : 'neutral'}
-                />
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setSubView('internal')}
-              className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-            >
-              <span>Inspect Internal LAN &amp; WSH</span>
-              <ArrowRight className="w-3.5 h-3.5" />
-            </button>
           </div>
 
           {/* Active Cloudflare WAF Custom Rules & Free-Plan Slot Budget */}
@@ -3439,118 +3245,35 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                   <ExternalLink className="w-3.5 h-3.5" />
                   <span>UniFi Firewall</span>
                 </button>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 tabular-nums pt-2 border-t border-slate-200 dark:border-slate-800">
-              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-mono font-semibold text-slate-700 dark:text-slate-300">
-                    UniFi Network Fleet
-                  </span>
-                  <StatusBadge
-                    label={`${internalSummary.unifiDevicesTotal} Devices`}
-                    variant={internalSummary.unifiOfflineDevices.length > 0 ? 'warning' : 'success'}
-                  />
-                </div>
-                <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">
-                  {internalSummary.unifiClientsTotal}{' '}
-                  <span className="text-xs font-normal text-slate-500">LAN clients</span>
-                </div>
-                <div className="text-[11px] font-mono text-slate-600 dark:text-slate-400">
-                  Trusted: {trustedLanCount}/{lanClients.length} • Unknown MACs: {internalSummary.newUnknownLanMacs.length} • ZBF Policies: {internalSummary.unifiPoliciesTotal}
-                </div>
-              </div>
-
-              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-mono font-semibold text-slate-700 dark:text-slate-300">
-                    WSH &amp; PanoramaAuth
-                  </span>
-                  <StatusBadge
-                    label={internalSummary.panoramaAuthAvailable ? 'Auth RO Active' : 'SSH Standby'}
-                    variant={internalSummary.panoramaAuthAnomalies > 0 || internalSummary.sshAnomalyCount > 0 ? 'danger' : 'success'}
-                  />
-                </div>
-                <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">
-                  {internalSummary.panoramaAuthAnomalies}{' '}
-                  <span className="text-xs font-normal text-slate-500">auth anomalies</span>
-                </div>
-                <div className="text-[11px] font-mono text-slate-600 dark:text-slate-400">
-                  SSH Flagged Lines: {internalSummary.sshAnomalyCount} • Read-only <code className="font-mono">?mode=ro</code> SQLite
-                </div>
-              </div>
-
-              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-mono font-semibold text-slate-700 dark:text-slate-300">
-                    UniFi SIEM CEF Syslog
-                  </span>
-                  <StatusBadge
-                    label={
-                      siemContainer
-                        ? siemContainer.State?.toLowerCase() === 'running'
-                          ? 'Running'
-                          : siemContainer.State
-                        : 'Not Deployed'
-                    }
-                    variant={siemContainer?.State?.toLowerCase() === 'running' ? 'success' : 'neutral'}
-                  />
-                </div>
-                <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">
-                  {internalSummary.unifiSiemCefEvents}{' '}
-                  <span className="text-xs font-normal text-slate-500">CEF events</span>
-                </div>
-                <div className="text-[11px] font-mono text-slate-600 dark:text-slate-400">
-                  IPS / High Firewall Alerts: {internalSummary.unifiCefSecurityAlerts}
-                </div>
+                {onNavigateToUnifiZbf && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => onNavigateToUnifiZbf('flow')}
+                      className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                    >
+                      <Waypoints className="w-3.5 h-3.5" />
+                      <span>UniFi Network &amp; ZBF →</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onNavigateToUnifiZbf('baseline')}
+                      className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                    >
+                      <ShieldCheck className="w-3.5 h-3.5" />
+                      <span>LAN Device Baseline →</span>
+                    </button>
+                  </>
+                )}
                 <button
                   type="button"
                   onClick={onNavigateToSiemRelease ?? onNavigateToSettings}
-                  className="btn-ghost text-[11px] px-0 py-0.5 min-h-[24px] text-[var(--color-brand-text)] flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+                  className="btn-ghost text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
                 >
-                  <span>{onNavigateToSiemRelease ? 'Manage SIEM in Releases' : 'Manage SIEM in Settings'}</span>
-                  <ArrowRight className="w-3 h-3" />
+                  <span>{onNavigateToSiemRelease ? 'Manage SIEM →' : 'SIEM Settings →'}</span>
                 </button>
               </div>
             </div>
-          </div>
-
-          {/* Explicit Cross-Over Note: Internal <- External */}
-          <div className="bg-white dark:bg-slate-900 border border-[var(--color-brand)]/40 rounded-2xl p-4 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-2 text-xs font-mono font-bold text-slate-900 dark:text-slate-100 uppercase tracking-wider">
-                <ArrowLeftRight className="w-4 h-4 text-[var(--color-brand-text)] shrink-0" />
-                <span>Cross-Over Note: Internal LAN &amp; WSH ← External Cloudflare</span>
-              </div>
-              <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                External requests cross <code className="font-mono">panorama-tunnel</code> (<code className="font-mono">cf-egress-net</code>) into WSH Lighttpd <code className="font-mono">:443</code> and authenticate through <code className="font-mono">PanoramaAuth</code> SSO. Meanwhile, UniFi Gateway CyberSecure inspects WAN-to-LAN traffic and forwards CEF events to WSH{' '}
-                <code className="font-mono">
-                  <CopyableValue value="172.25.25.5:5514" label="SIEM endpoint" />/udp
-                </code>
-                . Compare with <strong>External (Cloudflare)</strong> if an anomaly traces back to a WAN client.
-              </p>
-              <div className="flex flex-wrap gap-2 text-[11px] font-mono tabular-nums">
-                <StatusBadge label={`CF WAF Hits: ${totalWafHits}`} variant="info" />
-                <StatusBadge
-                  label={`Private Origin 200s: ${totalOrigin200Breaches}`}
-                  variant={totalOrigin200Breaches > 0 ? 'danger' : 'success'}
-                />
-                <StatusBadge
-                  label={`ZT Access Denied: ${zeroTrustSummary.accessDenied}`}
-                  variant={zeroTrustSummary.accessDenied > 0 ? 'warning' : 'neutral'}
-                />
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setSubView('external')}
-              className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-            >
-              <span>Inspect External Perimeter</span>
-              <ArrowRight className="w-3.5 h-3.5" />
-            </button>
           </div>
 
           {/* Internal Security Campaigns & Deterministic Findings */}
@@ -3659,189 +3382,37 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
             </div>
           )}
 
-          {/* UniFi Zone Flow Wire Explorer, VLAN Directory & ZBF Matrix */}
-          <UnifiVlanZbfPanel
-            topology={unifiTopology}
-            isLoading={isLoadingTopology}
-            error={topologyError}
-            selectedVlanFilter={lanVlanFilter}
-            onSelectVlanFilter={setLanVlanFilter}
-            onRefresh={() => void loadUnifiTopology(true)}
-            onOpenUnifiFirewall={() =>
-              void handleOpenExternal(buildUnifiConsoleUrl(unifiBaseUrl, 'policies'))
-            }
-            lanClients={lanClients}
-            onToggleLanTrust={(cli, trusted) => void handleToggleLanTrust(cli, trusted)}
-          />
-
-          {/* UniFi LAN Baseline Trust Table */}
-          <div
-            id="lan-device-baseline"
-            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4"
-          >
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 tabular-nums">
-                  UniFi LAN Device Baseline ({trustedLanCount} / {lanClients.length} Trusted)
-                </h3>
+          {/* Cross-Domain Link Card to Promoted UniFi Network & ZBF Explorer */}
+          {onNavigateToUnifiZbf && (
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-2 text-xs font-bold text-slate-900 dark:text-slate-100">
+                  <Waypoints className="w-4 h-4 text-[var(--color-brand-text)] shrink-0" />
+                  <span>UniFi Network Topology &amp; Owner-Verified LAN Device Baseline</span>
+                </div>
                 <p className="text-xs text-slate-600 dark:text-slate-400">
-                  Tracks known hardware MACs on your private LAN. Brand-new MACs trigger <code className="font-mono">HIGH</code> on privileged LANs and quiet <code className="font-mono">LOW</code> informational telemetry on isolated Guest/Kids/IoT/Hotspot VLANs.
+                  Zone Flow Explorer, ZBF Matrix, VLAN Directory, and the LAN Device MAC Trust table ({trustedLanCount}/{lanClients.length} trusted) live in{' '}
+                  <strong>Infrastructure &amp; Network → UniFi Network &amp; ZBF</strong>.
                 </p>
               </div>
-              <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
-                {lanVlanFilter !== 'ALL' && (
-                  <button
-                    type="button"
-                    onClick={() => setLanVlanFilter('ALL')}
-                    className="btn-ghost text-xs whitespace-nowrap flex-shrink-0"
-                  >
-                    Clear VLAN Filter ({lanVlanFilter})
-                  </button>
-                )}
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
                 <button
                   type="button"
-                  onClick={() => void loadSourcesAndAllowlist()}
-                  disabled={isLoadingSources}
-                  className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isLoadingSources ? 'animate-spin' : ''}`} />
-                  <span>Refresh</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleTrustAllBaseline()}
-                  disabled={lanClients.length === 0}
+                  onClick={() => onNavigateToUnifiZbf('baseline')}
                   className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
                 >
-                  <ShieldCheck className="w-3.5 h-3.5" />
-                  <span>Trust All Initial Baseline</span>
+                  <span>LAN Baseline ({trustedLanCount}/{lanClients.length}) →</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onNavigateToUnifiZbf('flow')}
+                  className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                >
+                  <span>Zone Flow Explorer →</span>
                 </button>
               </div>
             </div>
-
-            {/* Clear Explanation of What Trusting a Device Means vs Malware/Threat Detection */}
-            <div className="flex items-start gap-2.5 p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs text-slate-700 dark:text-slate-300">
-              <Info className="w-4 h-4 text-[var(--color-accent-text)] shrink-0 mt-0.5" />
-              <div className="space-y-1">
-                <div className="font-semibold text-slate-900 dark:text-slate-100">
-                  What does trusting a device mean? (Does NOT bypass malware or behavioral threat alerts)
-                </div>
-                <p className="leading-relaxed text-slate-600 dark:text-slate-400">
-                  Owner-Verified trust is <strong>100% local and read-only inside PanoramaSRE</strong> — it never changes UniFi Wi-Fi, VLANs, or firewall rules, and it <strong>only confirms that the physical MAC hardware belongs in your house</strong> (clearing &quot;Unknown Device Joined LAN&quot; reminders). <strong>It never exempts a trusted phone, PC, or Wi-Fi appliance from future threat scans:</strong> if a trusted device gets compromised tomorrow and triggers UniFi IPS/CEF alerts, unexpected WSH SSH, PanoramaAuth anomalies, or Cloudflare alerts, PanoramaSRE still catches and flags it at full severity. Only adding a rule in <strong>Allowlist &amp; Controls</strong> suppresses behavioral alerts.
-                </p>
-              </div>
-            </div>
-
-            {/* Search, VLAN Filter & Trust Filter */}
-            {lanClients.length > 0 && (
-              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
-                <div className="relative flex-1">
-                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                  <input
-                    type="text"
-                    value={lanSearch}
-                    onChange={(e) => setLanSearch(e.target.value)}
-                    placeholder="Filter hostname, MAC, IP, VLAN, vendor..."
-                    className="w-full pl-8 pr-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
-                  />
-                </div>
-                <div className="w-full lg:w-64">
-                  <CustomSelect
-                    value={lanVlanFilter}
-                    onChange={setLanVlanFilter}
-                    options={availableVlanOptions}
-                  />
-                </div>
-                <div className="w-full lg:w-48">
-                  <CustomSelect
-                    value={lanTrustFilter}
-                    onChange={(val) =>
-                      setLanTrustFilter((val as 'ALL' | 'UNREVIEWED' | 'TRUSTED') || 'ALL')
-                    }
-                    options={[
-                      { value: 'ALL', label: `All (${lanClients.length})` },
-                      { value: 'UNREVIEWED', label: `Unreviewed (${lanClients.length - trustedLanCount})` },
-                      { value: 'TRUSTED', label: `Trusted (${trustedLanCount})` },
-                    ]}
-                  />
-                </div>
-              </div>
-            )}
-
-            {lanClients.length === 0 ? (
-              <div className="p-6 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-center text-xs text-slate-500">
-                No UniFi LAN clients captured yet. Run an audit in PanoramaSRE to discover your LAN baseline.
-              </div>
-            ) : filteredLanClients.length === 0 ? (
-              <div className="p-6 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-center text-xs text-slate-500">
-                No LAN devices match your current search, VLAN, or trust filter.
-              </div>
-            ) : (
-              <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
-                <table className="w-full text-left border-collapse text-xs">
-                  <thead>
-                    <tr className="bg-slate-50 dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 font-mono text-[11px] text-slate-500 uppercase">
-                      <th className="py-2.5 px-3">Device / Hostname</th>
-                      <th className="py-2.5 px-3">MAC Address</th>
-                      <th className="py-2.5 px-3">IP Address</th>
-                      <th className="py-2.5 px-3">VLAN &amp; Vendor</th>
-                      <th className="py-2.5 px-3">Last Seen</th>
-                      <th className="py-2.5 px-3 text-right">Owner-Verified</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-mono tabular-nums">
-                    {filteredLanClients.map((cli) => {
-                      const vlanStyle = getVlanBadgeStyle(cli.networkVlan);
-                      return (
-                        <tr key={cli.macAddress} className="hover:bg-slate-50/70 dark:hover:bg-slate-950/60">
-                          <td className="py-2.5 px-3 font-sans font-medium text-slate-900 dark:text-slate-100">
-                            {cli.label || cli.hostname || 'Unnamed Device'}
-                          </td>
-                          <td className="py-2.5 px-3 text-slate-700 dark:text-slate-300">
-                            <CopyableValue value={cli.macAddress} label="MAC address" />
-                          </td>
-                          <td className="py-2.5 px-3 text-slate-700 dark:text-slate-300">
-                            <CopyableValue value={cli.ipAddress} label="IP address" fallback="—" />
-                          </td>
-                          <td className="py-2.5 px-3">
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              {cli.networkVlan ? (
-                                <span
-                                  className={`px-2 py-0.5 rounded border text-[11px] font-mono font-medium ${vlanStyle.chipClass}`}
-                                >
-                                  {cli.networkVlan}
-                                </span>
-                              ) : (
-                                <span className="text-slate-400">—</span>
-                              )}
-                              {cli.ouiVendor && (
-                                <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                                  {cli.ouiVendor}
-                                </span>
-                              )}
-                            </div>
-                          </td>
-                          <td className="py-2.5 px-3 text-slate-500 dark:text-slate-400" title={formatLocalDateTime(cli.lastSeenAt)}>
-                            {formatRelativeTime(cli.lastSeenAt)}
-                          </td>
-                          <td className="py-2 px-3 text-right">
-                            <div className="inline-flex justify-end">
-                              <ToggleSwitch
-                                size="sm"
-                                checked={cli.isTrusted}
-                                onChange={(val) => void handleToggleLanTrust(cli, val)}
-                                activeColor="brand"
-                              />
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
+          )}
         </div>
       )}
 

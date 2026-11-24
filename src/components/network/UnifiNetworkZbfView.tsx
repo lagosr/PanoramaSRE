@@ -1,16 +1,20 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { openUrl } from '@tauri-apps/plugin-opener';
-import { Waypoints, Network, Shield, ShieldAlert, RefreshCw } from 'lucide-react';
+import { Waypoints, Network, Shield, ShieldAlert } from 'lucide-react';
 import {
   LanClientBaselineRow,
   UnifiTopologySnapshotDto,
 } from '../../lib/types';
 import { buildUnifiConsoleUrl } from '../../lib/threat-utils';
-import { UnifiVlanZbfPanel } from '../security/UnifiVlanZbfPanel';
+import { UnifiVlanZbfPanel, type UnifiZbfPanelTab } from '../security/UnifiVlanZbfPanel';
 
 interface UnifiNetworkZbfViewProps {
   unifiBaseUrl?: string;
+  initialTab?: UnifiZbfPanelTab;
+  initialTabNonce?: number;
+  initialSearch?: string;
+  onLanBaselineMutated?: () => void;
   onNavigateToTopology?: () => void;
   onNavigateToHardening?: () => void;
   onNavigateToSecurity?: () => void;
@@ -18,6 +22,10 @@ interface UnifiNetworkZbfViewProps {
 
 export const UnifiNetworkZbfView: React.FC<UnifiNetworkZbfViewProps> = ({
   unifiBaseUrl = 'https://ui.panoramadr.com',
+  initialTab,
+  initialTabNonce = 0,
+  initialSearch = '',
+  onLanBaselineMutated,
   onNavigateToTopology,
   onNavigateToHardening,
   onNavigateToSecurity,
@@ -72,9 +80,33 @@ export const UnifiNetworkZbfView: React.FC<UnifiNetworkZbfViewProps> = ({
         tone: 'ok',
       });
       setTimeout(() => setFeedback(null), 3500);
+      onLanBaselineMutated?.();
     } catch (err) {
       setFeedback({
         text: `Failed updating device trust: ${String(err)}`,
+        tone: 'err',
+      });
+    }
+  };
+
+  const handleTrustAllBaseline = async () => {
+    try {
+      const updated = await invoke<number>('trust_all_lan_clients');
+      const updatedLan = await invoke<LanClientBaselineRow[]>('get_lan_clients_baseline').catch(
+        () => null
+      );
+      if (Array.isArray(updatedLan)) {
+        setLanClients(updatedLan);
+      }
+      setFeedback({
+        text: `Marked ${updated} LAN baseline device(s) as owner-verified trusted.`,
+        tone: 'ok',
+      });
+      setTimeout(() => setFeedback(null), 4000);
+      onLanBaselineMutated?.();
+    } catch (err) {
+      setFeedback({
+        text: `Trust baseline failed: ${String(err)}`,
         tone: 'err',
       });
     }
@@ -104,20 +136,11 @@ export const UnifiNetworkZbfView: React.FC<UnifiNetworkZbfViewProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => void loadUnifiData(true)}
-            disabled={isLoading}
-            className="btn-secondary text-xs flex items-center gap-1.5"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-            <span>Sync UniFi Topology</span>
-          </button>
           {onNavigateToTopology && (
             <button
               type="button"
               onClick={onNavigateToTopology}
-              className="btn-secondary text-xs flex items-center gap-1.5"
+              className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
             >
               <Network className="w-3.5 h-3.5" />
               <span>WSH Boundary Map →</span>
@@ -127,7 +150,7 @@ export const UnifiNetworkZbfView: React.FC<UnifiNetworkZbfViewProps> = ({
             <button
               type="button"
               onClick={onNavigateToHardening}
-              className="btn-secondary text-xs flex items-center gap-1.5"
+              className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
             >
               <Shield className="w-3.5 h-3.5" />
               <span>WSH Hardening →</span>
@@ -137,7 +160,7 @@ export const UnifiNetworkZbfView: React.FC<UnifiNetworkZbfViewProps> = ({
             <button
               type="button"
               onClick={onNavigateToSecurity}
-              className="btn-secondary text-xs flex items-center gap-1.5"
+              className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
             >
               <ShieldAlert className="w-3.5 h-3.5" />
               <span>Threat SOC →</span>
@@ -170,6 +193,12 @@ export const UnifiNetworkZbfView: React.FC<UnifiNetworkZbfViewProps> = ({
         }
         lanClients={lanClients}
         onToggleLanTrust={(cli, trusted) => void handleToggleLanTrust(cli, trusted)}
+        initialTab={initialTab}
+        initialTabNonce={initialTabNonce}
+        initialSearchQuery={initialSearch}
+        onTrustAllBaseline={() => void handleTrustAllBaseline()}
+        onRefreshLanBaseline={() => void loadUnifiData(false)}
+        isLoadingLanBaseline={isLoading}
       />
     </div>
   );

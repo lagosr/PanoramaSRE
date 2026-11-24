@@ -1,16 +1,21 @@
+import { useMemo } from 'react';
 import { WshSnapshot, TerminalTab, DiscoveredApp, FleetCronAuditSummary } from '../../lib/types';
-import { RefreshCw, Server, Terminal, ShieldAlert, Cpu, Clock } from 'lucide-react';
+import { RefreshCw, Server, Terminal, ShieldAlert, Cpu, Clock, Network } from 'lucide-react';
 import { SegmentedControl } from '@lagosr/panorama-ui-kit';
 import { buildRemoteSshCommand } from '../../lib/script-adapters';
 import { auditFleetCrons, computeDietPiBadges, type DietPiTabBadge } from '../../lib/cron-auditor';
+import { synthesizeTopology, computeTopologyBadges } from '../../lib/topology-synthesizer';
 import { CronManagerPanel, type CronActionRequest } from './CronManagerPanel';
+import { DietPiHardwareNetworkCard } from '../topology/DietPiHardwareNetworkCard';
+
+export type DietPiSubTab = 'host' | 'interfaces' | 'crons';
 
 interface DietPiHostViewProps {
   snapshot: WshSnapshot | null;
   apps?: DiscoveredApp[];
   cronSummary?: FleetCronAuditSummary;
-  subTab?: 'host' | 'crons';
-  onSelectSubTab?: (tab: 'host' | 'crons') => void;
+  subTab?: DietPiSubTab;
+  onSelectSubTab?: (tab: DietPiSubTab) => void;
   isLoading: boolean;
   isCronActionBusy?: boolean;
   terminalTabs?: TerminalTab[];
@@ -18,6 +23,8 @@ interface DietPiHostViewProps {
   onTriggerAction: (actionLabel: string, cmd: string, args: string[]) => void;
   onTriggerCronAction?: (req: CronActionRequest) => void;
   onTriggerReboot: () => void;
+  onNavigateToTopology?: () => void;
+  onNavigateToHardening?: () => void;
   onOpenInBottomConsole?: (tabId?: string) => void;
   onAbortJob?: (id: string) => void;
   onClearTab?: (id: string) => void;
@@ -36,10 +43,20 @@ export function DietPiHostView({
   onTriggerAction,
   onTriggerCronAction,
   onTriggerReboot,
+  onNavigateToTopology,
+  onNavigateToHardening,
   isRebooting = false,
 }: DietPiHostViewProps) {
   const effectiveCronSummary = cronSummary ?? auditFleetCrons(apps, snapshot);
   const dietpiBadges = computeDietPiBadges(snapshot, effectiveCronSummary);
+  const topology = useMemo(
+    () => synthesizeTopology(apps, snapshot, null),
+    [apps, snapshot]
+  );
+  const topologyBadges = useMemo(
+    () => computeTopologyBadges(topology, snapshot !== null),
+    [topology, snapshot]
+  );
 
   const renderTabBadge = (badge: DietPiTabBadge) => {
     if (badge.count <= 0) return undefined;
@@ -81,24 +98,34 @@ export function DietPiHostView({
   const upgradablePkgs = parseAptList(snapshot?.apt_upgradable_raw || '');
 
   return (
-    <div className="p-8 w-full min-w-0 max-w-[1920px] mx-auto space-y-8">
+    <div className="p-6 w-full min-w-0 max-w-[1920px] mx-auto space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-            <Server className="w-5 h-5 text-[var(--color-brand-text)]" />
-            DietPi Web Services Host (WSH)
-          </h2>
-          <p className="text-sm text-slate-600 dark:text-slate-400 mt-0.5">
-            Raspberry Pi 5 OS health, APT packages, system services, and maintenance actions
+          <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2 tracking-tight">
+            <Server className="w-5 h-5 text-[var(--color-brand-text)] shrink-0" />
+            <span>DietPi Web Services Host (WSH)</span>
+          </h1>
+          <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">
+            Raspberry Pi 5 OS health, APT packages, host NICs/sockets, scheduled crons, and maintenance actions
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2.5">
+          {onNavigateToTopology && (
+            <button
+              type="button"
+              onClick={onNavigateToTopology}
+              className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+            >
+              <Network className="w-3.5 h-3.5" />
+              <span>Topology &amp; Ingress →</span>
+            </button>
+          )}
           <button
             onClick={onTriggerReboot}
             disabled={isRebooting}
-            className="btn-danger text-xs py-1.5 px-3"
+            className="btn-danger text-xs py-1.5 px-3 whitespace-nowrap flex-shrink-0"
             title="Initiate graceful reboot of DietPi WSH and verify recovery"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isRebooting ? 'animate-spin' : ''}`} />
@@ -108,7 +135,7 @@ export function DietPiHostView({
           <button
             onClick={onRefresh}
             disabled={isLoading}
-            className="btn-secondary text-xs py-1.5 px-3"
+            className="btn-secondary text-xs py-1.5 px-3 whitespace-nowrap flex-shrink-0"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
             Refresh Snapshot
@@ -203,9 +230,9 @@ export function DietPiHostView({
         </div>
       </div>
 
-      {/* Sub-view Switcher: Host & APT vs Scheduled Crons & Heartbeats */}
+      {/* Sub-view Switcher: Host & APT | Host Interfaces & Sockets | Scheduled Crons & Heartbeats */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <SegmentedControl<'host' | 'crons'>
+        <SegmentedControl<DietPiSubTab>
           value={subTab}
           onChange={(val) => onSelectSubTab?.(val)}
           size="md"
@@ -215,6 +242,12 @@ export function DietPiHostView({
               label: 'Host & APT Packages',
               icon: <Server className="w-3.5 h-3.5" />,
               badge: renderTabBadge(dietpiBadges.tabs.host),
+            },
+            {
+              value: 'interfaces',
+              label: 'Host Interfaces & Sockets',
+              icon: <Network className="w-3.5 h-3.5" />,
+              badge: renderTabBadge(topologyBadges.tabs.hardware),
             },
             {
               value: 'crons',
@@ -232,6 +265,12 @@ export function DietPiHostView({
           hasSnapshot={snapshot !== null}
           isBusy={isCronActionBusy}
           onTriggerCronAction={(req) => onTriggerCronAction?.(req)}
+        />
+      ) : subTab === 'interfaces' ? (
+        <DietPiHardwareNetworkCard
+          topology={topology}
+          onRefresh={onRefresh}
+          onNavigateToHardening={onNavigateToHardening}
         />
       ) : (
         /* Upgradable APT Packages */

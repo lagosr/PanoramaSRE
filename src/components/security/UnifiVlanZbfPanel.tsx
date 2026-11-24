@@ -5,17 +5,20 @@ import {
   ArrowRight,
   ExternalLink,
   Filter,
+  Info,
   Network,
   RefreshCw,
   Search,
   Shield,
   ShieldAlert,
+  ShieldCheck,
   Wifi,
 } from 'lucide-react';
 import { CustomSelect } from '../ui/CustomSelect';
 import { CopyableAddressText, CopyableValue } from '../ui/CopyableValue';
 import { UnifiZoneFlowExplorer } from './UnifiZoneFlowExplorer';
 import { formatLocalDateTime, formatRelativeTime } from '../../lib/formatters';
+import { filterLanClients } from '../../lib/threat-utils';
 import type {
   LanClientBaselineRow,
   UnifiNetworkDto,
@@ -30,7 +33,7 @@ import {
   type ZbfCellVerdict,
 } from '../../lib/unifi-zbf';
 
-type PanelTab = 'flow' | 'matrix' | 'vlans' | 'rules';
+export type UnifiZbfPanelTab = 'flow' | 'matrix' | 'vlans' | 'rules' | 'baseline';
 
 interface UnifiVlanZbfPanelProps {
   topology: UnifiTopologySnapshotDto | null;
@@ -42,6 +45,12 @@ interface UnifiVlanZbfPanelProps {
   onOpenUnifiFirewall: () => void;
   lanClients?: LanClientBaselineRow[];
   onToggleLanTrust?: (client: LanClientBaselineRow, trusted: boolean) => void;
+  initialTab?: UnifiZbfPanelTab;
+  initialTabNonce?: number;
+  initialSearchQuery?: string;
+  onTrustAllBaseline?: () => void;
+  onRefreshLanBaseline?: () => void;
+  isLoadingLanBaseline?: boolean;
 }
 
 function verdictPillMeta(verdict: ZbfCellVerdict): {
@@ -104,13 +113,30 @@ export const UnifiVlanZbfPanel: React.FC<UnifiVlanZbfPanelProps> = ({
   onOpenUnifiFirewall,
   lanClients = [],
   onToggleLanTrust,
+  initialTab,
+  initialTabNonce = 0,
+  initialSearchQuery = '',
+  onTrustAllBaseline,
+  onRefreshLanBaseline,
+  isLoadingLanBaseline = false,
 }) => {
-  const [panelTab, setPanelTab] = useState<PanelTab>('flow');
+  const [panelTab, setPanelTab] = useState<UnifiZbfPanelTab>(initialTab ?? 'flow');
   const [activeZonesOnly, setActiveZonesOnly] = useState<boolean>(true);
   const [selectedPair, setSelectedPair] = useState<{ srcId: string; dstId: string } | null>(null);
   const [customRulesOnly, setCustomRulesOnly] = useState<boolean>(false);
   const [ruleSearch, setRuleSearch] = useState<string>('');
   const [ruleZoneFilter, setRuleZoneFilter] = useState<string>('ALL');
+  const [lanSearch, setLanSearch] = useState<string>(initialSearchQuery);
+  const [lanTrustFilter, setLanTrustFilter] = useState<'ALL' | 'UNREVIEWED' | 'TRUSTED'>('ALL');
+
+  useEffect(() => {
+    if (initialTab) {
+      setPanelTab(initialTab);
+    }
+    if (initialSearchQuery !== undefined) {
+      setLanSearch(initialSearchQuery);
+    }
+  }, [initialTab, initialTabNonce, initialSearchQuery]);
 
   const zones = topology?.zones ?? [];
   const networks = topology?.networks ?? [];
@@ -211,14 +237,44 @@ export const UnifiVlanZbfPanel: React.FC<UnifiVlanZbfPanelProps> = ({
     });
   }, [matrix.customPolicies, ruleSearch, ruleZoneFilter, zoneById]);
 
+  const trustedLanCount = useMemo(
+    () => lanClients.filter((c) => c.isTrusted).length,
+    [lanClients]
+  );
+
+  const availableVlanOptions = useMemo(() => {
+    const counts = new Map<string, number>();
+    if (topology?.networks) {
+      for (const n of topology.networks) {
+        const label = n.vlanId != null ? `${n.name} (VLAN ${n.vlanId})` : n.name;
+        counts.set(label, n.clientCount);
+      }
+    }
+    for (const cli of lanClients) {
+      const v = (cli.networkVlan || '').trim();
+      if (!v) continue;
+      if (!counts.has(v)) {
+        counts.set(v, (counts.get(v) ?? 0) + 1);
+      }
+    }
+    const items = Array.from(counts.entries()).map(([label, count]) => ({
+      value: label,
+      label: `${label} (${count})`,
+    }));
+    items.sort((a, b) => a.label.localeCompare(b.label));
+    return [{ value: 'ALL', label: `All VLANs (${lanClients.length})` }, ...items];
+  }, [topology?.networks, lanClients]);
+
+  const filteredLanClients = useMemo(
+    () => filterLanClients(lanClients, lanSearch, lanTrustFilter, selectedVlanFilter),
+    [lanClients, lanSearch, lanTrustFilter, selectedVlanFilter]
+  );
+
   const jumpToBaselineFilter = (net: UnifiNetworkDto) => {
     const label = net.vlanId != null ? `${net.name} (VLAN ${net.vlanId})` : net.name;
     const isSame = selectedVlanFilter.toLowerCase() === label.toLowerCase();
     onSelectVlanFilter(isSame ? 'ALL' : label);
-    document.getElementById('lan-device-baseline')?.scrollIntoView({
-      behavior: 'smooth',
-      block: 'start',
-    });
+    setPanelTab('baseline');
   };
 
   const inspectZonesByName = (srcZoneId: string, dstZoneName: string) => {
@@ -377,31 +433,40 @@ export const UnifiVlanZbfPanel: React.FC<UnifiVlanZbfPanelProps> = ({
         </div>
       )}
 
-      {/* Navigation & Filter Bar */}
-      {topology && (
-        <div className="flex flex-wrap items-center justify-between gap-3 pt-1 border-t border-slate-200 dark:border-slate-800">
-          <SegmentedControl<PanelTab>
-            activeVariant="brand"
-            value={panelTab}
-            onChange={setPanelTab}
-            options={[
-              { value: 'flow', label: 'Zone Flow Explorer' },
-              { value: 'matrix', label: 'Segmentation Matrix' },
-              {
-                value: 'vlans',
-                label: 'VLAN Directory',
-                badge: <span className="tabular-nums font-mono">{networks.length}</span>,
-              },
-              {
-                value: 'rules',
-                label: 'Custom Rules',
-                badge: (
-                  <span className="tabular-nums font-mono">{matrix.customPolicies.length}</span>
-                ),
-              },
-            ]}
-          />
+      {/* Navigation & Filter Bar (Flat 5-Tab Workspace — Depth 2) */}
+      <div className="flex flex-wrap items-center justify-between gap-3 pt-1 border-t border-slate-200 dark:border-slate-800">
+        <SegmentedControl<UnifiZbfPanelTab>
+          activeVariant="brand"
+          value={panelTab}
+          onChange={setPanelTab}
+          options={[
+            { value: 'flow', label: 'Zone Flow Explorer' },
+            { value: 'matrix', label: 'ZBF Matrix' },
+            {
+              value: 'vlans',
+              label: 'VLAN Directory',
+              badge: <span className="tabular-nums font-mono">{networks.length}</span>,
+            },
+            {
+              value: 'rules',
+              label: 'Custom Rules',
+              badge: (
+                <span className="tabular-nums font-mono">{matrix.customPolicies.length}</span>
+              ),
+            },
+            {
+              value: 'baseline',
+              label: 'LAN Device Baseline',
+              badge: (
+                <span className="tabular-nums font-mono">
+                  {trustedLanCount}/{lanClients.length}
+                </span>
+              ),
+            },
+          ]}
+        />
 
+        {(panelTab === 'flow' || panelTab === 'matrix') && topology && (
           <div className="flex items-center gap-2.5 text-xs">
             <span className="font-mono text-slate-600 dark:text-slate-400">Active Zones Only</span>
             <ToggleSwitch
@@ -411,10 +476,10 @@ export const UnifiVlanZbfPanel: React.FC<UnifiVlanZbfPanelProps> = ({
               activeColor="brand"
             />
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
-      {!topology && !isLoading && (
+      {!topology && !isLoading && panelTab !== 'baseline' && (
         <div className="p-8 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-center space-y-2">
           <Wifi className="w-6 h-6 text-slate-400 mx-auto" />
           <div className="text-sm font-semibold text-slate-800 dark:text-slate-200">
@@ -426,7 +491,7 @@ export const UnifiVlanZbfPanel: React.FC<UnifiVlanZbfPanelProps> = ({
         </div>
       )}
 
-      {!topology && isLoading && (
+      {!topology && isLoading && panelTab !== 'baseline' && (
         <div className="p-8 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-center text-xs font-mono text-slate-500 flex items-center justify-center gap-2">
           <RefreshCw className="w-4 h-4 animate-spin" />
           <span>Querying UniFi VLAN subnets, zones, and 270+ ZBF policies...</span>
@@ -841,6 +906,189 @@ export const UnifiVlanZbfPanel: React.FC<UnifiVlanZbfPanelProps> = ({
             </div>
           ) : (
             <div className="space-y-2">{filteredCustomRules.map((pol) => renderPolicyRow(pol, true))}</div>
+          )}
+        </div>
+      )}
+
+      {/* ================================================================= */}
+      {/* SUB-VIEW D: OWNER-VERIFIED LAN DEVICE BASELINE                    */}
+      {/* ================================================================= */}
+      {panelTab === 'baseline' && (
+        <div id="lan-device-baseline" className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h4 className="text-base font-bold text-slate-900 dark:text-slate-100 tabular-nums">
+                UniFi LAN Device Baseline ({trustedLanCount} / {lanClients.length} Trusted)
+              </h4>
+              <p className="text-xs text-slate-600 dark:text-slate-400">
+                Tracks known hardware MACs on your private LAN. Brand-new MACs trigger <code className="font-mono">HIGH</code> on privileged LANs and quiet <code className="font-mono">LOW</code> informational telemetry on isolated Guest/Kids/IoT/Hotspot VLANs.
+              </p>
+            </div>
+            <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
+              {selectedVlanFilter !== 'ALL' && (
+                <button
+                  type="button"
+                  onClick={() => onSelectVlanFilter('ALL')}
+                  className="btn-ghost text-xs whitespace-nowrap flex-shrink-0"
+                >
+                  Clear VLAN Filter ({selectedVlanFilter})
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={onRefreshLanBaseline ?? onRefresh}
+                disabled={isLoadingLanBaseline || isLoading}
+                className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+              >
+                <RefreshCw
+                  className={`w-3.5 h-3.5 ${
+                    isLoadingLanBaseline || isLoading ? 'animate-spin' : ''
+                  }`}
+                />
+                <span>Refresh</span>
+              </button>
+              {onTrustAllBaseline && (
+                <button
+                  type="button"
+                  onClick={onTrustAllBaseline}
+                  disabled={lanClients.length === 0}
+                  className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                >
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  <span>Trust All Initial Baseline</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="flex items-start gap-2.5 p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs text-slate-700 dark:text-slate-300">
+            <Info className="w-4 h-4 text-[var(--color-accent-text)] shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <div className="font-semibold text-slate-900 dark:text-slate-100">
+                What does trusting a device mean? (Does NOT bypass malware or behavioral threat alerts)
+              </div>
+              <p className="leading-relaxed text-slate-600 dark:text-slate-400">
+                Owner-Verified trust is <strong>100% local and read-only inside PanoramaSRE</strong> — it never changes UniFi Wi-Fi, VLANs, or firewall rules, and it <strong>only confirms that the physical MAC hardware belongs in your house</strong> (clearing &quot;Unknown Device Joined LAN&quot; reminders). <strong>It never exempts a trusted phone, PC, or Wi-Fi appliance from future threat scans:</strong> if a trusted device gets compromised tomorrow and triggers UniFi IPS/CEF alerts, unexpected WSH SSH, PanoramaAuth anomalies, or Cloudflare alerts, PanoramaSRE still catches and flags it at full severity. Only adding a rule in <strong>Threat &amp; Zero Trust → Allowlist</strong> suppresses behavioral alerts.
+              </p>
+            </div>
+          </div>
+
+          {lanClients.length > 0 && (
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
+              <div className="relative flex-1">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={lanSearch}
+                  onChange={(e) => setLanSearch(e.target.value)}
+                  placeholder="Filter hostname, MAC, IP, VLAN, vendor..."
+                  className="w-full pl-8 pr-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
+                />
+              </div>
+              <div className="w-full lg:w-64">
+                <CustomSelect
+                  value={selectedVlanFilter}
+                  onChange={onSelectVlanFilter}
+                  options={availableVlanOptions}
+                />
+              </div>
+              <div className="w-full lg:w-48">
+                <CustomSelect
+                  value={lanTrustFilter}
+                  onChange={(val) =>
+                    setLanTrustFilter((val as 'ALL' | 'UNREVIEWED' | 'TRUSTED') || 'ALL')
+                  }
+                  options={[
+                    { value: 'ALL', label: `All (${lanClients.length})` },
+                    {
+                      value: 'UNREVIEWED',
+                      label: `Unreviewed (${lanClients.length - trustedLanCount})`,
+                    },
+                    { value: 'TRUSTED', label: `Trusted (${trustedLanCount})` },
+                  ]}
+                />
+              </div>
+            </div>
+          )}
+
+          {lanClients.length === 0 ? (
+            <div className="p-6 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-center text-xs text-slate-500">
+              No UniFi LAN clients captured yet. Run an audit in PanoramaSRE to discover your LAN baseline.
+            </div>
+          ) : filteredLanClients.length === 0 ? (
+            <div className="p-6 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-center text-xs text-slate-500">
+              No LAN devices match your current search, VLAN, or trust filter.
+            </div>
+          ) : (
+            <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="bg-slate-50 dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 font-mono text-[11px] text-slate-500 uppercase">
+                    <th className="py-2.5 px-3">Device / Hostname</th>
+                    <th className="py-2.5 px-3">MAC Address</th>
+                    <th className="py-2.5 px-3">IP Address</th>
+                    <th className="py-2.5 px-3">VLAN &amp; Vendor</th>
+                    <th className="py-2.5 px-3">Last Seen</th>
+                    <th className="py-2.5 px-3 text-right">Owner-Verified</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-mono tabular-nums">
+                  {filteredLanClients.map((cli) => {
+                    const vlanStyle = getVlanBadgeStyle(cli.networkVlan);
+                    return (
+                      <tr
+                        key={cli.macAddress}
+                        className="hover:bg-slate-50/70 dark:hover:bg-slate-950/60"
+                      >
+                        <td className="py-2.5 px-3 font-sans font-medium text-slate-900 dark:text-slate-100">
+                          {cli.label || cli.hostname || 'Unnamed Device'}
+                        </td>
+                        <td className="py-2.5 px-3 text-slate-700 dark:text-slate-300">
+                          <CopyableValue value={cli.macAddress} label="MAC address" />
+                        </td>
+                        <td className="py-2.5 px-3 text-slate-700 dark:text-slate-300">
+                          <CopyableValue value={cli.ipAddress} label="IP address" fallback="—" />
+                        </td>
+                        <td className="py-2.5 px-3">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {cli.networkVlan ? (
+                              <span
+                                className={`px-2 py-0.5 rounded border text-[11px] font-mono font-medium ${vlanStyle.chipClass}`}
+                              >
+                                {cli.networkVlan}
+                              </span>
+                            ) : (
+                              <span className="text-slate-400">—</span>
+                            )}
+                            {cli.ouiVendor && (
+                              <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                                {cli.ouiVendor}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td
+                          className="py-2.5 px-3 text-slate-500 dark:text-slate-400"
+                          title={formatLocalDateTime(cli.lastSeenAt)}
+                        >
+                          {formatRelativeTime(cli.lastSeenAt)}
+                        </td>
+                        <td className="py-2 px-3 text-right">
+                          <div className="inline-flex justify-end">
+                            <ToggleSwitch
+                              size="sm"
+                              checked={cli.isTrusted}
+                              onChange={(val) => onToggleLanTrust?.(cli, val)}
+                              activeColor="brand"
+                            />
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       )}

@@ -18,9 +18,10 @@ import {
 import { CommandCenterView } from './components/hud/CommandCenterView';
 import { LocalDevView } from './components/local-dev/LocalDevView';
 import { SettingsView, type SettingsTab } from './components/settings/SettingsView';
-import { TopologyStacksView } from './components/topology/TopologyStacksView';
+import { TopologyStacksView, type TopologyIngressTab } from './components/topology/TopologyStacksView';
 import { UnifiNetworkZbfView } from './components/network/UnifiNetworkZbfView';
-import { DietPiHostView } from './components/dietpi/DietPiHostView';
+import type { UnifiZbfPanelTab } from './components/security/UnifiVlanZbfPanel';
+import { DietPiHostView, type DietPiSubTab } from './components/dietpi/DietPiHostView';
 import type { CronActionRequest } from './components/dietpi/CronManagerPanel';
 import { EdgePkiView } from './components/edge/EdgePkiView';
 import { ThreatIntelView } from './components/security/ThreatIntelView';
@@ -149,7 +150,20 @@ export const App: React.FC = () => {
   const [smokeError, setSmokeError] = useState<string | null>(null);
   const [isLoadingSsl, setIsLoadingSsl] = useState<boolean>(false);
   const [isLoadingWsh, setIsLoadingWsh] = useState<boolean>(false);
-  const [dietpiSubTab, setDietpiSubTab] = useState<'host' | 'crons'>('host');
+  const [dietpiSubTab, setDietpiSubTab] = useState<DietPiSubTab>('host');
+  const [topologyNav, setTopologyNav] = useState<{ tab: TopologyIngressTab; nonce: number }>({
+    tab: 'visual',
+    nonce: 0,
+  });
+  const [unifiNav, setUnifiNav] = useState<{
+    tab: UnifiZbfPanelTab;
+    search?: string;
+    nonce: number;
+  }>({
+    tab: 'flow',
+    search: '',
+    nonce: 0,
+  });
   const [isCronActionBusy, setIsCronActionBusy] = useState<boolean>(false);
   // Terminal Dock & Phase 1 Navigation / Console State
   const [terminalTabs, setTerminalTabs] = useState<TerminalTab[]>([]);
@@ -537,8 +551,36 @@ export const App: React.FC = () => {
       if (ctx?.appSlug !== undefined && view === 'telemetry') {
         setSelectedTelemetryAppSlug(ctx.appSlug || 'all');
       }
-      if (ctx?.tab !== undefined && view === 'dietpi' && (ctx.tab === 'host' || ctx.tab === 'crons')) {
+      if (
+        ctx?.tab !== undefined &&
+        view === 'dietpi' &&
+        (ctx.tab === 'host' || ctx.tab === 'interfaces' || ctx.tab === 'crons')
+      ) {
         setDietpiSubTab(ctx.tab);
+      }
+      if (
+        ctx?.tab !== undefined &&
+        view === 'topology' &&
+        (ctx.tab === 'visual' || ctx.tab === 'matrix' || ctx.tab === 'tunnel')
+      ) {
+        setTopologyNav((prev) => ({
+          tab: ctx.tab as TopologyIngressTab,
+          nonce: prev.nonce + 1,
+        }));
+      }
+      if (view === 'unifi-zbf' && (ctx?.tab !== undefined || ctx?.highlightId !== undefined)) {
+        setUnifiNav((prev) => ({
+          tab:
+            ctx?.tab === 'flow' ||
+            ctx?.tab === 'matrix' ||
+            ctx?.tab === 'vlans' ||
+            ctx?.tab === 'rules' ||
+            ctx?.tab === 'baseline'
+              ? ctx.tab
+              : prev.tab,
+          search: ctx?.highlightId ?? '',
+          nonce: prev.nonce + 1,
+        }));
       }
       if (ctx?.tab !== undefined && view === 'settings') {
         setSettingsNav((prev) => ({
@@ -3995,6 +4037,26 @@ export const App: React.FC = () => {
       category: 'view' as const,
       onExecute: () => navigateTo(id),
     })),
+    {
+      id: 'view-dietpi-interfaces',
+      kind: 'View',
+      label: 'Host Interfaces & Sockets (DietPi)',
+      hint: 'DietPi Host & Crons',
+      keywords: 'eth0 lo netfilter sockets hardware gatekeeper suricata',
+      category: 'view' as const,
+      onExecute: () =>
+        navigateTo('dietpi', { tab: 'interfaces', returnFromCurrent: true }),
+    },
+    {
+      id: 'view-lan-baseline',
+      kind: 'View',
+      label: 'UniFi LAN Device Baseline',
+      hint: 'UniFi Network & ZBF',
+      keywords: 'mac lan baseline trusted devices clients',
+      category: 'view' as const,
+      onExecute: () =>
+        navigateTo('unifi-zbf', { tab: 'baseline', returnFromCurrent: true }),
+    },
     ...apps.map((app) => ({
       id: `app-${app.manifest.slug}`,
       kind: 'App Release',
@@ -4087,8 +4149,8 @@ export const App: React.FC = () => {
           securityViolationCount={securityViolationCount}
           hardeningPassingCount={hardeningPassingCount}
           hardeningTotalCount={hardeningTotalCount}
-          topologyAlertCount={topologyBadges.totalCount}
-          topologyAlertSeverity={topologyBadges.severity}
+          topologyAlertCount={topologyBadges.ingressTotalCount}
+          topologyAlertSeverity={topologyBadges.ingressSeverity}
           smokeFailureCount={smokeFailureCount}
           unreadOptInsCount={optInSnapshot?.unreadCount ?? 0}
           threatAlertCount={threatBadge.count}
@@ -4229,9 +4291,18 @@ export const App: React.FC = () => {
               tunnelVersionStatus={tunnelVersionStatus}
               isCheckingTunnelVersion={isCheckingTunnelVersion}
               isLoading={isManualSyncing || isInitialSyncing}
+              initialTab={topologyNav.tab}
+              initialTabNonce={topologyNav.nonce}
               onRefresh={handleManualTopologyRefresh}
-              onRunPenetrationAudit={() => handleRunPenetrationAudit('topology')}
-              onReapplyHardening={() => handleReapplyHardening('topology')}
+              onNavigateToUnifi={() =>
+                navigateTo('unifi-zbf', { tab: 'flow', returnFromCurrent: true })
+              }
+              onNavigateToHardening={() =>
+                navigateTo('hardening', { returnFromCurrent: true })
+              }
+              onNavigateToDietPiInterfaces={() =>
+                navigateTo('dietpi', { tab: 'interfaces', returnFromCurrent: true })
+              }
               onOpenInBottomConsole={handleOpenInBottomConsole}
               onAbortJob={handleAbortJob}
               onClearTab={handleClearTab}
@@ -4272,6 +4343,10 @@ export const App: React.FC = () => {
           {activeTab === 'unifi-zbf' && (
             <UnifiNetworkZbfView
               unifiBaseUrl={threatSettings?.preferences.unifiBaseUrl || 'https://ui.panoramadr.com'}
+              initialTab={unifiNav.tab}
+              initialTabNonce={unifiNav.nonce}
+              initialSearch={unifiNav.search}
+              onLanBaselineMutated={() => void refreshThreatIntelState(selectedThreatDetail?.run?.id)}
               onNavigateToTopology={() =>
                 navigateTo('topology', {
                   returnFromCurrent: true,
@@ -4303,6 +4378,12 @@ export const App: React.FC = () => {
               onRefresh={handleManualDietPiRefresh}
               onTriggerCronAction={handleTriggerCronAction}
               onTriggerReboot={handleRebootWshWithVerification}
+              onNavigateToTopology={() =>
+                navigateTo('topology', { returnFromCurrent: true })
+              }
+              onNavigateToHardening={() =>
+                navigateTo('hardening', { returnFromCurrent: true })
+              }
               isRebooting={isHostRebooting}
               onOpenInBottomConsole={handleOpenInBottomConsole}
               onAbortJob={handleAbortJob}
@@ -4503,14 +4584,33 @@ export const App: React.FC = () => {
               onEscalateRunToCarbon={handleEscalateThreatRunToCarbon}
               onSelectRunId={handleSelectThreatRunId}
               onRefreshAll={() => refreshThreatIntelState(selectedThreatDetail?.run?.id)}
-              onNavigateToSettings={() => {
-                setSettingsNav((prev) => ({ tab: 'security', nonce: prev.nonce + 1 }));
-                setActiveTab('settings');
-              }}
-              onNavigateToSiemRelease={() => {
-                setSelectedReleaseAppSlug('unifi-siem');
-                setActiveTab('releases');
-              }}
+              onNavigateToSettings={() =>
+                navigateTo('settings', {
+                  tab: 'security',
+                  returnFromCurrent: true,
+                })
+              }
+              onNavigateToSiemRelease={() =>
+                navigateTo('releases', {
+                  appSlug: 'unifi-siem',
+                  returnFromCurrent: true,
+                })
+              }
+              onNavigateToHardening={() =>
+                navigateTo('hardening', {
+                  returnFromCurrent: true,
+                })
+              }
+              onNavigateToUnifiZbf={(tab = 'flow', searchQuery = '') =>
+                navigateTo('unifi-zbf', {
+                  tab,
+                  highlightId: searchQuery,
+                  returnFromCurrent: true,
+                })
+              }
+              hardeningPassingCount={hardeningPassingCount}
+              hardeningTotalCount={hardeningTotalCount}
+              securityViolationCount={securityViolationCount}
               wshSnapshot={wshSnapshot}
               terminalTabs={terminalTabs}
               onOpenInBottomConsole={handleOpenInBottomConsole}
