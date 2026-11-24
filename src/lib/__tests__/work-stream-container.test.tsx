@@ -38,6 +38,7 @@ describe('Smart Auto-Scroll & Stream Routing Utilities', () => {
       ['ssl-renew-1', 'edge'],
       ['gfs-backup-1', 'backups'],
       ['smoke-1', 'smoke'],
+      ['unifi-siem-test-1', 'settings'],
       ['settings-op-1', 'settings'],
     ];
 

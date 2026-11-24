@@ -2787,7 +2787,7 @@ export const App: React.FC = () => {
         lines: [`[PanoramaSRE] Invoking ${cmdSpec.scriptPath}...`],
         isRunning: true,
         createdAt: new Date().toISOString(),
-        pageScope: 'security',
+        pageScope: 'settings',
         source: 'ui',
         abortable: true,
       };

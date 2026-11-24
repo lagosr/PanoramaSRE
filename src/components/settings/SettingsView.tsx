@@ -28,6 +28,7 @@ import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { CustomSelect } from '../ui/CustomSelect';
 import { WorkStreamContainer } from '../ui/WorkStreamContainer';
 import { UnifiSiemSettingsCard } from './UnifiSiemSettingsCard';
+import { filterTabsForScope } from '../../lib/stream-utils';
 import { SegmentedControl, StatusBadge, ToggleSwitch } from '@lagosr/panorama-ui-kit';
 import { formatConsoleLine, stripAnsiCodes } from '../layout/ConsoleColorizer';
 import { useSmartAutoScroll } from '../../hooks/useSmartAutoScroll';
@@ -721,7 +722,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setTimeout(() => setIsSaved(false), 2000);
   };
 
-  const hasSettingsStreamTabs = terminalTabs.some((t) => t.pageScope === 'settings');
+  const hasSettingsStreamTabs = filterTabsForScope(terminalTabs, 'settings').length > 0;
 
   const handleHeaderSave = () => {
     if (activeTab === 'security') {
@@ -1944,7 +1945,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <button
                   type="button"
                   onClick={pinLogsToBottom}
-                  className="absolute bottom-3 right-4 z-10 inline-flex items-center gap-1.5 px-3.5 py-2 min-h-[36px] rounded-full text-xs font-semibold bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-[var(--color-on-accent)] shadow-lg transition-colors cursor-pointer tabular-nums"
+                  className="absolute bottom-3 right-4 z-10 inline-flex items-center gap-1.5 px-3.5 py-2 min-h-[36px] rounded-full text-xs font-semibold bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-[var(--color-on-accent)] shadow-lg transition-colors cursor-pointer tabular-nums whitespace-nowrap flex-shrink-0"
                 >
                   <ArrowDownToLine className="w-3.5 h-3.5" />
                   <span>
@@ -1956,7 +1957,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         )}
 
-        {activeTab !== 'logs' && hasSettingsStreamTabs && (
+        {activeTab !== 'logs' && (activeTab === 'security' || hasSettingsStreamTabs) && (
           <div className="w-full max-w-[1920px] mx-auto">
             <WorkStreamContainer
               pageScope="settings"

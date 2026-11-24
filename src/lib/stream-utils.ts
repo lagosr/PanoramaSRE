@@ -49,11 +49,7 @@ export function inferPageScopeFromJob(
     return 'dietpi';
   }
   if (lowerId.startsWith('ssl-')) return 'edge';
-  if (
-    lowerId.startsWith('threat-') ||
-    lowerId.startsWith('security-') ||
-    lowerId.startsWith('unifi-siem-')
-  ) {
+  if (lowerId.startsWith('threat-') || lowerId.startsWith('security-')) {
     return 'security';
   }
   if (
@@ -67,7 +63,13 @@ export function inferPageScopeFromJob(
   }
   if (lowerId.startsWith('smoke-')) return 'smoke';
   if (lowerId.startsWith('optin-') || lowerId.startsWith('opt-in')) return 'opt-ins';
-  if (lowerId.startsWith('settings-') || lowerId.startsWith('workspace-')) return 'settings';
+  if (
+    lowerId.startsWith('settings-') ||
+    lowerId.startsWith('workspace-') ||
+    lowerId.startsWith('unifi-siem-')
+  ) {
+    return 'settings';
+  }
 
   const lowerTitle = (title || '').toLowerCase();
   if (lowerTitle.includes('dev server')) return 'local-dev';
