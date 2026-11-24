@@ -318,23 +318,48 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
     >
       <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
         {/* App Title / Header (h-14 matches TopLiveSyncBar) */}
-        <div className="h-14 flex items-center justify-between px-2.5 md:px-3.5 border-b border-slate-200 dark:border-slate-800 gap-2 shrink-0">
+        <div
+          className={`h-14 flex items-center border-b border-slate-200 dark:border-slate-800 shrink-0 ${
+            isCollapsed ? 'justify-center px-2' : 'justify-between px-2.5 md:px-3.5 gap-2'
+          }`}
+        >
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="relative shrink-0">
-              <div className="w-9 h-9 rounded-xl bg-white dark:bg-slate-900 border border-amber-500/40 dark:border-amber-400/40 flex items-center justify-center shadow-sm overflow-hidden">
-                <img
-                  src="/logo-dark.png"
-                  alt="PanoramaSRE"
-                  className="w-full h-full object-cover hidden dark:block"
-                />
-                <img
-                  src="/logo-light.png"
-                  alt="PanoramaSRE"
-                  className="w-full h-full object-cover block dark:hidden"
-                />
-              </div>
+              {isCollapsed && onToggleCollapse ? (
+                <button
+                  type="button"
+                  onClick={onToggleCollapse}
+                  title="Expand Sidebar Rail"
+                  aria-label="Expand Sidebar Rail from Logo"
+                  className="w-9 h-9 rounded-xl bg-white dark:bg-slate-900 border border-amber-500/40 dark:border-amber-400/40 hover:border-[var(--color-brand)] flex items-center justify-center shadow-sm overflow-hidden cursor-pointer transition-colors"
+                >
+                  <img
+                    src="/logo-dark.png"
+                    alt="PanoramaSRE"
+                    className="w-full h-full object-cover hidden dark:block"
+                  />
+                  <img
+                    src="/logo-light.png"
+                    alt="PanoramaSRE"
+                    className="w-full h-full object-cover block dark:hidden"
+                  />
+                </button>
+              ) : (
+                <div className="w-9 h-9 rounded-xl bg-white dark:bg-slate-900 border border-amber-500/40 dark:border-amber-400/40 flex items-center justify-center shadow-sm overflow-hidden">
+                  <img
+                    src="/logo-dark.png"
+                    alt="PanoramaSRE"
+                    className="w-full h-full object-cover hidden dark:block"
+                  />
+                  <img
+                    src="/logo-light.png"
+                    alt="PanoramaSRE"
+                    className="w-full h-full object-cover block dark:hidden"
+                  />
+                </div>
+              )}
               <span
-                className={`w-2.5 h-2.5 rounded-full absolute -top-0.5 -right-0.5 ring-2 ring-white dark:ring-slate-950 ${
+                className={`w-2.5 h-2.5 rounded-full absolute -top-0.5 -right-0.5 ring-2 ring-white dark:ring-slate-950 pointer-events-none ${
                   !isInitialSyncComplete
                     ? 'bg-slate-400 dark:bg-slate-500 animate-pulse'
                     : unhealthyCount > 0
@@ -357,22 +382,33 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
             )}
           </div>
 
-          {onToggleCollapse && (
+          {!isCollapsed && onToggleCollapse && (
             <button
               type="button"
               onClick={onToggleCollapse}
               className="hidden md:flex w-7 h-7 items-center justify-center rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 hover:border-[var(--color-brand)] text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 transition-colors shrink-0 cursor-pointer"
-              title={isCollapsed ? 'Expand Sidebar Rail' : 'Collapse Sidebar to Icons'}
-              aria-label={isCollapsed ? 'Expand Sidebar Rail' : 'Collapse Sidebar to Icons'}
+              title="Collapse Sidebar to Icons"
+              aria-label="Collapse Sidebar to Icons"
             >
-              {isCollapsed ? (
-                <PanelLeftOpen className="w-3.5 h-3.5" />
-              ) : (
-                <PanelLeftClose className="w-3.5 h-3.5" />
-              )}
+              <PanelLeftClose className="w-3.5 h-3.5" />
             </button>
           )}
         </div>
+
+        {/* Dedicated centered expand strip when collapsed inside w-16 rail */}
+        {isCollapsed && onToggleCollapse && (
+          <div className="px-2 py-1.5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-center shrink-0">
+            <button
+              type="button"
+              onClick={onToggleCollapse}
+              className="w-10 h-7 flex items-center justify-center rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 hover:border-[var(--color-brand)] text-slate-600 dark:text-slate-300 hover:text-[var(--color-brand-text)] transition-colors cursor-pointer"
+              title="Expand Sidebar Rail"
+              aria-label="Expand Sidebar Rail"
+            >
+              <PanelLeftOpen className="w-4 h-4" />
+            </button>
+          </div>
+        )}
 
         {/* 5-Group Navigation */}
         <nav className="flex-1 overflow-y-auto p-2 space-y-3 custom-scrollbar">
