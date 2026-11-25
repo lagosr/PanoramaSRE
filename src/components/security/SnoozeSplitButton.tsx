@@ -6,6 +6,7 @@ interface SnoozeSplitButtonProps {
   disabled?: boolean;
   defaultDays?: number;
   presets?: number[];
+  targetLabel?: string;
 }
 
 const DEFAULT_PRESETS = [7, 14, 30, 60, 90];
@@ -15,6 +16,7 @@ export const SnoozeSplitButton: React.FC<SnoozeSplitButtonProps> = ({
   disabled = false,
   defaultDays = 7,
   presets = DEFAULT_PRESETS,
+  targetLabel = 'this threat actor',
 }) => {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -45,13 +47,17 @@ export const SnoozeSplitButton: React.FC<SnoozeSplitButtonProps> = ({
   return (
     <div ref={containerRef} className="relative inline-flex items-stretch flex-shrink-0">
       <div className="inline-flex items-stretch rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 overflow-hidden">
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => handleSelectDays(defaultDays)}
-          className="px-3 min-h-[36px] text-xs font-medium text-slate-800 dark:text-slate-100 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 cursor-pointer disabled:opacity-50"
-          title={`Snooze this threat actor for ${defaultDays} days (quiets repeat alerts unless an origin 200 breach occurs)`}
-        >
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => handleSelectDays(defaultDays)}
+            className="px-3 min-h-[36px] text-xs font-medium text-slate-800 dark:text-slate-100 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 cursor-pointer disabled:opacity-50"
+            title={
+              targetLabel === 'this threat actor'
+                ? `Snooze this threat actor for ${defaultDays} days (quiets repeat alerts unless an origin 200 breach occurs)`
+                : `Snooze ${targetLabel} for ${defaultDays} days`
+            }
+          >
           <BellOff className="w-3.5 h-3.5 shrink-0" />
           <span className="tabular-nums">Snooze {defaultDays}d</span>
         </button>

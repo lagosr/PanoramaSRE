@@ -405,24 +405,21 @@ describe('SmokeTestsView <-> WorkStreamContainer Bidirectional Sync', () => {
       results: [],
     }));
 
-    expect(resolveRunSelectionView(runs, 'smoke_3', 'last10', 10, nowMs)).toEqual({
-      historyMode: 'last10',
+    expect(resolveRunSelectionView(runs, 'smoke_3', 10)).toEqual({
       currentPage: 1,
     });
 
-    // Item at index 14 is outside Last 10, so switches to Last 7 Days page 2
-    expect(resolveRunSelectionView(runs, 'smoke_14', 'last10', 10, nowMs)).toEqual({
-      historyMode: 'last7days',
+    // Item at index 14 lands cleanly on page 2
+    expect(resolveRunSelectionView(runs, 'smoke_14', 10)).toEqual({
       currentPage: 2,
     });
 
-    // Item older than 7 days lands on appended extra page cleanly
-    expect(resolveRunSelectionView(runs, 'smoke_16', 'last10', 10, nowMs)).toEqual({
-      historyMode: 'last7days',
+    // Older item at index 16 also resolves cleanly by index
+    expect(resolveRunSelectionView(runs, 'smoke_16', 10)).toEqual({
       currentPage: 2,
     });
 
-    expect(resolveRunSelectionView(runs, 'missing_id', 'last10', 10, nowMs)).toBeNull();
+    expect(resolveRunSelectionView(runs, 'missing_id', 10)).toBeNull();
   });
 
   it('resolves controlled stream selection priority and renders synchronized SmokeTestsView & WorkStreamContainer markup', () => {
@@ -555,6 +552,9 @@ describe('SmokeTestsView <-> WorkStreamContainer Bidirectional Sync', () => {
     );
     expect(viewHtml).toContain('Smoke Tests (mcp-agent)');
     expect(viewHtml).toContain('>mcp</span>');
+    expect(viewHtml).toContain('Recent Runs (4)');
+    expect(viewHtml).not.toContain('Last 7 Days');
+    expect(viewHtml).not.toContain('Last 10');
     expect(viewHtml).not.toContain('Smoke Tests (sre-scheduled:08:00)');
     expect(viewHtml).not.toContain('No stream captured for selected run');
     expect(viewHtml.toLowerCase()).not.toContain('<select');

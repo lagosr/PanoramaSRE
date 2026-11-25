@@ -626,6 +626,12 @@ export const App: React.FC = () => {
           focusId: ctx?.highlightId,
           nonce: prev.nonce + 1,
         }));
+      } else if (view === 'security') {
+        setThreatNav((prev) => ({
+          tab: 'overview',
+          focusId: undefined,
+          nonce: prev.nonce + 1,
+        }));
       }
       setActiveTab(view);
     },

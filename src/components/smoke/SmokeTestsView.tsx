@@ -19,7 +19,6 @@ import {
 import { SmokeTestRun, TerminalTab } from '../../lib/types';
 import { parseUtcDate } from '../../lib/formatters';
 import { filterTabsForScope, getTabFinishedDetails } from '../../lib/stream-utils';
-import { SegmentedControl } from '@lagosr/panorama-ui-kit';
 
 interface SmokeTestsViewProps {
   runs: SmokeTestRun[];
@@ -82,7 +81,6 @@ const MIN_VALID_EPOCH_MS = 1_600_000_000_000;
 const MAX_SMOKE_DURATION_MS = 300_000;
 const MAX_FINISH_DRIFT_MS = 30_000;
 const START_CLOCK_TOLERANCE_MS = 2_500;
-const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
 function isUtilitySmokeTab(tab: TerminalTab): boolean {
   return (
@@ -245,39 +243,20 @@ export function correlateSmokeRunsAndStreams(
 }
 
 /**
- * Computes the target history filter tab and 1-based page index needed to make
- * `targetRunId` visible in the Recent Runs list when selected from a stream session.
+ * Computes the 1-based page index needed to make `targetRunId` visible in the Recent Runs list.
  */
 export function resolveRunSelectionView(
   runs: SmokeTestRun[],
   targetRunId: string,
-  currentHistoryMode: 'last10' | 'last7days',
-  pageSize = 10,
-  nowMs = Date.now()
-): { historyMode: 'last10' | 'last7days'; currentPage: number } | null {
+  pageSize = 10
+): { currentPage: number } | null {
   const overallIndex = runs.findIndex((r) => r.id === targetRunId);
   if (overallIndex === -1) {
     return null;
   }
 
-  if (currentHistoryMode === 'last10' && overallIndex < pageSize) {
-    return { historyMode: 'last10', currentPage: 1 };
-  }
-
-  const sevenDaysAgoMs = nowMs - SEVEN_DAYS_MS;
-  const recent7d = runs.filter((r) => {
-    const ts = parseUtcDate(r.timestamp)?.getTime() ?? NaN;
-    return !Number.isNaN(ts) && ts >= sevenDaysAgoMs;
-  });
-  const idx7d = recent7d.findIndex((r) => r.id === targetRunId);
-  const currentPage =
-    idx7d >= 0
-      ? Math.floor(idx7d / pageSize) + 1
-      : Math.floor(recent7d.length / pageSize) + 1;
-
   return {
-    historyMode: 'last7days',
-    currentPage,
+    currentPage: Math.floor(overallIndex / pageSize) + 1,
   };
 }
 
@@ -364,7 +343,6 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
   const [manualTabOverrideId, setManualTabOverrideId] = useState<string | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [isRunDropdownOpen, setIsRunDropdownOpen] = useState<boolean>(false);
-  const [historyMode, setHistoryMode] = useState<'last10' | 'last7days'>('last10');
   const [currentPage, setCurrentPage] = useState<number>(1);
   const PAGE_SIZE = 10;
   const prevRunningTabIdRef = useRef<string | null>(null);
@@ -438,24 +416,6 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
     return selectedRun.results.filter((r) => r.category === categoryFilter);
   }, [selectedRun, categoryFilter]);
 
-  const filteredRuns = useMemo(() => {
-    if (historyMode === 'last10') {
-      return runs.slice(0, PAGE_SIZE);
-    }
-    const sevenDaysAgoMs = Date.now() - SEVEN_DAYS_MS;
-    const recent = runs.filter((r) => {
-      const ts = parseUtcDate(r.timestamp)?.getTime() ?? NaN;
-      return !Number.isNaN(ts) && ts >= sevenDaysAgoMs;
-    });
-    if (selectedRunId && !recent.some((r) => r.id === selectedRunId)) {
-      const explicitRun = runs.find((r) => r.id === selectedRunId);
-      if (explicitRun) {
-        return [...recent, explicitRun];
-      }
-    }
-    return recent;
-  }, [runs, historyMode, selectedRunId]);
-
   const handleSelectRun = (run: SmokeTestRun) => {
     setSelectedRunId(run.id);
     setManualTabOverrideId(null);
@@ -464,12 +424,12 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
     }
   };
 
-  const totalPages = Math.max(1, Math.ceil(filteredRuns.length / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(runs.length / PAGE_SIZE));
   const safePage = Math.min(currentPage, totalPages);
   const paginatedRuns = useMemo(() => {
     const start = (safePage - 1) * PAGE_SIZE;
-    return filteredRuns.slice(start, start + PAGE_SIZE);
-  }, [filteredRuns, safePage]);
+    return runs.slice(start, start + PAGE_SIZE);
+  }, [runs, safePage]);
 
   const latestRun = runs[0] || null;
   const latestAllPass = latestRun ? latestRun.failed === 0 : null;
@@ -655,32 +615,13 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
         <div className="lg:col-span-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col shadow-sm">
           <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-xs font-semibold text-slate-800 dark:text-slate-200 uppercase tracking-wider tabular-nums">
-              Recent Runs ({filteredRuns.length})
+              Recent Runs ({runs.length})
             </h2>
-            <SegmentedControl<'last10' | 'last7days'>
-              activeVariant="brand"
-              size="sm"
-              value={historyMode}
-              onChange={(val) => {
-                setHistoryMode(val);
-                setCurrentPage(1);
-                if (val === 'last10' && selectedRunId && !runs.slice(0, PAGE_SIZE).some((r) => r.id === selectedRunId)) {
-                  setSelectedRunId(null);
-                  setManualTabOverrideId(null);
-                }
-              }}
-              options={[
-                { value: 'last10', label: 'Last 10' },
-                { value: 'last7days', label: 'Last 7 Days' },
-              ]}
-            />
           </div>
           <div className="divide-y divide-slate-200 dark:divide-slate-800 max-h-[520px] overflow-y-auto flex-1">
-            {filteredRuns.length === 0 ? (
+            {runs.length === 0 ? (
               <div className="p-6 text-center text-xs text-slate-600 dark:text-slate-400">
-                {runs.length === 0
-                  ? 'No smoke test runs recorded yet.'
-                  : 'No smoke test runs recorded in the last 7 days.'}
+                No smoke test runs recorded yet.
               </div>
             ) : (
               paginatedRuns.map((run) => {
@@ -731,11 +672,11 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
               })
             )}
           </div>
-          {filteredRuns.length > 0 && (
+          {runs.length > 0 && (
             <div className="px-4 py-2.5 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 flex items-center justify-between gap-2 text-[11px] text-slate-600 dark:text-slate-400 tabular-nums">
               <span className="font-mono">
-                {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, filteredRuns.length)} of{' '}
-                {filteredRuns.length}
+                {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, runs.length)} of{' '}
+                {runs.length}
               </span>
               <div className="flex items-center gap-1">
                 <button

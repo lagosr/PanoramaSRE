@@ -76,6 +76,14 @@ import {
   partitionExternalActions,
   type WafActionEvaluation,
 } from '../../lib/waf-coverage';
+import {
+  buildRecommendedActionKey,
+  loadRecommendedActionDispositions,
+  partitionRecommendedActions,
+  saveRecommendedActionDispositions,
+  type RecommendedActionDisposition,
+  type RecommendedActionDispositionMap,
+} from '../../lib/recommended-action-triage';
 import type {
   CfAccessPolicyGrantDto,
   CfAttachedAccessPolicyDto,
@@ -296,6 +304,10 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
     useState<boolean>(false);
   const [showInternalInformationalFindings, setShowInternalInformationalFindings] =
     useState<boolean>(false);
+  const [actionDispositions, setActionDispositions] = useState<RecommendedActionDispositionMap>(() =>
+    loadRecommendedActionDispositions()
+  );
+  const [showHiddenActions, setShowHiddenActions] = useState<boolean>(false);
   const [isLoadingActors, setIsLoadingActors] = useState<boolean>(false);
 
   // Live Cloudflare WAF Custom Rules + Local Tracked Overrides state
@@ -885,14 +897,29 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
     return map;
   }, [actors]);
 
-  const partitionedExternalActions = useMemo(
-    () => partitionExternalActions(externalActions, wafRules, externalCampaigns),
-    [externalActions, wafRules, externalCampaigns]
+  const partitionedExternalActions = useMemo(() => {
+    const wafPart = partitionExternalActions(externalActions, wafRules, externalCampaigns);
+    const triagePart = partitionRecommendedActions(wafPart.visibleActions, actionDispositions);
+    return {
+      visibleActions: triagePart.active,
+      hiddenActions: triagePart.hidden,
+      suppressedCoveredCount: wafPart.suppressedCoveredCount,
+    };
+  }, [externalActions, wafRules, externalCampaigns, actionDispositions]);
+
+  const internalActionsState = useMemo(
+    () =>
+      partitionRecommendedActions(
+        internalActions.map((action) => ({ action })),
+        actionDispositions
+      ),
+    [internalActions, actionDispositions]
   );
 
   const overviewActionsState = useMemo(() => {
     const all = geminiBrief?.recommendedActions || [];
-    const visible: Array<{ action: GeminiActionDto; coverage: WafActionEvaluation | null }> = [];
+    const candidateVisible: Array<{ action: GeminiActionDto; coverage: WafActionEvaluation | null }> =
+      [];
     let suppressedCount = 0;
 
     for (const act of all) {
@@ -902,13 +929,14 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
           suppressedCount += 1;
           continue;
         }
-        visible.push({ action: act, coverage: cov });
+        candidateVisible.push({ action: act, coverage: cov });
       } else {
-        visible.push({ action: act, coverage: null });
+        candidateVisible.push({ action: act, coverage: null });
       }
     }
-    return { visible, suppressedCount };
-  }, [geminiBrief, wafRules, externalCampaigns]);
+    const triagePart = partitionRecommendedActions(candidateVisible, actionDispositions);
+    return { visible: triagePart.active, hidden: triagePart.hidden, suppressedCount };
+  }, [geminiBrief, wafRules, externalCampaigns, actionDispositions]);
 
   const siemContainer = useMemo(
     () =>
@@ -955,6 +983,56 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
     } catch (err) {
       setSourceFeedback({ text: `Snooze failed: ${String(err)}`, tone: 'err' });
     }
+  };
+
+  const handleSnoozeRecommendedAction = (act: GeminiActionDto, days: number) => {
+    const key = buildRecommendedActionKey(act);
+    if (!key) return;
+    const snoozedUntil = new Date(Date.now() + days * 86_400_000).toISOString();
+    const next: RecommendedActionDispositionMap = {
+      ...actionDispositions,
+      [key]: {
+        key,
+        status: 'SNOOZED',
+        snoozedUntil,
+        updatedAt: new Date().toISOString(),
+        actionLabel: act.action,
+        surface: act.surface,
+      },
+    };
+    setActionDispositions(next);
+    saveRecommendedActionDispositions(next);
+    setSourceFeedback({ text: `Snoozed recommended action for ${days} day(s).`, tone: 'ok' });
+    setTimeout(() => setSourceFeedback(null), 3500);
+  };
+
+  const handleDismissRecommendedAction = (act: GeminiActionDto) => {
+    const key = buildRecommendedActionKey(act);
+    const next: RecommendedActionDispositionMap = {
+      ...actionDispositions,
+      [key]: {
+        key,
+        status: 'DISMISSED',
+        snoozedUntil: null,
+        updatedAt: new Date().toISOString(),
+        actionLabel: act.action,
+        surface: act.surface,
+      },
+    };
+    setActionDispositions(next);
+    saveRecommendedActionDispositions(next);
+    setSourceFeedback({ text: 'Permanently dismissed recommended action.', tone: 'ok' });
+    setTimeout(() => setSourceFeedback(null), 3500);
+  };
+
+  const handleRestoreRecommendedAction = (key: string) => {
+    if (!(key in actionDispositions)) return;
+    const next = { ...actionDispositions };
+    delete next[key];
+    setActionDispositions(next);
+    saveRecommendedActionDispositions(next);
+    setSourceFeedback({ text: 'Restored recommended action to active view.', tone: 'ok' });
+    setTimeout(() => setSourceFeedback(null), 3500);
   };
 
   const handleAllowlistActor = async (actor: ThreatActorRow) => {
@@ -1510,7 +1588,8 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
     act: GeminiActionDto,
     idx: number,
     prefix: string,
-    wafCoverage?: WafActionEvaluation | null
+    wafCoverage?: WafActionEvaluation | null,
+    hiddenState?: { disposition: RecommendedActionDisposition; key: string }
   ) => {
     const copyKey = `${prefix}-waf-${idx}`;
     const surfaceDomain = classifyActionSurface(act.surface);
@@ -1561,68 +1640,107 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
             </span>
           </div>
 
-          <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
-            {act.wafRuleSnippet && (
-              <button
-                type="button"
-                onClick={() => void handleCopyText(copyKey, act.wafRuleSnippet || '')}
-                className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-              >
-                {copiedKey === copyKey ? (
-                  <Check className="w-3.5 h-3.5 text-emerald-500" />
-                ) : (
-                  <Copy className="w-3.5 h-3.5" />
-                )}
-                <span>
-                  {copiedKey === copyKey
-                    ? 'Copied!'
-                    : isPartialWaf
-                    ? 'Copy Tightened Snippet'
-                    : 'Copy WAF Rule'}
-                </span>
-              </button>
-            )}
-            {isUncoveredWafAdd && act.wafRuleSnippet && (
-              <button
-                type="button"
-                onClick={() =>
-                  handlePrefillMarkCovered(
-                    deepLinkZoneForAction(`${act.action} ${act.wafRuleSnippet || ''}`),
-                    act.action.slice(0, 64),
-                    act.wafRuleSnippet || ''
-                  )
-                }
-                className="btn-ghost text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
-                title="Track this rule as already deployed in Cloudflare"
-              >
-                <CheckCircle2 className="w-3.5 h-3.5" />
-                <span>Mark Covered</span>
-              </button>
-            )}
-            {isCrossover ? (
-              <button
-                type="button"
-                onClick={() => setSubView('allowlist')}
-                className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-              >
-                <Sliders className="w-3.5 h-3.5" />
-                <span>Open Allowlist &amp; Controls</span>
-              </button>
+          <div className="flex flex-wrap items-center gap-2">
+            {hiddenState ? (
+              <>
+                <StatusBadge
+                  label={
+                    hiddenState.disposition.status === 'DISMISSED'
+                      ? 'Permanently Dismissed'
+                      : `Snoozed${
+                          formatSnoozeRemaining(hiddenState.disposition.snoozedUntil)
+                            ? ` · ${formatSnoozeRemaining(hiddenState.disposition.snoozedUntil)}`
+                            : ''
+                        }`
+                  }
+                  variant={hiddenState.disposition.status === 'DISMISSED' ? 'neutral' : 'info'}
+                />
+                <button
+                  type="button"
+                  onClick={() => handleRestoreRecommendedAction(hiddenState.key)}
+                  className="btn-secondary text-xs whitespace-nowrap flex-shrink-0"
+                >
+                  Restore
+                </button>
+              </>
             ) : (
-              <button
-                type="button"
-                onClick={() => void handleOpenExternal(deepUrl)}
-                className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-              >
-                <ExternalLink className="w-3.5 h-3.5" />
-                <span>
-                  {isUnifi
-                    ? 'Open UniFi Console'
-                    : isZt
-                    ? 'Open Zero Trust Logs'
-                    : 'Open Cloudflare Events'}
-                </span>
-              </button>
+              <>
+                {act.wafRuleSnippet && (
+                  <button
+                    type="button"
+                    onClick={() => void handleCopyText(copyKey, act.wafRuleSnippet || '')}
+                    className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                  >
+                    {copiedKey === copyKey ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-500" />
+                    ) : (
+                      <Copy className="w-3.5 h-3.5" />
+                    )}
+                    <span>
+                      {copiedKey === copyKey
+                        ? 'Copied!'
+                        : isPartialWaf
+                        ? 'Copy Tightened Snippet'
+                        : 'Copy WAF Rule'}
+                    </span>
+                  </button>
+                )}
+                {isUncoveredWafAdd && act.wafRuleSnippet && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handlePrefillMarkCovered(
+                        deepLinkZoneForAction(`${act.action} ${act.wafRuleSnippet || ''}`),
+                        act.action.slice(0, 64),
+                        act.wafRuleSnippet || ''
+                      )
+                    }
+                    className="btn-ghost text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+                    title="Track this rule as already deployed in Cloudflare"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Mark Covered</span>
+                  </button>
+                )}
+                {isCrossover ? (
+                  <button
+                    type="button"
+                    onClick={() => setSubView('allowlist')}
+                    className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                  >
+                    <Sliders className="w-3.5 h-3.5" />
+                    <span>Open Allowlist &amp; Controls</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => void handleOpenExternal(deepUrl)}
+                    className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span>
+                      {isUnifi
+                        ? 'Open UniFi Console'
+                        : isZt
+                        ? 'Open Zero Trust Logs'
+                        : 'Open Cloudflare Events'}
+                    </span>
+                  </button>
+                )}
+                <SnoozeSplitButton
+                  targetLabel="this recommended action"
+                  onSnooze={(days) => handleSnoozeRecommendedAction(act, days)}
+                />
+                <button
+                  type="button"
+                  onClick={() => handleDismissRecommendedAction(act)}
+                  className="btn-ghost text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+                  title="Permanently dismiss this recommended action so it will not reappear in future runs"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  <span>Dismiss</span>
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -2644,7 +2762,9 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                 </div>
               </div>
 
-              {(overviewActionsState.visible.length > 0 || overviewActionsState.suppressedCount > 0) && (
+              {(overviewActionsState.visible.length > 0 ||
+                overviewActionsState.hidden.length > 0 ||
+                overviewActionsState.suppressedCount > 0) && (
                 <div className="space-y-3 pt-2 border-t border-slate-200 dark:border-slate-800">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="text-xs font-mono font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider tabular-nums">
@@ -2659,12 +2779,36 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                   </div>
                   {overviewActionsState.visible.length === 0 ? (
                     <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-400">
-                      All external WAF actions for this run are already mitigated by deployed Cloudflare custom rules.
+                      {overviewActionsState.hidden.length > 0
+                        ? 'All remaining recommended actions have been snoozed or permanently dismissed.'
+                        : 'All external WAF actions for this run are already mitigated by deployed Cloudflare custom rules.'}
                     </div>
                   ) : (
                     <div className="space-y-2.5">
                       {overviewActionsState.visible.map((item, idx) =>
                         renderActionRow(item.action, idx, 'ov-act', item.coverage)
+                      )}
+                    </div>
+                  )}
+                  {overviewActionsState.hidden.length > 0 && (
+                    <div className="space-y-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setShowHiddenActions((p) => !p)}
+                        className="btn-secondary text-xs whitespace-nowrap flex-shrink-0"
+                      >
+                        {showHiddenActions ? 'Hide' : 'Show'} Snoozed &amp; Permanently Dismissed Actions (
+                        {overviewActionsState.hidden.length})
+                      </button>
+                      {showHiddenActions && (
+                        <div className="space-y-2">
+                          {overviewActionsState.hidden.map((item, idx) =>
+                            renderActionRow(item.action, idx, 'ov-hidden-act', item.coverage, {
+                              disposition: item.disposition,
+                              key: item.key,
+                            })
+                          )}
+                        </div>
                       )}
                     </div>
                   )}
@@ -3697,6 +3841,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
               )}
 
               {(partitionedExternalActions.visibleActions.length > 0 ||
+                partitionedExternalActions.hiddenActions.length > 0 ||
                 partitionedExternalActions.suppressedCoveredCount > 0) && (
                 <div className="space-y-2.5 pt-2 border-t border-slate-200 dark:border-slate-800">
                   <div className="flex flex-wrap items-center justify-between gap-2">
@@ -3712,12 +3857,36 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                   </div>
                   {partitionedExternalActions.visibleActions.length === 0 ? (
                     <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-400">
-                      All suggested Cloudflare WAF additions are already covered by active rules.
+                      {partitionedExternalActions.hiddenActions.length > 0
+                        ? 'All remaining external Cloudflare actions are snoozed or permanently dismissed.'
+                        : 'All suggested Cloudflare WAF additions are already covered by active rules.'}
                     </div>
                   ) : (
                     partitionedExternalActions.visibleActions.map((item, idx) =>
                       renderActionRow(item.action, idx, 'ext-act', item.coverage)
                     )
+                  )}
+                  {partitionedExternalActions.hiddenActions.length > 0 && (
+                    <div className="space-y-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setShowHiddenActions((p) => !p)}
+                        className="btn-secondary text-xs whitespace-nowrap flex-shrink-0"
+                      >
+                        {showHiddenActions ? 'Hide' : 'Show'} Snoozed &amp; Permanently Dismissed Actions (
+                        {partitionedExternalActions.hiddenActions.length})
+                      </button>
+                      {showHiddenActions && (
+                        <div className="space-y-2">
+                          {partitionedExternalActions.hiddenActions.map((item, idx) =>
+                            renderActionRow(item.action, idx, 'ext-hidden-act', item.coverage, {
+                              disposition: item.disposition,
+                              key: item.key,
+                            })
+                          )}
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
               )}
@@ -3917,12 +4086,37 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                         )}
                       </div>
                     )}
-                    {internalActions.length > 0 && (
+                    {(internalActionsState.active.length > 0 ||
+                      internalActionsState.hidden.length > 0) && (
                       <div className="space-y-2.5 pt-2 border-t border-slate-200 dark:border-slate-800">
-                        <div className="text-xs font-mono font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
-                          Recommended Internal Actions ({internalActions.length})
+                        <div className="text-xs font-mono font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider tabular-nums">
+                          Recommended Internal Actions ({internalActionsState.active.length})
                         </div>
-                        {internalActions.map((act, idx) => renderActionRow(act, idx, 'int-act'))}
+                        {internalActionsState.active.map((item, idx) =>
+                          renderActionRow(item.action, idx, 'int-act')
+                        )}
+                        {internalActionsState.hidden.length > 0 && (
+                          <div className="space-y-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={() => setShowHiddenActions((p) => !p)}
+                              className="btn-secondary text-xs whitespace-nowrap flex-shrink-0"
+                            >
+                              {showHiddenActions ? 'Hide' : 'Show'} Snoozed &amp; Permanently Dismissed Actions (
+                              {internalActionsState.hidden.length})
+                            </button>
+                            {showHiddenActions && (
+                              <div className="space-y-2">
+                                {internalActionsState.hidden.map((item, idx) =>
+                                  renderActionRow(item.action, idx, 'int-hidden-act', null, {
+                                    disposition: item.disposition,
+                                    key: item.key,
+                                  })
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     )}
                   </>

@@ -32,10 +32,12 @@ describe('Telemetry UI stability and actionable callouts', () => {
       <StageWaterfallChart rows={rows} onSelectApp={vi.fn()} />
     );
 
-    expect(html).toContain('data-testid="stage-waterfall-hover-readout"');
-    expect(html).toContain('h-[76px]');
-    expect(html).toContain('shrink-0');
-    expect(html).toContain('Hover any application bar above to inspect its exact per-stage breakdown');
+    expect(html).not.toContain('data-testid="stage-waterfall-hover-readout"');
+    expect(html).toContain('data-testid="stage-waterfall-row-meta-basket"');
+    expect(html).toContain('h-[36px]');
+    expect(html).toContain('opacity-0');
+    expect(html).toContain('S1 Typecheck:');
+    expect(html).toContain('Smoke Gate:');
   });
 
   it('renders BuildTelemetryView actionable issue banner with 1:1 triage controls and omits it when clean', () => {
