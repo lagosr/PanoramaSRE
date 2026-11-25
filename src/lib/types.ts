@@ -1272,12 +1272,25 @@ export interface CfTunnelInfo {
   activeConnections: number;
 }
 
+export interface VerifiedFamilySessionDto {
+  email: string;
+  ipAddress: string;
+  asn?: string;
+  asOrg?: string;
+  country?: string;
+  authSource: string;
+  requests: number;
+  origin200s: number;
+  hosts: string[];
+}
+
 export interface ZeroTrustSummary {
   accessAppCount: number;
   accessAllowed: number;
   accessDenied: number;
   tunnels: CfTunnelInfo[];
   auditMutations: number;
+  verifiedFamilySessions?: VerifiedFamilySessionDto[];
 }
 
 export interface InternalNetworkSummary {

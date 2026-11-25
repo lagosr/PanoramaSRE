@@ -24,10 +24,11 @@ mod tests {
     };
     use panorama_sre_lib::commands::threat_intel_ops::{
         build_waf_rule_expression, classify_host_sensitivity, evaluate_stage0_triage,
-        find_active_non_us_waf_rule, is_allowlisted, parse_gemini_threat_brief,
-        parse_unifi_cef_ndjson, should_dispatch_threat_pushover, should_escalate_to_tier2,
-        validate_ipv4_list, CfAuditLogEntry, CfHttpEvent, CfIpIntelInfo, CfWafRuleDto,
-        CloudflareSecuritySnapshot, DomainProfile, PanoramaAuthTelemetry, WshSecuritySnapshot,
+        find_active_non_us_waf_rule, ipv6_prefix_64, is_allowlisted, is_public_routable_ip,
+        parse_gemini_threat_brief, parse_unifi_cef_ndjson, should_dispatch_threat_pushover,
+        should_escalate_to_tier2, validate_ipv4_list, CfAccessLogEntry, CfAuditLogEntry,
+        CfHttpEvent, CfIpIntelInfo, CfWafRuleDto, CfZoneSummary, CloudflareSecuritySnapshot,
+        DomainProfile, PanoramaAuthTelemetry, WshSecuritySnapshot,
     };
     use panorama_sre_lib::commands::unifi_ops::{
         enrich_unifi_topology, merge_unifi_network_detail, parse_unifi_clients_json,
@@ -2510,5 +2511,268 @@ mod tests {
             rows.iter().find(|r| r.id == "f-real-exploit").unwrap().disposition,
             "ACTIVE"
         );
+    }
+
+    fn make_cf_snapshot_for_family_tests(
+        http_events: Vec<CfHttpEvent>,
+        access_logs: Vec<CfAccessLogEntry>,
+    ) -> CloudflareSecuritySnapshot {
+        CloudflareSecuritySnapshot {
+            account_id: "acct-1".to_string(),
+            zones: vec![CfZoneSummary {
+                id: "z-1".to_string(),
+                name: "panoramadr.com".to_string(),
+                plan: "Free".to_string(),
+                total_requests: http_events.len() as u64,
+                total_bytes: 0,
+                error_4xx_5xx: 0,
+                firewall_events_count: 0,
+                untrusted_origin_200s: 0,
+            }],
+            http_events,
+            firewall_events: vec![],
+            access_app_count: 5,
+            access_logs,
+            tunnels: vec![],
+            audit_logs: vec![],
+            ip_intel: std::collections::HashMap::new(),
+            waf_rules: vec![],
+            waf_zones_budget: vec![],
+            waf_read_status: "ok".to_string(),
+        }
+    }
+
+    fn make_basket_http_event(ip: &str) -> CfHttpEvent {
+        CfHttpEvent {
+            datetime: "2026-11-24T23:58:48Z".to_string(),
+            client_ip: ip.to_string(),
+            client_asn: "21928".to_string(),
+            client_asn_desc: "T-Mobile USA, Inc.".to_string(),
+            client_country: "US".to_string(),
+            host: "wsh.panoramadr.com".to_string(),
+            method: "GET".to_string(),
+            path: "/basket/lists".to_string(),
+            query: String::new(),
+            user_agent: "Mozilla/5.0".to_string(),
+            edge_status: 200,
+            origin_status: 200,
+            security_action: String::new(),
+            security_source: String::new(),
+            ray_name: "a5fc0f226933d302".to_string(),
+        }
+    }
+
+    fn make_email_allowlist_entry(email: &str) -> Vec<ThreatAllowlistRow> {
+        vec![ThreatAllowlistRow {
+            id: "al-1".to_string(),
+            entry_type: "EMAIL".to_string(),
+            value: email.to_string(),
+            label: "Family Member".to_string(),
+            created_at: "2026-11-24T00:00:00Z".to_string(),
+        }]
+    }
+
+    #[test]
+    fn test_public_routable_ip_and_ipv6_prefix_64() {
+        assert!(!is_public_routable_ip("127.0.0.1"));
+        assert!(!is_public_routable_ip("100.64.0.5"));
+        assert!(!is_public_routable_ip("172.25.25.5"));
+        assert!(!is_public_routable_ip("192.168.1.10"));
+        assert!(!is_public_routable_ip("::1"));
+        assert!(!is_public_routable_ip("fe80::1"));
+        assert!(!is_public_routable_ip("fd00::1"));
+        assert!(is_public_routable_ip("2607:fb91:7c6:892:ac39:bbf2:83c8:a0d8"));
+
+        assert_eq!(
+            ipv6_prefix_64("2607:fb91:7c6:892:ac39:bbf2:83c8:a0d8").as_deref(),
+            Some("2607:fb91:07c6:0892::/64")
+        );
+        assert_eq!(
+            ipv6_prefix_64("2607:fb91:7c6:892:1111:2222:3333:4444").as_deref(),
+            Some("2607:fb91:07c6:0892::/64")
+        );
+        assert_eq!(ipv6_prefix_64("127.0.0.1"), None);
+    }
+
+    #[test]
+    fn test_family_zero_trust_access_correlates_exact_and_rotated_mobile_ipv6() {
+        let access_ip = "2607:fb91:7c6:892:1111:2222:3333:4444";
+        let rotated_ip = "2607:fb91:7c6:892:ac39:bbf2:83c8:a0d8";
+        let cf = make_cf_snapshot_for_family_tests(
+            vec![make_basket_http_event(access_ip), make_basket_http_event(rotated_ip)],
+            vec![CfAccessLogEntry {
+                created_at: "2026-11-24T23:55:00Z".to_string(),
+                action: "login".to_string(),
+                allowed: true,
+                country: "US".to_string(),
+                email: "family@example.com".to_string(),
+                ip_address: access_ip.to_string(),
+                app_domain: "wsh.panoramadr.com".to_string(),
+                ray_id: "ray-1".to_string(),
+            }],
+        );
+        let allowlist = make_email_allowlist_entry("family@example.com");
+
+        let res = evaluate_stage0_triage(
+            "run-fam-1",
+            "2026-11-25T00:00:00Z",
+            Some(&cf),
+            None,
+            None,
+            &allowlist,
+            &[],
+            &[],
+        );
+
+        assert_eq!(res.overall_severity, "LOW");
+        assert!(!res.hard_hit);
+        assert!(res
+            .findings
+            .iter()
+            .all(|f| f.rule_id != "ORIGIN_BREACH_THROUGH"));
+        let sessions = res
+            .zero_trust_summary
+            .get("verifiedFamilySessions")
+            .and_then(|v| v.as_array())
+            .expect("verifiedFamilySessions array");
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions[0]["email"], "family@example.com");
+    }
+
+    #[test]
+    fn test_family_panorama_auth_session_correlates_without_anomalies() {
+        let mobile_ip = "2607:fb91:7c6:892:ac39:bbf2:83c8:a0d8";
+        let cf = make_cf_snapshot_for_family_tests(vec![make_basket_http_event(mobile_ip)], vec![]);
+        let wsh = WshSecuritySnapshot {
+            panorama_auth: PanoramaAuthTelemetry {
+                available: true,
+                active_sessions: vec![serde_json::json!({
+                    "id": "sess-1",
+                    "user_id": "u-1",
+                    "email": "family@example.com",
+                    "ip_address": mobile_ip,
+                })],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let allowlist = make_email_allowlist_entry("family@example.com");
+
+        let res = evaluate_stage0_triage(
+            "run-fam-2",
+            "2026-11-25T00:00:00Z",
+            Some(&cf),
+            None,
+            Some(&wsh),
+            &allowlist,
+            &[],
+            &[],
+        );
+
+        assert!(!res.hard_hit);
+        assert!(res
+            .findings
+            .iter()
+            .all(|f| f.rule_id != "ORIGIN_BREACH_THROUGH"));
+        let sessions = res.zero_trust_summary["verifiedFamilySessions"]
+            .as_array()
+            .unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0]["authSource"], "PanoramaAuth Session");
+    }
+
+    #[test]
+    fn test_family_panorama_auth_anomaly_stays_fail_closed_high() {
+        let mobile_ip = "2607:fb91:7c6:892:ac39:bbf2:83c8:a0d8";
+        let cf = make_cf_snapshot_for_family_tests(vec![make_basket_http_event(mobile_ip)], vec![]);
+        let wsh = WshSecuritySnapshot {
+            panorama_auth: PanoramaAuthTelemetry {
+                available: true,
+                anomalies: vec![
+                    serde_json::json!({ "ip_address": mobile_ip, "rule_id": "PASSKEY_MISMATCH" }),
+                ],
+                active_sessions: vec![serde_json::json!({
+                    "id": "sess-1",
+                    "user_id": "u-1",
+                    "email": "family@example.com",
+                    "ip_address": mobile_ip,
+                })],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let allowlist = make_email_allowlist_entry("family@example.com");
+
+        let res = evaluate_stage0_triage(
+            "run-fam-3",
+            "2026-11-25T00:00:00Z",
+            Some(&cf),
+            None,
+            Some(&wsh),
+            &allowlist,
+            &[],
+            &[],
+        );
+
+        assert_eq!(res.overall_severity, "HIGH");
+        assert!(res.hard_hit);
+        assert!(res
+            .findings
+            .iter()
+            .any(|f| f.rule_id == "ORIGIN_BREACH_THROUGH"));
+    }
+
+    #[test]
+    fn test_family_unallowlisted_email_and_unauthenticated_traffic_remain_high() {
+        let ip = "2607:fb91:7c6:892:ac39:bbf2:83c8:a0d8";
+        let cf_with_unlisted_login = make_cf_snapshot_for_family_tests(
+            vec![make_basket_http_event(ip)],
+            vec![CfAccessLogEntry {
+                created_at: "2026-11-24T23:55:00Z".to_string(),
+                action: "login".to_string(),
+                allowed: true,
+                country: "US".to_string(),
+                email: "newuser@example.com".to_string(),
+                ip_address: ip.to_string(),
+                app_domain: "wsh.panoramadr.com".to_string(),
+                ray_id: "ray-2".to_string(),
+            }],
+        );
+        let res_unlisted = evaluate_stage0_triage(
+            "run-fam-4",
+            "2026-11-25T00:00:00Z",
+            Some(&cf_with_unlisted_login),
+            None,
+            None,
+            &[],
+            &[],
+            &[],
+        );
+        let finding = res_unlisted
+            .findings
+            .iter()
+            .find(|f| f.rule_id == "ORIGIN_BREACH_THROUGH")
+            .expect("ORIGIN_BREACH_THROUGH finding");
+        assert_eq!(finding.severity, "HIGH");
+        assert!(finding.evidence_json.contains("newuser@example.com"));
+        assert!(finding.evidence_json.contains("UNALLOWLISTED_ACCESS_EMAIL"));
+
+        let cf_unauth = make_cf_snapshot_for_family_tests(vec![make_basket_http_event(ip)], vec![]);
+        let res_unauth = evaluate_stage0_triage(
+            "run-fam-5",
+            "2026-11-25T00:00:00Z",
+            Some(&cf_unauth),
+            None,
+            None,
+            &[],
+            &[],
+            &[],
+        );
+        let finding_unauth = res_unauth
+            .findings
+            .iter()
+            .find(|f| f.rule_id == "ORIGIN_BREACH_THROUGH")
+            .expect("unauthenticated ORIGIN_BREACH_THROUGH");
+        assert!(finding_unauth.evidence_json.contains("UNAUTHENTICATED"));
     }
 }

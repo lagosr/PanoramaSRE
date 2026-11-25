@@ -1707,28 +1707,42 @@ impl SreDatabase {
             "EMAIL" => {
                 let email_lower = clean_val.to_ascii_lowercase();
                 let mut stmt = self.conn.prepare(
-                    "SELECT id, summary, evidence_json
+                    "SELECT id, rule_id, actor_ip, summary, evidence_json
                      FROM threat_findings
-                     WHERE rule_id IN ('CONTROL_PLANE_MUTATION', 'CONTROL_PLANE_ADMIN_CHANGE', 'ZT_UNEXPECTED_ACCESS')
+                     WHERE rule_id IN ('CONTROL_PLANE_MUTATION', 'CONTROL_PLANE_ADMIN_CHANGE', 'ZT_UNEXPECTED_ACCESS', 'ORIGIN_BREACH_THROUGH')
                        AND UPPER(COALESCE(disposition, 'ACTIVE')) = 'ACTIVE'",
                 )?;
                 let rows = stmt.query_map([], |row| {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
                     ))
                 })?;
                 let mut ids = Vec::new();
+                let mut origin_ips = Vec::new();
                 for r in rows {
-                    let (id, summary, ev) = r?;
+                    let (id, rule_id, actor_ip, summary, ev) = r?;
                     if ev.to_ascii_lowercase().contains(&email_lower)
                         || summary.to_ascii_lowercase().contains(&email_lower)
                     {
                         ids.push(id);
+                        if rule_id == "ORIGIN_BREACH_THROUGH" {
+                            if let Some(ip) = actor_ip {
+                                let clean_ip = ip.trim().to_string();
+                                if !clean_ip.is_empty() {
+                                    origin_ips.push(clean_ip);
+                                }
+                            }
+                        }
                     }
                 }
                 drop(stmt);
+                for ip in origin_ips {
+                    let _ = self.set_threat_actor_disposition(&ip, "RESOLVED");
+                }
                 self.resolve_findings_by_ids(&ids, note)
             }
             _ => Ok(0),

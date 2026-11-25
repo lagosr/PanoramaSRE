@@ -1025,10 +1025,20 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
     const isFindingSnoozed = findingDisp === 'SNOOZED';
     const findingSnoozeRem = isFindingSnoozed ? formatSnoozeRemaining(f.snoozedUntil) : null;
 
-    const auditEvidence = f.ruleId.startsWith('CONTROL_PLANE')
-      ? safeParseJson<{ actorEmail?: string; actor_email?: string }>(f.evidenceJson, {})
-      : null;
-    const adminEmail = (auditEvidence?.actorEmail || auditEvidence?.actor_email || '').trim();
+    const auditEvidence =
+      f.ruleId.startsWith('CONTROL_PLANE') || f.ruleId === 'ORIGIN_BREACH_THROUGH'
+        ? safeParseJson<{
+            actorEmail?: string;
+            actor_email?: string;
+            matchedAccessEmails?: string[];
+          }>(f.evidenceJson, {})
+        : null;
+    const adminEmail = (
+      auditEvidence?.actorEmail ||
+      auditEvidence?.actor_email ||
+      auditEvidence?.matchedAccessEmails?.[0] ||
+      ''
+    ).trim();
     const isAdminAlreadyAllowlisted = Boolean(
       adminEmail &&
         allowlist.some(
@@ -1166,16 +1176,22 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
             {findingDisp === 'ACTIVE' &&
               adminEmail &&
               !isAdminAlreadyAllowlisted &&
-              f.ruleId === 'CONTROL_PLANE_MUTATION' && (
+              (f.ruleId === 'CONTROL_PLANE_MUTATION' || f.ruleId === 'ORIGIN_BREACH_THROUGH') && (
                 <button
                   type="button"
                   onClick={() =>
-                    void handleAllowlistFindingTarget('EMAIL', adminEmail, 'Trusted Cloudflare Admin')
+                    void handleAllowlistFindingTarget(
+                      'EMAIL',
+                      adminEmail,
+                      f.ruleId === 'ORIGIN_BREACH_THROUGH'
+                        ? 'Trusted Family / Zero Trust Email'
+                        : 'Trusted Cloudflare Admin'
+                    )
                   }
-                  className="btn-tonal text-xs whitespace-nowrap flex-shrink-0"
-                  title={`Trust Cloudflare admin email ${adminEmail} in PanoramaSRE allowlist`}
+                  className="btn-primary text-xs whitespace-nowrap flex-shrink-0"
+                  title={`Trust Zero Trust email ${adminEmail} in PanoramaSRE allowlist (correlates rotating cellular IPs)`}
                 >
-                  Trust Admin Email
+                  Trust Email ({adminEmail})
                 </button>
               )}
             {f.sourceLayer === 'UNIFI' && (
@@ -1796,6 +1812,19 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
               {actionableSummary.actionableFindings.map((f) => {
                 const isExt = classifyFindingSurface(f.sourceLayer) === 'external';
                 const targetDomId = `threat-finding-${f.id}`;
+                const spotlightMatchedEmail =
+                  f.ruleId === 'ORIGIN_BREACH_THROUGH'
+                    ? safeParseJson<{ matchedAccessEmails?: string[] }>(f.evidenceJson, {})
+                        .matchedAccessEmails?.[0]?.trim() || ''
+                    : '';
+                const isSpotlightEmailTrusted = Boolean(
+                  spotlightMatchedEmail &&
+                    allowlist.some(
+                      (r) =>
+                        r.entryType === 'EMAIL' &&
+                        r.value.trim().toLowerCase() === spotlightMatchedEmail.toLowerCase()
+                    )
+                );
                 return (
                   <div
                     key={`spotlight-find-${f.id}`}
@@ -1811,6 +1840,22 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                         </span>
                       </div>
                       <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                        {spotlightMatchedEmail && !isSpotlightEmailTrusted && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleAllowlistFindingTarget(
+                                'EMAIL',
+                                spotlightMatchedEmail,
+                                'Trusted Family / Zero Trust Email'
+                              )
+                            }
+                            className="btn-tonal text-xs whitespace-nowrap flex-shrink-0"
+                            title={`Trust Zero Trust email ${spotlightMatchedEmail} across rotating mobile IPs`}
+                          >
+                            Trust Email ({spotlightMatchedEmail})
+                          </button>
+                        )}
                         {isExt && f.actorIp && (
                           <button
                             type="button"
@@ -1822,7 +1867,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                               )
                             }
                             className="btn-tonal text-xs whitespace-nowrap flex-shrink-0"
-                            title="Add IP to local allowlist and resolve matching findings"
+                            title="Add static IP to local allowlist (for mobile cellular IPs, prefer Trust Email in Allowlist)"
                           >
                             Allowlist IP
                           </button>
@@ -2018,6 +2063,17 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
             <div className="text-[11px] font-mono text-slate-600 dark:text-slate-400 truncate">
               {zeroTrustSummary.accessAppCount} Access app(s) • Mutations: {zeroTrustSummary.auditMutations}
             </div>
+            {(zeroTrustSummary.verifiedFamilySessions?.length ?? 0) > 0 && (
+              <div
+                className="text-[11px] font-mono text-emerald-700 dark:text-emerald-400 truncate"
+                title={zeroTrustSummary.verifiedFamilySessions
+                  ?.map((s) => `${s.email} (${s.authSource} • ${s.requests} reqs)`)
+                  .join('\n')}
+              >
+                {zeroTrustSummary.verifiedFamilySessions!.length} Family Session
+                {zeroTrustSummary.verifiedFamilySessions!.length === 1 ? '' : 's'} Verified
+              </div>
+            )}
           </div>
 
           {/* Card 3: Internal UniFi & WSH */}
@@ -3621,6 +3677,15 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
               </button>
             </div>
 
+            <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs text-slate-700 dark:text-slate-300 space-y-1">
+              <div className="font-semibold text-slate-900 dark:text-slate-100">
+                Family &amp; Mobile Zero Trust Correlation
+              </div>
+              <p className="text-slate-600 dark:text-slate-400">
+                Add your family&apos;s Google OIDC emails as <code className="font-mono">Zero Trust Email</code> rules below. PanoramaSRE automatically correlates their Cloudflare Access logins and active <code className="font-mono">PanoramaAuth</code> sessions — including rotating cellular IPv6 <code className="font-mono">/64</code> addresses — without ever allowlisting broad carrier ASNs.
+              </p>
+            </div>
+
             <form onSubmit={(e) => void handleAddAllowlistRule(e)} className="grid grid-cols-1 md:grid-cols-12 gap-2.5 items-end">
               <div className="md:col-span-3">
                 <label className="block text-[11px] font-mono text-slate-500 mb-1">Type</label>
@@ -3644,7 +3709,11 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                   type="text"
                   value={newRuleValue}
                   onChange={(e) => setNewRuleValue(e.target.value)}
-                  placeholder="e.g. 203.0.113.10 or AS13335"
+                  placeholder={
+                    newRuleType === 'EMAIL'
+                      ? 'e.g. family@gmail.com'
+                      : 'e.g. 203.0.113.10 or AS13335'
+                  }
                   className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
                 />
               </div>

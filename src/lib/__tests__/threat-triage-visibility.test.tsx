@@ -29,7 +29,11 @@ function makeHighFinding(): ThreatFindingRow {
     actorAsn: 'AS21928',
     host: 'wsh.panoramadr.com',
     rayIdsJson: '["a5fc0f226933d302"]',
-    evidenceJson: '{"rayIds":["a5fc0f226933d302"]}',
+    evidenceJson: JSON.stringify({
+      rayIds: ['a5fc0f226933d302'],
+      matchedAccessEmails: ['family@example.com'],
+      authProofStatus: 'UNALLOWLISTED_ACCESS_EMAIL',
+    }),
     createdAt: '2026-11-25 00:00:46',
     disposition: 'ACTIVE',
   };
@@ -63,6 +67,16 @@ function makeRun(): ThreatAuditRunRow {
       accessDenied: 0,
       tunnels: [],
       auditMutations: 0,
+      verifiedFamilySessions: [
+        {
+          email: 'family@example.com',
+          ipAddress: '2607:fb91:7c6:892:ac39:bbf2:83c8:a0d8',
+          authSource: 'Cloudflare Access (/64)',
+          requests: 399,
+          origin200s: 364,
+          hosts: ['wsh.panoramadr.com'],
+        },
+      ],
     }),
     internalSummaryJson: JSON.stringify({
       unifiDevicesTotal: 4,
@@ -134,6 +148,8 @@ describe('High-threat triage visibility and direct HUD drill-down', () => {
     expect(spotlightIdx).toBeLessThan(contextRibbonIdx);
 
     expect(html).toContain('2607:fb91:7c6:892:ac39:bbf2:83c8:a0d8');
+    expect(html).toContain('Trust Email (family@example.com)');
+    expect(html).toContain('1 Family Session Verified');
     expect(html).toContain('Mark Resolved');
     expect(html).toContain('Allowlist IP');
     expect(html).toContain('Jump to Details');

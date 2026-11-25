@@ -18,7 +18,7 @@ use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -796,13 +796,16 @@ pub async fn collect_cloudflare_snapshot(
     }
 
     // Account-level Zero Trust Access, Tunnel, and Audit Logs
+    // Use at least a 72h lookback for Access login events so long-lived CF_Authorization mobile
+    // cookies correlate cleanly even on shorter 6h/24h HTTP windows.
+    let access_since_iso = since.min(until - ChronoDuration::hours(72)).to_rfc3339();
     let p_apps = format!("/accounts/{}/access/apps", account_id);
     let p_access = format!("/accounts/{}/access/logs/access_requests", account_id);
     let q_access = [
-        ("since", since_iso.clone()),
+        ("since", access_since_iso),
         ("until", until_iso.clone()),
         ("direction", "desc".to_string()),
-        ("limit", "100".to_string()),
+        ("limit", "250".to_string()),
     ];
     let p_tunnels = format!("/accounts/{}/cfd_tunnel", account_id);
     let q_tunnels = [("is_deleted", "false".to_string())];
@@ -1655,6 +1658,239 @@ pub fn classify_host_sensitivity(host: &str) -> DomainProfile {
     }
 }
 
+pub fn is_public_routable_ip(ip_str: &str) -> bool {
+    let Ok(ip) = ip_str.trim().parse::<IpAddr>() else {
+        return false;
+    };
+    match ip {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            let is_cgnat = o[0] == 100 && (o[1] & 0xc0) == 64;
+            !(v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.is_multicast()
+                || is_cgnat)
+        }
+        IpAddr::V6(v6) => {
+            let s = v6.segments();
+            let is_ula = (s[0] & 0xfe00) == 0xfc00;
+            let is_link_local = (s[0] & 0xffc0) == 0xfe80;
+            !(v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                || is_ula
+                || is_link_local)
+        }
+    }
+}
+
+pub fn ipv6_prefix_64(ip_str: &str) -> Option<String> {
+    if !is_public_routable_ip(ip_str) {
+        return None;
+    }
+    let Ok(v6) = ip_str.trim().parse::<Ipv6Addr>() else {
+        return None;
+    };
+    let s = v6.segments();
+    Some(format!("{:04x}:{:04x}:{:04x}:{:04x}::/64", s[0], s[1], s[2], s[3]))
+}
+
+#[derive(Debug, Clone)]
+pub struct AuthSessionProof {
+    pub email: String,
+    pub source: String,
+    pub country: String,
+    pub is_allowlisted_email: bool,
+}
+
+#[derive(Debug, Default)]
+pub struct SessionAuthIndex {
+    exact_ips: HashMap<String, AuthSessionProof>,
+    v6_prefixes: HashMap<String, AuthSessionProof>,
+}
+
+impl SessionAuthIndex {
+    fn insert_proof(
+        map: &mut HashMap<String, AuthSessionProof>,
+        key: String,
+        proof: AuthSessionProof,
+    ) {
+        match map.get(&key) {
+            Some(existing) if existing.is_allowlisted_email && !proof.is_allowlisted_email => {}
+            Some(existing)
+                if existing.is_allowlisted_email == proof.is_allowlisted_email
+                    && existing.source.starts_with("Cloudflare Access")
+                    && !proof.source.starts_with("Cloudflare Access") => {}
+            _ => {
+                map.insert(key, proof);
+            }
+        }
+    }
+
+    pub fn build(
+        cf_opt: Option<&CloudflareSecuritySnapshot>,
+        wsh_opt: Option<&WshSecuritySnapshot>,
+        allowlist: &[ThreatAllowlistRow],
+    ) -> Self {
+        let mut idx = Self::default();
+
+        // 1. Cloudflare Zero Trust Access successful logins
+        if let Some(cf) = cf_opt {
+            for al in &cf.access_logs {
+                if !al.allowed || !is_public_routable_ip(&al.ip_address) {
+                    continue;
+                }
+                let email_trim = al.email.trim();
+                if email_trim.is_empty() {
+                    continue;
+                }
+                let country_clean = al.country.trim().to_ascii_uppercase();
+                // Non-US logins only count as trusted if explicitly email-allowlisted AND allowed,
+                // otherwise still record proof with is_allowlisted_email = false for surfacing.
+                let email_allowlisted =
+                    is_allowlisted(allowlist, None, None, Some(email_trim), None)
+                        && (country_clean.is_empty() || country_clean == "US");
+
+                let ip_key = al.ip_address.trim().to_ascii_lowercase();
+                Self::insert_proof(
+                    &mut idx.exact_ips,
+                    ip_key,
+                    AuthSessionProof {
+                        email: email_trim.to_string(),
+                        source: "Cloudflare Access".to_string(),
+                        country: country_clean.clone(),
+                        is_allowlisted_email: email_allowlisted,
+                    },
+                );
+
+                if let Some(prefix) = ipv6_prefix_64(&al.ip_address) {
+                    Self::insert_proof(
+                        &mut idx.v6_prefixes,
+                        prefix,
+                        AuthSessionProof {
+                            email: email_trim.to_string(),
+                            source: "Cloudflare Access (/64)".to_string(),
+                            country: country_clean,
+                            is_allowlisted_email: email_allowlisted,
+                        },
+                    );
+                }
+            }
+        }
+
+        // 2. PanoramaAuth active sessions (fail-closed: exclude any IP or user_id with anomalies)
+        if let Some(wsh) = wsh_opt {
+            if wsh.panorama_auth.available {
+                let mut anomalous_ips: HashSet<String> = HashSet::new();
+                let mut anomalous_user_ids: HashSet<String> = HashSet::new();
+                for anom in &wsh.panorama_auth.anomalies {
+                    if let Some(ip) = anom.get("ip_address").and_then(|v| v.as_str()) {
+                        let clean = ip.trim().to_ascii_lowercase();
+                        if !clean.is_empty() {
+                            anomalous_ips.insert(clean);
+                        }
+                    }
+                    if let Some(uid) = anom.get("user_id").and_then(|v| v.as_str()) {
+                        let clean = uid.trim().to_string();
+                        if !clean.is_empty() {
+                            anomalous_user_ids.insert(clean);
+                        }
+                    } else if let Some(uid_num) = anom.get("user_id").and_then(|v| v.as_i64()) {
+                        anomalous_user_ids.insert(uid_num.to_string());
+                    }
+                }
+
+                for sess in &wsh.panorama_auth.active_sessions {
+                    let ip_raw = sess
+                        .get("ip_address")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .trim();
+                    let email_raw = sess
+                        .get("email")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .trim();
+                    if email_raw.is_empty() || !is_public_routable_ip(ip_raw) {
+                        continue;
+                    }
+                    let ip_key = ip_raw.to_ascii_lowercase();
+                    if anomalous_ips.contains(&ip_key) {
+                        continue;
+                    }
+                    let uid_str = sess
+                        .get("user_id")
+                        .and_then(|v| {
+                            v.as_str()
+                                .map(|s| s.trim().to_string())
+                                .or_else(|| v.as_i64().map(|n| n.to_string()))
+                        })
+                        .unwrap_or_default();
+                    if !uid_str.is_empty() && anomalous_user_ids.contains(&uid_str) {
+                        continue;
+                    }
+
+                    let email_allowlisted =
+                        is_allowlisted(allowlist, None, None, Some(email_raw), None);
+
+                    Self::insert_proof(
+                        &mut idx.exact_ips,
+                        ip_key,
+                        AuthSessionProof {
+                            email: email_raw.to_string(),
+                            source: "PanoramaAuth Session".to_string(),
+                            country: String::new(),
+                            is_allowlisted_email: email_allowlisted,
+                        },
+                    );
+
+                    if let Some(prefix) = ipv6_prefix_64(ip_raw) {
+                        Self::insert_proof(
+                            &mut idx.v6_prefixes,
+                            prefix,
+                            AuthSessionProof {
+                                email: email_raw.to_string(),
+                                source: "PanoramaAuth Session (/64)".to_string(),
+                                country: String::new(),
+                                is_allowlisted_email: email_allowlisted,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+
+        idx
+    }
+
+    pub fn lookup(&self, ip_str: &str) -> Option<&AuthSessionProof> {
+        let key = ip_str.trim().to_ascii_lowercase();
+        if let Some(exact) = self.exact_ips.get(&key) {
+            return Some(exact);
+        }
+        if let Some(prefix) = ipv6_prefix_64(ip_str) {
+            return self.v6_prefixes.get(&prefix);
+        }
+        None
+    }
+}
+
+#[derive(Default)]
+struct VerifiedFamilySessionAgg {
+    email: String,
+    ip_address: String,
+    asn: String,
+    as_org: String,
+    country: String,
+    auth_source: String,
+    requests: u64,
+    origin_200s: u64,
+    hosts: BTreeSet<String>,
+}
+
 fn ipv4_in_cidr(ip_str: &str, cidr: &str) -> bool {
     let Some((net_str, prefix_str)) = cidr.split_once('/') else {
         return false;
@@ -2155,6 +2391,8 @@ pub fn evaluate_stage0_triage(
     let mut cf_access_denied = 0usize;
     let mut cf_tunnel_summary = Vec::new();
     let mut cf_audit_mutations = 0usize;
+    let session_auth = SessionAuthIndex::build(cf_opt, wsh_opt, allowlist);
+    let mut verified_family_sessions: BTreeMap<String, VerifiedFamilySessionAgg> = BTreeMap::new();
 
     if let Some(cf) = cf_opt {
         let mut zone_origin_breach_counts: HashMap<String, u64> = HashMap::new();
@@ -2186,6 +2424,36 @@ pub fn evaluate_stage0_triage(
                     || ev.path.starts_with("/water")
                     || ev.path.starts_with("/basket")
                     || ev.path.starts_with("/energy"));
+
+            if profile == DomainProfile::StrictPrivate {
+                if let Some(proof) = session_auth.lookup(&ev.client_ip) {
+                    if proof.is_allowlisted_email {
+                        let agg_key =
+                            format!("{}|{}", proof.email.to_ascii_lowercase(), ev.client_ip);
+                        let agg = verified_family_sessions.entry(agg_key).or_insert_with(|| {
+                            VerifiedFamilySessionAgg {
+                                email: proof.email.clone(),
+                                ip_address: ev.client_ip.clone(),
+                                asn: ev.client_asn.clone(),
+                                as_org: ev.client_asn_desc.clone(),
+                                country: ev.client_country.clone(),
+                                auth_source: proof.source.clone(),
+                                requests: 0,
+                                origin_200s: 0,
+                                hosts: BTreeSet::new(),
+                            }
+                        });
+                        agg.requests += 1;
+                        if is_origin_app_hit {
+                            agg.origin_200s += 1;
+                        }
+                        if !ev.host.is_empty() {
+                            agg.hosts.insert(ev.host.clone());
+                        }
+                        continue;
+                    }
+                }
+            }
 
             let entry = rollups.entry(ev.client_ip.clone()).or_default();
             entry.asn = ev.client_asn.clone();
@@ -2270,7 +2538,12 @@ pub fn evaluate_stage0_triage(
         }
 
         for (ip, intel) in &cf.ip_intel {
-            if active_snoozed_ips.contains(ip) {
+            if active_snoozed_ips.contains(ip)
+                || session_auth
+                    .lookup(ip)
+                    .map(|p| p.is_allowlisted_email)
+                    .unwrap_or(false)
+            {
                 continue;
             }
             if !intel.tags.is_empty() && !is_allowlisted(allowlist, Some(ip), None, None, None) {
@@ -2324,6 +2597,22 @@ pub fn evaluate_stage0_triage(
                 .any(|h| classify_host_sensitivity(h) == DomainProfile::StrictPrivate);
 
             if r.origin_200s > 0 {
+                let matched_proof = session_auth.lookup(ip);
+                let matched_emails: Vec<String> = matched_proof
+                    .map(|p| vec![p.email.clone()])
+                    .unwrap_or_default();
+                let auth_proof_status = if matched_proof.is_some() {
+                    "UNALLOWLISTED_ACCESS_EMAIL"
+                } else {
+                    "UNAUTHENTICATED"
+                };
+                let auth_context_note = match matched_proof {
+                    Some(proof) => format!(
+                        " Matched {} login for '{}' (not yet in Allowlist) — click Trust Email if authorized.",
+                        proof.source, proof.email
+                    ),
+                    None => " No matching Cloudflare Access or PanoramaAuth session observed — investigate potential Zero Trust bypass.".to_string(),
+                };
                 make_finding(
                     "CLOUDFLARE",
                     "ORIGIN_BREACH_THROUGH",
@@ -2331,14 +2620,20 @@ pub fn evaluate_stage0_triage(
                     "ORIGIN_BREACH",
                     format!("Untrusted Origin Response on Strict Private Route ({})", ip),
                     format!(
-                        "{} (AS{} {}, {}) received {} origin 200/302 responses on protected routes.",
-                        ip, r.asn, r.as_org, r.country, r.origin_200s
+                        "{} (AS{} {}, {}) received {} origin 200/302 responses on protected routes.{}",
+                        ip, r.asn, r.as_org, r.country, r.origin_200s, auth_context_note
                     ),
                     r.hosts.iter().next().cloned(),
                     Some(ip.clone()),
                     Some(r.asn.clone()),
                     r.ray_ids.iter().cloned().collect(),
-                    json!({ "paths": r.paths, "origin_200s": r.origin_200s }),
+                    json!({
+                        "paths": r.paths,
+                        "origin_200s": r.origin_200s,
+                        "matchedAccessEmails": matched_emails,
+                        "authProofStatus": auth_proof_status,
+                        "authProofSource": matched_proof.map(|p| p.source.as_str()),
+                    }),
                 );
                 continue;
             }
@@ -3293,6 +3588,23 @@ pub fn evaluate_stage0_triage(
         });
     }
 
+    let verified_family_json: Vec<Value> = verified_family_sessions
+        .values()
+        .map(|v| {
+            json!({
+                "email": v.email,
+                "ipAddress": v.ip_address,
+                "asn": v.asn,
+                "asOrg": v.as_org,
+                "country": v.country,
+                "authSource": v.auth_source,
+                "requests": v.requests,
+                "origin200s": v.origin_200s,
+                "hosts": v.hosts.iter().cloned().collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+
     let zones_summary = json!(cf_zones_out);
     let zero_trust_summary = json!({
         "accessAppCount": cf_opt.map(|c| c.access_app_count).unwrap_or(0),
@@ -3300,6 +3612,7 @@ pub fn evaluate_stage0_triage(
         "accessDenied": cf_access_denied,
         "tunnels": cf_tunnel_summary,
         "auditMutations": cf_audit_mutations,
+        "verifiedFamilySessions": verified_family_json,
     });
     let internal_summary = json!({
         "unifiDevicesTotal": unifi_opt.map(|u| u.devices.len()).unwrap_or(0),
@@ -5676,3 +5989,4 @@ pub async fn get_unifi_siem_env_config(
         suggested_ips: "172.25.25.1,10.10.1.1,10.10.1.2".to_string(),
     })
 }
+
