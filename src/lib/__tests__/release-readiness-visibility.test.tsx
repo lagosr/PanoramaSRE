@@ -187,4 +187,44 @@ describe('Release-ready & behind-target high-visibility indicators', () => {
 
     expect(html).toContain('border-l-amber-500');
   });
+
+  it('stacks releases-behind-banner vertically so 6+ behind target pills never crush banner heading text', () => {
+    const sixBehind = [
+      { ...makeInSyncWshApp(), provenanceState: 'AHEAD' as const, manifest: { ...makeInSyncWshApp().manifest, slug: 'auth', appId: 'auth', displayName: 'PanoramaAuth' } },
+      { ...makeInSyncWshApp(), provenanceState: 'AHEAD' as const, manifest: { ...makeInSyncWshApp().manifest, slug: 'spendy', appId: 'spendy', displayName: 'SpendyLedger' } },
+      { ...makeInSyncWshApp(), provenanceState: 'AHEAD' as const, manifest: { ...makeInSyncWshApp().manifest, slug: 'biomed', appId: 'biomed', displayName: 'BiomedMaven' } },
+      { ...makeInSyncWshApp(), provenanceState: 'AHEAD' as const, manifest: { ...makeInSyncWshApp().manifest, slug: 'water', appId: 'water', displayName: 'WaterAnalyzer' } },
+      { ...makeInSyncWshApp(), provenanceState: 'AHEAD' as const, manifest: { ...makeInSyncWshApp().manifest, slug: 'basket', appId: 'basket', displayName: 'TastyBasket' } },
+      { ...makeInSyncWshApp(), provenanceState: 'AHEAD' as const, manifest: { ...makeInSyncWshApp().manifest, slug: 'energy', appId: 'energy', displayName: 'EnergyAnalyzer' } },
+    ].map((app) => ({
+      ...app,
+      composition: {
+        ...app.composition!,
+        app_id: app.manifest.appId,
+        state: 'AHEAD' as const,
+        ahead_count: 1,
+      },
+    }));
+
+    const html = renderToStaticMarkup(
+      <ReleasePipelineView
+        apps={sixBehind}
+        onTriggerDeploy={vi.fn()}
+        onTriggerDeployAll={vi.fn()}
+        onTriggerRollback={vi.fn()}
+      />
+    );
+
+    const bannerStart = html.indexOf('data-testid="releases-behind-banner"');
+    const masterDetailStart = html.indexOf('<div class="flex flex-col lg:flex-row items-start gap-5');
+    expect(bannerStart).toBeGreaterThan(-1);
+    expect(masterDetailStart).toBeGreaterThan(bannerStart);
+
+    const bannerHtml = html.slice(bannerStart, masterDetailStart);
+    expect(bannerHtml).toContain('6 Sites Behind Production — Ready for Release');
+    expect(bannerHtml).toContain('flex-col gap-3');
+    expect(bannerHtml).not.toContain('lg:flex-row');
+    expect(bannerHtml).toContain('flex-wrap items-center gap-2 w-full min-w-0');
+    expect(bannerHtml).not.toContain('flex-wrap items-center gap-2 shrink-0');
+  });
 });

@@ -766,7 +766,7 @@ export function ReleasePipelineView({
       {behindApps.length > 0 && (
         <div
           data-testid="releases-behind-banner"
-          className="rounded-2xl border-2 border-amber-500/60 bg-white dark:bg-slate-900 p-4 shadow-md flex flex-col lg:flex-row lg:items-center justify-between gap-3"
+          className="rounded-2xl border-2 border-amber-500/60 bg-white dark:bg-slate-900 p-4 shadow-md flex flex-col gap-3"
         >
           <div className="flex items-start gap-3 min-w-0">
             <div className="p-2 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-700 dark:text-amber-300 shrink-0">
@@ -782,7 +782,7 @@ export function ReleasePipelineView({
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <div className="flex flex-wrap items-center gap-2 w-full min-w-0">
             {behindApps.map((bApp) => {
               const ahead = bApp.composition?.ahead_count ?? bApp.composition?.undeployed_commits?.length ?? 0;
               const isSelectedTarget = selectedApp?.manifest.slug === bApp.manifest.slug;
