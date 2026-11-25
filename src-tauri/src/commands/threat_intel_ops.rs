@@ -2701,6 +2701,7 @@ struct IpRollup {
     cms_probe_unblocked: u64,
     stack_probe_blocked: u64,
     stack_probe_unblocked: u64,
+    strict_stack_probe_unblocked: u64,
     probe_200_or_5xx: u64,
     optin_hits: u64,
     optin_post_hits: u64,
@@ -2985,6 +2986,9 @@ pub fn evaluate_stage0_triage_with_quarantine(
                     entry.stack_probe_blocked += 1;
                 } else {
                     entry.stack_probe_unblocked += 1;
+                    if profile == DomainProfile::StrictPrivate {
+                        entry.strict_stack_probe_unblocked += 1;
+                    }
                 }
                 if ev.origin_status == 200 || ev.origin_status >= 500 {
                     entry.probe_200_or_5xx += 1;
@@ -3173,7 +3177,7 @@ pub fn evaluate_stage0_triage_with_quarantine(
 
             let total_stack = r.stack_probe_blocked + r.stack_probe_unblocked;
             if total_stack > 0 {
-                let sev = if r.probe_200_or_5xx > 0 || (has_strict && r.stack_probe_unblocked > 0) {
+                let sev = if r.probe_200_or_5xx > 0 || r.strict_stack_probe_unblocked > 0 {
                     "HIGH"
                 } else if r.stack_probe_unblocked >= 3 {
                     "MEDIUM"
@@ -3200,7 +3204,12 @@ pub fn evaluate_stage0_triage_with_quarantine(
                         Some(ip.clone()),
                         Some(r.asn.clone()),
                         r.ray_ids.iter().cloned().collect(),
-                        json!({ "paths": r.paths, "blockedHits": r.stack_probe_blocked, "unblockedHits": r.stack_probe_unblocked }),
+                        json!({
+                            "paths": r.paths,
+                            "blockedHits": r.stack_probe_blocked,
+                            "unblockedHits": r.stack_probe_unblocked,
+                            "strictUnblockedHits": r.strict_stack_probe_unblocked
+                        }),
                     );
                 }
             }
@@ -3640,9 +3649,9 @@ pub fn evaluate_stage0_triage_with_quarantine(
                 "ZERO_TRUST",
                 format!("PanoramaAuth Security Watchdog Triggered: {}", rule),
                 format!(
-                    "Action taken: {}; IP: {:?}; Details: {}",
+                    "Action taken: {}; IP: {}; Details: {}",
                     anom.get("action_taken").and_then(|v| v.as_str()).unwrap_or("unknown"),
-                    ip,
+                    ip.as_deref().unwrap_or("unknown"),
                     sanitize_bounded(
                         anom.get("details").and_then(|v| v.as_str()).unwrap_or(""),
                         180
@@ -4093,9 +4102,8 @@ pub fn evaluate_stage0_triage_with_quarantine(
             || r_opt
                 .map(|r| r.optin_hits >= 15 || r.optin_5xx > 0 || r.probe_200_or_5xx > 0)
                 .unwrap_or(false)
-            || (hits_strict
-                && (r_opt.map(|r| r.stack_probe_unblocked > 0).unwrap_or(false)
-                    || intel_opt.map(|i| !i.tags.is_empty()).unwrap_or(false)))
+            || r_opt.map(|r| r.strict_stack_probe_unblocked > 0).unwrap_or(false)
+            || (hits_strict && intel_opt.map(|i| !i.tags.is_empty()).unwrap_or(false))
         {
             "HIGH"
         } else if r_opt

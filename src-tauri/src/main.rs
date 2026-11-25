@@ -1362,6 +1362,115 @@ mod tests {
     }
 
     #[test]
+    fn test_cross_host_blocked_strict_probe_does_not_escalate_public_404_to_high() {
+        let cf_snap = CloudflareSecuritySnapshot {
+            account_id: "acct-1".into(),
+            zones: vec![],
+            http_events: vec![
+                // Actor 45.156.87.37 (NL) hits wsh.panoramadr.com (/.git/HEAD) -> BLOCKED at edge
+                CfHttpEvent {
+                    datetime: "2026-11-25T16:59:00Z".into(),
+                    client_ip: "45.156.87.37".into(),
+                    client_asn: "197170".into(),
+                    client_asn_desc: "TechTies Inc.".into(),
+                    client_country: "NL".into(),
+                    host: "wsh.panoramadr.com".into(),
+                    method: "GET".into(),
+                    path: "/.git/HEAD".into(),
+                    query: "".into(),
+                    user_agent: "curl/8.0".into(),
+                    edge_status: 403,
+                    origin_status: 0,
+                    security_action: "block".into(),
+                    security_source: "firewallCustom".into(),
+                    ray_name: "ray-wsh-block".into(),
+                },
+                // Same actor hits public parakith.com (/.git/HEAD) -> unblocked 404
+                CfHttpEvent {
+                    datetime: "2026-11-25T17:00:00Z".into(),
+                    client_ip: "45.156.87.37".into(),
+                    client_asn: "197170".into(),
+                    client_asn_desc: "TechTies Inc.".into(),
+                    client_country: "NL".into(),
+                    host: "parakith.com".into(),
+                    method: "GET".into(),
+                    path: "/.git/HEAD".into(),
+                    query: "".into(),
+                    user_agent: "curl/8.0".into(),
+                    edge_status: 404,
+                    origin_status: 404,
+                    security_action: "".into(),
+                    security_source: "".into(),
+                    ray_name: "ray-pub-404".into(),
+                },
+                // Actor 45.156.87.38 (US) sends unblocked /.git/HEAD directly to wsh.panoramadr.com -> MUST escalate HIGH
+                CfHttpEvent {
+                    datetime: "2026-11-25T17:01:00Z".into(),
+                    client_ip: "45.156.87.38".into(),
+                    client_asn: "197170".into(),
+                    client_asn_desc: "TechTies Inc.".into(),
+                    client_country: "US".into(),
+                    host: "wsh.panoramadr.com".into(),
+                    method: "GET".into(),
+                    path: "/.git/HEAD".into(),
+                    query: "".into(),
+                    user_agent: "curl/8.0".into(),
+                    edge_status: 404,
+                    origin_status: 404,
+                    security_action: "".into(),
+                    security_source: "".into(),
+                    ray_name: "ray-strict-unblocked".into(),
+                },
+            ],
+            firewall_events: vec![],
+            access_app_count: 1,
+            access_logs: vec![],
+            tunnels: vec![],
+            audit_logs: vec![],
+            ip_intel: Default::default(),
+            waf_rules: vec![],
+            waf_zones_budget: vec![],
+            waf_read_status: "ok".into(),
+            access_policies_sync_ok: true,
+            access_policies_permission_hint: None,
+            attached_access_policies: vec![],
+            access_policy_email_grants: Default::default(),
+        };
+
+        let triage = evaluate_stage0_triage(
+            "run-cross-host",
+            "2026-11-25T17:02:00Z",
+            Some(&cf_snap),
+            None,
+            None,
+            &[],
+            &[],
+            &[],
+        );
+
+        let blocked_actor_findings: Vec<_> = triage
+            .findings
+            .iter()
+            .filter(|f| f.actor_ip.as_deref() == Some("45.156.87.37"))
+            .collect();
+        assert!(
+            blocked_actor_findings.iter().all(|f| f.severity != "HIGH"),
+            "Cross-host blocked strict probe + public 404 must not escalate to HIGH: {:?}",
+            blocked_actor_findings.iter().map(|f| (&f.rule_id, &f.severity)).collect::<Vec<_>>()
+        );
+        let nl_actor = triage.actor_candidates.iter().find(|a| a.id == "45.156.87.37");
+        assert!(nl_actor.map(|a| a.highest_severity.as_str()) != Some("HIGH"));
+
+        let strict_unblocked_finding = triage
+            .findings
+            .iter()
+            .find(|f| f.actor_ip.as_deref() == Some("45.156.87.38") && f.rule_id == "SECRET_EXPLOIT_PROBE");
+        assert_eq!(strict_unblocked_finding.map(|f| f.severity.as_str()), Some("HIGH"));
+        let us_actor = triage.actor_candidates.iter().find(|a| a.id == "45.156.87.38");
+        assert_eq!(us_actor.map(|a| a.highest_severity.as_str()), Some("HIGH"));
+    }
+
+    #[test]
     fn test_escalation_gate_and_daily_carbon_cap() {
         let (esc1, _) = should_escalate_to_tier2(false, false, "LOW", 0, 6, false);
         assert!(!esc1);
