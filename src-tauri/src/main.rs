@@ -3193,4 +3193,176 @@ mod tests {
         assert_eq!(sessions[0]["email"], "joylagos@gmail.com");
         assert_eq!(sessions[0]["authSource"], "PanoramaAuth Audit");
     }
+
+    fn make_intact_family_access_policy(emails: Vec<&str>) -> CfAttachedAccessPolicySummary {
+        let email_list: Vec<String> = emails.into_iter().map(|e| e.to_string()).collect();
+        CfAttachedAccessPolicySummary {
+            app_uid: "app-wsh".to_string(),
+            app_name: "wsh".to_string(),
+            app_domain: "wsh.panoramadr.com".to_string(),
+            policy_id: "pol-family".to_string(),
+            policy_name: "Family Access".to_string(),
+            decision: "allow".to_string(),
+            precedence: 1,
+            reusable: true,
+            session_duration: Some("730h".to_string()),
+            policy_created_at: None,
+            policy_updated_at: None,
+            email_count: email_list.len(),
+            emails: email_list,
+            broad_rules: vec![],
+        }
+    }
+
+    #[test]
+    fn test_uncorrelated_us_session_downgrades_to_low_when_family_access_gate_verified_intact() {
+        let mobile_ip = "2607:fb91:7cf:8a28:ac39:bbf2:b406:f542";
+        let mut cf = make_cf_snapshot_for_family_tests(vec![make_basket_http_event(mobile_ip)], vec![]);
+        cf.attached_access_policies = vec![make_intact_family_access_policy(vec!["lagosr@gmail.com"])];
+        let allowlist = make_email_allowlist_entry("lagosr@gmail.com");
+        let wsh = WshSecuritySnapshot {
+            panorama_auth: PanoramaAuthTelemetry {
+                available: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let res = evaluate_stage0_triage(
+            "run-uncorr-us",
+            "2026-11-25T23:06:00Z",
+            Some(&cf),
+            None,
+            Some(&wsh),
+            &allowlist,
+            &[],
+            &[],
+        );
+
+        assert_eq!(res.overall_severity, "LOW");
+        assert!(!res.hard_hit);
+        assert!(res
+            .findings
+            .iter()
+            .all(|f| f.rule_id != "ORIGIN_BREACH_THROUGH"));
+        let finding = res
+            .findings
+            .iter()
+            .find(|f| f.rule_id == "UNCORRELATED_US_SESSION")
+            .expect("UNCORRELATED_US_SESSION finding");
+        assert_eq!(finding.severity, "LOW");
+        assert!(finding.evidence_json.contains("UNCORRELATED_US_INTACT_GATE"));
+        assert_eq!(res.zones_summary[0]["untrustedOrigin200s"], 0);
+        assert!(res.actor_candidates.is_empty());
+    }
+
+    #[test]
+    fn test_non_us_broad_policy_or_admin_origin_200_stays_fail_closed_high() {
+        let allowlist = make_email_allowlist_entry("lagosr@gmail.com");
+
+        // Case 1: Non-US origin 200 stays HIGH even with intact Family Access policy
+        let mut non_us_ev = make_basket_http_event("93.123.109.107");
+        non_us_ev.client_country = "NL".to_string();
+        let mut cf_non_us = make_cf_snapshot_for_family_tests(vec![non_us_ev], vec![]);
+        cf_non_us.attached_access_policies =
+            vec![make_intact_family_access_policy(vec!["lagosr@gmail.com"])];
+        let res_non_us = evaluate_stage0_triage(
+            "run-breach-nonus",
+            "2026-11-25T23:06:00Z",
+            Some(&cf_non_us),
+            None,
+            None,
+            &allowlist,
+            &[],
+            &[],
+        );
+        assert_eq!(res_non_us.overall_severity, "HIGH");
+        assert!(res_non_us.hard_hit);
+        assert!(res_non_us
+            .findings
+            .iter()
+            .any(|f| f.rule_id == "ORIGIN_BREACH_THROUGH"));
+
+        // Case 2: Broad rule attached to Access policy fails gate check and stays HIGH
+        let mut cf_broad =
+            make_cf_snapshot_for_family_tests(vec![make_basket_http_event("174.51.88.21")], vec![]);
+        let mut pol_broad = make_intact_family_access_policy(vec!["lagosr@gmail.com"]);
+        pol_broad.broad_rules = vec!["everyone".to_string()];
+        cf_broad.attached_access_policies = vec![pol_broad];
+        let res_broad = evaluate_stage0_triage(
+            "run-breach-broad",
+            "2026-11-25T23:06:00Z",
+            Some(&cf_broad),
+            None,
+            None,
+            &allowlist,
+            &[],
+            &[],
+        );
+        assert_eq!(res_broad.overall_severity, "HIGH");
+        assert!(res_broad.hard_hit);
+        assert!(res_broad
+            .findings
+            .iter()
+            .any(|f| f.rule_id == "ORIGIN_BREACH_THROUGH"));
+
+        // Case 3: US IP hitting /api/admin returning 200 stays HIGH even with intact gate
+        let mut admin_ev = make_basket_http_event("174.51.88.21");
+        admin_ev.path = "/spendy/api/admin/logs".to_string();
+        let mut cf_admin = make_cf_snapshot_for_family_tests(vec![admin_ev], vec![]);
+        cf_admin.attached_access_policies =
+            vec![make_intact_family_access_policy(vec!["lagosr@gmail.com"])];
+        let res_admin = evaluate_stage0_triage(
+            "run-breach-admin",
+            "2026-11-25T23:06:00Z",
+            Some(&cf_admin),
+            None,
+            None,
+            &allowlist,
+            &[],
+            &[],
+        );
+        assert_eq!(res_admin.overall_severity, "HIGH");
+        assert!(res_admin.hard_hit);
+        assert!(res_admin
+            .findings
+            .iter()
+            .any(|f| f.rule_id == "ORIGIN_BREACH_THROUGH"));
+    }
+
+    #[test]
+    fn test_panorama_auth_anomaly_forces_fail_closed_high_even_with_intact_access_gate() {
+        let mobile_ip = "2607:fb91:7cf:8a28:ac39:bbf2:b406:f542";
+        let mut cf = make_cf_snapshot_for_family_tests(vec![make_basket_http_event(mobile_ip)], vec![]);
+        cf.attached_access_policies = vec![make_intact_family_access_policy(vec!["lagosr@gmail.com"])];
+        let allowlist = make_email_allowlist_entry("lagosr@gmail.com");
+        let wsh = WshSecuritySnapshot {
+            panorama_auth: PanoramaAuthTelemetry {
+                available: true,
+                anomalies: vec![
+                    serde_json::json!({ "ip_address": "198.51.100.77", "rule_id": "IMPOSSIBLE_TRAVEL" }),
+                ],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let res = evaluate_stage0_triage(
+            "run-breach-anom",
+            "2026-11-25T23:06:00Z",
+            Some(&cf),
+            None,
+            Some(&wsh),
+            &allowlist,
+            &[],
+            &[],
+        );
+
+        assert_eq!(res.overall_severity, "HIGH");
+        assert!(res.hard_hit);
+        assert!(res
+            .findings
+            .iter()
+            .any(|f| f.rule_id == "ORIGIN_BREACH_THROUGH"));
+    }
 }
