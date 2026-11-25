@@ -29,6 +29,7 @@ interface SidebarRailProps {
   backupFailureCount?: number;
   behindReleasesCount?: number;
   telemetryWarningCount?: number;
+  telemetryAlertSeverity?: 'error' | 'warning';
   dietpiPackagesCount?: number;
   dietpiAlertCount?: number;
   dietpiAlertSeverity?: 'error' | 'warning' | null;
@@ -75,6 +76,7 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
   backupFailureCount = 0,
   behindReleasesCount = 0,
   telemetryWarningCount = 0,
+  telemetryAlertSeverity = 'warning',
   dietpiPackagesCount = 0,
   dietpiAlertCount,
   dietpiAlertSeverity,
@@ -184,7 +186,7 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
           label: 'Build Telemetry',
           icon: BarChart3,
           badge: telemetryWarningCount > 0 ? telemetryWarningCount : undefined,
-          severity: 'warning',
+          severity: telemetryAlertSeverity,
         },
         {
           id: 'smoke',

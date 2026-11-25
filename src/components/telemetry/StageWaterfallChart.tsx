@@ -77,57 +77,76 @@ export const StageWaterfallChart: React.FC<StageWaterfallChartProps> = ({ rows, 
           No stage waterfall data available for active filters.
         </div>
       ) : (
-        <div className="space-y-3">
-          {rows.map((row) => {
-            const widthPct = Math.max(8, Math.round((row.avgTotalWallSec / maxTotal) * 100));
-            const totalForSegments = Math.max(
-              0.1,
-              SEGMENTS.reduce((sum, s) => sum + (row[s.key] || 0), 0)
-            );
-            const isHovered = hoveredRowSlug === row.slug;
+        <>
+          <div className="space-y-3">
+            {rows.map((row) => {
+              const widthPct = Math.max(8, Math.round((row.avgTotalWallSec / maxTotal) * 100));
+              const totalForSegments = Math.max(
+                0.1,
+                SEGMENTS.reduce((sum, s) => sum + (row[s.key] || 0), 0)
+              );
 
+              return (
+                <div
+                  key={row.slug}
+                  onMouseEnter={() => setHoveredRowSlug(row.slug)}
+                  onMouseLeave={() => setHoveredRowSlug((prev) => (prev === row.slug ? null : prev))}
+                  onClick={() => onSelectApp?.(row.slug)}
+                  className="group cursor-pointer rounded-lg p-2 -mx-2 border border-transparent hover:border-slate-200 dark:hover:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-950/70 transition-colors"
+                >
+                  <div className="flex items-center justify-between text-xs font-mono mb-1.5 tabular-nums">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="font-sans font-semibold text-slate-900 dark:text-slate-100">
+                        {row.displayName}
+                      </span>
+                      <span className="text-[11px] text-slate-500">({row.runCount} runs)</span>
+                    </div>
+                    <span className="font-bold text-slate-800 dark:text-slate-200">
+                      Avg {row.avgTotalWallSec}s
+                    </span>
+                  </div>
+
+                  <div className="w-full h-4 rounded-md bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 overflow-hidden flex">
+                    <div style={{ width: `${widthPct}%` }} className="h-full flex overflow-hidden">
+                      {SEGMENTS.map((seg) => {
+                        const val = row[seg.key] || 0;
+                        if (val <= 0) return null;
+                        const segPct = (val / totalForSegments) * 100;
+                        return (
+                          <div
+                            key={seg.key}
+                            style={{ width: `${segPct}%` }}
+                            className={`${seg.colorClass} h-full border-r border-white/20 dark:border-slate-950/30 last:border-r-0`}
+                            title={`${seg.label}: ${val}s`}
+                          />
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {(() => {
+            const hoveredRow = hoveredRowSlug
+              ? rows.find((r) => r.slug === hoveredRowSlug) ?? null
+              : null;
             return (
               <div
-                key={row.slug}
-                onMouseEnter={() => setHoveredRowSlug(row.slug)}
-                onMouseLeave={() => setHoveredRowSlug((prev) => (prev === row.slug ? null : prev))}
-                onClick={() => onSelectApp?.(row.slug)}
-                className="group cursor-pointer rounded-lg p-2 -mx-2 hover:bg-slate-50 dark:hover:bg-slate-950/70 transition-colors"
+                data-testid="stage-waterfall-hover-readout"
+                className="h-[76px] shrink-0 overflow-y-auto rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 px-3 py-2 text-[11px] font-mono tabular-nums flex flex-col justify-center"
               >
-                <div className="flex items-center justify-between text-xs font-mono mb-1.5 tabular-nums">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="font-sans font-semibold text-slate-900 dark:text-slate-100">
-                      {row.displayName}
+                {hoveredRow ? (
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-slate-600 dark:text-slate-400">
+                    <span className="inline-flex items-center gap-1.5 mr-1">
+                      <strong className="font-sans text-xs font-semibold text-slate-900 dark:text-slate-100">
+                        {hoveredRow.displayName}
+                      </strong>
+                      <span className="text-slate-500">Avg {hoveredRow.avgTotalWallSec}s</span>
                     </span>
-                    <span className="text-[11px] text-slate-500">({row.runCount} runs)</span>
-                  </div>
-                  <span className="font-bold text-slate-800 dark:text-slate-200">
-                    Avg {row.avgTotalWallSec}s
-                  </span>
-                </div>
-
-                <div className="w-full h-4 rounded-md bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 overflow-hidden flex">
-                  <div style={{ width: `${widthPct}%` }} className="h-full flex overflow-hidden">
                     {SEGMENTS.map((seg) => {
-                      const val = row[seg.key] || 0;
-                      if (val <= 0) return null;
-                      const segPct = (val / totalForSegments) * 100;
-                      return (
-                        <div
-                          key={seg.key}
-                          style={{ width: `${segPct}%` }}
-                          className={`${seg.colorClass} h-full border-r border-white/20 dark:border-slate-950/30 last:border-r-0`}
-                          title={`${seg.label}: ${val}s`}
-                        />
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {isHovered && (
-                  <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[10px] font-mono text-slate-600 dark:text-slate-400 tabular-nums">
-                    {SEGMENTS.map((seg) => {
-                      const val = row[seg.key] || 0;
+                      const val = hoveredRow[seg.key] || 0;
                       if (val <= 0) return null;
                       return (
                         <span key={seg.key} className="inline-flex items-center gap-1">
@@ -137,11 +156,15 @@ export const StageWaterfallChart: React.FC<StageWaterfallChartProps> = ({ rows, 
                       );
                     })}
                   </div>
+                ) : (
+                  <div className="text-slate-500 dark:text-slate-400">
+                    Hover any application bar above to inspect its exact per-stage breakdown in seconds. Click a bar to filter.
+                  </div>
                 )}
               </div>
             );
-          })}
-        </div>
+          })()}
+        </>
       )}
     </div>
   );

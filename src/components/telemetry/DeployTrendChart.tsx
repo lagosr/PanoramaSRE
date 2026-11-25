@@ -288,7 +288,7 @@ export const DeployTrendChart: React.FC<DeployTrendChartProps> = ({
           </svg>
 
           {/* Interactive Hover Readout */}
-          <div className="mt-2 min-h-[38px] rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-xs font-mono tabular-nums">
+          <div className="mt-2 h-[52px] shrink-0 overflow-y-auto rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-xs font-mono tabular-nums">
             {hovered ? (
               <>
                 <div className="flex flex-wrap items-center gap-2">

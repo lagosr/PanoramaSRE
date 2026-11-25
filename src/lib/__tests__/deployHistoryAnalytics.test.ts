@@ -3,11 +3,12 @@ import {
   buildAppMatrix,
   buildStageWaterfall,
   buildTrendSeries,
+  computeActionableTelemetryAlerts,
   computeTelemetryKpis,
   filterDeployRuns,
   isLegacyRun,
 } from '../deployHistoryAnalytics';
-import { DeployTelemetryRunRecord } from '../types';
+import { DeployTelemetryRunRecord, DiscoveredApp } from '../types';
 
 function makeRun(overrides: Partial<DeployTelemetryRunRecord> = {}): DeployTelemetryRunRecord {
   return {
@@ -133,5 +134,79 @@ describe('deployHistoryAnalytics', () => {
     expect(waterfall[0].slug).toBe('basket');
     expect(waterfall[0].typecheckSec).toBe(3.2);
     expect(waterfall[0].smokeSec).toBe(12);
+  });
+
+  it('treats static edge deploys with null engine_version as non-legacy and computes actionable alerts', () => {
+    const staticFailedRun = makeRun({
+      id: 'deploy-parakith-fail',
+      app_slug: 'parakith',
+      app_name: 'ParakithSite',
+      cache_posture: 'static',
+      engine_version: null,
+      status: 'FAILED',
+      exit_code: 1,
+      started_at: '2026-11-25 00:05:06',
+    });
+
+    expect(isLegacyRun(staticFailedRun)).toBe(false);
+
+    const parakithApp = {
+      manifest: { slug: 'parakith', displayName: 'ParakithSite' },
+    } as unknown as DiscoveredApp;
+
+    const alerts = computeActionableTelemetryAlerts({
+      apps: [parakithApp],
+      runs: [staticFailedRun],
+    });
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0].id).toBe('run:deploy-parakith-fail');
+    expect(alerts[0].kind).toBe('failed_deploy');
+    expect(alerts[0].severity).toBe('error');
+
+    // Dismissing clears the specific failed run alert
+    const afterDismiss = computeActionableTelemetryAlerts({
+      apps: [parakithApp],
+      runs: [staticFailedRun],
+      dismissedIds: ['run:deploy-parakith-fail'],
+    });
+    expect(afterDismiss).toHaveLength(0);
+
+    // A newer successful deploy supersedes the older failed run automatically
+    const newerSuccessRun = makeRun({
+      id: 'deploy-parakith-ok',
+      app_slug: 'parakith',
+      app_name: 'ParakithSite',
+      cache_posture: 'static',
+      engine_version: null,
+      status: 'OPTIMAL',
+      exit_code: 0,
+      started_at: '2026-11-25 08:00:00',
+    });
+    const clearedByNewRun = computeActionableTelemetryAlerts({
+      apps: [parakithApp],
+      runs: [staticFailedRun, newerSuccessRun],
+    });
+    expect(clearedByNewRun).toHaveLength(0);
+
+    // High BuildKit cache (>40 GB) produces an actionable warning alert
+    const cacheAlerts = computeActionableTelemetryAlerts({
+      apps: [parakithApp],
+      runs: [newerSuccessRun],
+      dockerDiskUsage: {
+        images: { total_count: 0, active_count: 0, size_bytes: 0, reclaimable_bytes: 0 },
+        containers: { total_count: 0, active_count: 0, size_bytes: 0, reclaimable_bytes: 0 },
+        volumes: { total_count: 0, active_count: 0, size_bytes: 0, reclaimable_bytes: 0 },
+        build_cache: {
+          total_count: 12,
+          active_count: 4,
+          size_bytes: 45_000_000_000,
+          reclaimable_bytes: 20_000_000_000,
+        },
+        captured_at: '2026-11-25T08:00:00Z',
+      },
+    });
+    expect(cacheAlerts).toHaveLength(1);
+    expect(cacheAlerts[0].kind).toBe('cache_high');
+    expect(cacheAlerts[0].severity).toBe('warning');
   });
 });

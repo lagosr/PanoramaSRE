@@ -8,6 +8,7 @@ import {
   TerminalTab,
 } from '../../lib/types';
 import {
+  TelemetryActionableAlert,
   TelemetryTimeRange,
   buildAppMatrix,
   buildStageWaterfall,
@@ -46,6 +47,8 @@ interface BuildTelemetryViewProps {
   onPruneBuildKitCache: () => void;
   onInspectConsoleSession?: (sessionId: string) => void;
   onOpenInReleases?: (slug: string) => void;
+  actionableAlerts?: TelemetryActionableAlert[];
+  onDismissAlert?: (alertId: string) => void;
 }
 
 function formatBytes(bytes: number | undefined | null): string {
@@ -69,6 +72,8 @@ export const BuildTelemetryView: React.FC<BuildTelemetryViewProps> = ({
   onPruneBuildKitCache,
   onInspectConsoleSession,
   onOpenInReleases,
+  actionableAlerts = [],
+  onDismissAlert,
 }) => {
   const [localAppSlug, setLocalAppSlug] = useState<string>('all');
   const [range, setRange] = useState<TelemetryTimeRange>('14d');
@@ -223,6 +228,150 @@ export const BuildTelemetryView: React.FC<BuildTelemetryViewProps> = ({
           />
         </div>
       </div>
+
+      {/* Actionable Telemetry Issues Callout (1:1 parity with SidebarRail badge) */}
+      {actionableAlerts.length > 0 && (
+        <div
+          data-testid="telemetry-action-banner"
+          className={`rounded-2xl border bg-white dark:bg-slate-900 p-5 shadow-sm space-y-3 ${
+            actionableAlerts.some((a) => a.severity === 'error')
+              ? 'border-rose-500/50 dark:border-rose-500/40'
+              : 'border-amber-500/50 dark:border-amber-500/40'
+          }`}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <AlertTriangle
+                className={`w-4 h-4 shrink-0 ${
+                  actionableAlerts.some((a) => a.severity === 'error')
+                    ? 'text-rose-500'
+                    : 'text-amber-500'
+                }`}
+              />
+              <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100 tabular-nums">
+                {actionableAlerts.length} Actionable Build Telemetry{' '}
+                {actionableAlerts.length === 1 ? 'Issue' : 'Issues'}
+              </h2>
+            </div>
+            <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+              Latest per-app deploy status &amp; BuildKit cache budget alerts
+            </span>
+          </div>
+
+          <div className="space-y-2.5">
+            {actionableAlerts.map((alert) => {
+              const canInspect = Boolean(
+                alert.consoleSessionId &&
+                  tabIdSet.has(alert.consoleSessionId) &&
+                  onInspectConsoleSession
+              );
+              return (
+                <div
+                  key={alert.id}
+                  className={`p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border flex flex-col gap-2.5 text-xs ${
+                    alert.severity === 'error'
+                      ? 'border-rose-500/35'
+                      : 'border-amber-500/35'
+                  }`}
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="flex items-start gap-2.5 min-w-0">
+                      {alert.severity === 'error' ? (
+                        <XCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+                      ) : (
+                        <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                      )}
+                      <div className="space-y-1 min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-semibold text-slate-900 dark:text-slate-100">
+                            {alert.title}
+                          </span>
+                          {alert.startedAt && (
+                            <span
+                              className="text-[11px] font-mono text-slate-500 tabular-nums"
+                              title={formatLocalDateTime(alert.startedAt)}
+                            >
+                              {formatRelativeTime(alert.startedAt)}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-600 dark:text-slate-400">
+                          {alert.detail}
+                        </p>
+                        {alert.warnings.length > 1 && (
+                          <ul className="list-disc pl-4 space-y-0.5 text-[11px] font-mono text-amber-700 dark:text-amber-300">
+                            {alert.warnings.slice(1).map((w, idx) => (
+                              <li key={idx}>{w}</li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 pl-6">
+                    {canInspect && (
+                      <button
+                        type="button"
+                        onClick={() => onInspectConsoleSession?.(alert.consoleSessionId!)}
+                        className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                      >
+                        <Terminal className="w-3.5 h-3.5" />
+                        <span>Inspect Log</span>
+                      </button>
+                    )}
+                    {alert.appSlug && onOpenInReleases && (
+                      <button
+                        type="button"
+                        onClick={() => onOpenInReleases(alert.appSlug!)}
+                        className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                      >
+                        <span>Open in Releases →</span>
+                      </button>
+                    )}
+                    {alert.appSlug && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleAppChange(alert.appSlug!);
+                          setLedgerFilter(
+                            alert.kind === 'failed_deploy' ? 'failures' : 'warnings'
+                          );
+                        }}
+                        className="btn-secondary text-xs whitespace-nowrap flex-shrink-0"
+                      >
+                        Filter Ledger
+                      </button>
+                    )}
+                    {alert.kind === 'cache_high' && (
+                      <button
+                        type="button"
+                        onClick={onPruneBuildKitCache}
+                        disabled={isPruningCache}
+                        className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>
+                          {isPruningCache ? 'Pruning Cache...' : 'Prune Stale Cache (>14d)'}
+                        </span>
+                      </button>
+                    )}
+                    {onDismissAlert && (
+                      <button
+                        type="button"
+                        onClick={() => onDismissAlert(alert.id)}
+                        className="btn-ghost text-xs whitespace-nowrap flex-shrink-0"
+                      >
+                        Dismiss
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Executive KPI Strip (5 solid cards) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">

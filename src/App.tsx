@@ -29,6 +29,7 @@ import { classifyFindingSurface } from './lib/threat-utils';
 import { WshHardeningView } from './components/security/WshHardeningView';
 import { ReleasePipelineView } from './components/releases/ReleasePipelineView';
 import { BuildTelemetryView } from './components/telemetry/BuildTelemetryView';
+import { computeActionableTelemetryAlerts } from './lib/deployHistoryAnalytics';
 import { BackupsRecoveryView } from './components/backups/BackupsRecoveryView';
 import { SmokeTestsView } from './components/smoke/SmokeTestsView';
 import { OptInComplianceView } from './components/optins/OptInComplianceView';
@@ -138,6 +139,16 @@ export const App: React.FC = () => {
     try {
       const legacy = localStorage.getItem('panorama_sre_dismissed_backup_incident');
       return legacy ? [legacy] : [];
+    } catch {
+      return [];
+    }
+  });
+  const [dismissedTelemetryAlertIds, setDismissedTelemetryAlertIds] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem('panorama_sre_dismissed_telemetry_alerts');
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : [];
     } catch {
       return [];
     }
@@ -3423,32 +3434,35 @@ export const App: React.FC = () => {
   }, [getWorkspaceRoot]);
   refreshDeployTelemetryRef.current = refreshDeployTelemetry;
 
-  const telemetryWarningCount = useMemo(() => {
-    let warnCount = 0;
-    for (const app of apps) {
-      const slug = app.manifest.slug.toLowerCase();
-      const latestRun = deployTelemetryRuns.find(
-        (r) => r.app_slug.toLowerCase() === slug && r.cache_posture !== 'legacy'
-      );
-      if (latestRun) {
-        if (
-          latestRun.status !== 'OPTIMAL' ||
-          latestRun.warnings.length > 0 ||
-          (latestRun.exit_code !== null &&
-            latestRun.exit_code !== undefined &&
-            latestRun.exit_code !== 0)
-        ) {
-          warnCount += 1;
-        }
-        continue;
+  const actionableTelemetryAlerts = useMemo(
+    () =>
+      computeActionableTelemetryAlerts({
+        apps,
+        runs: deployTelemetryRuns,
+        dockerDiskUsage,
+        dismissedIds: dismissedTelemetryAlertIds,
+      }),
+    [apps, deployTelemetryRuns, dockerDiskUsage, dismissedTelemetryAlertIds]
+  );
+  const telemetryWarningCount = actionableTelemetryAlerts.length;
+  const telemetryAlertSeverity: 'error' | 'warning' = actionableTelemetryAlerts.some(
+    (a) => a.severity === 'error'
+  )
+    ? 'error'
+    : 'warning';
+
+  const handleDismissTelemetryAlert = useCallback((alertId: string) => {
+    setDismissedTelemetryAlertIds((prev) => {
+      if (prev.includes(alertId)) return prev;
+      const next = [...prev, alertId].slice(-100);
+      try {
+        localStorage.setItem('panorama_sre_dismissed_telemetry_alerts', JSON.stringify(next));
+      } catch {
+        // Ignore storage quota errors
       }
-      const bt = app.health?.release?.build_telemetry || app.composition?.local_build_telemetry;
-      if (bt && (bt.status !== 'OPTIMAL' || bt.warnings.length > 0)) {
-        warnCount += 1;
-      }
-    }
-    return warnCount;
-  }, [apps, deployTelemetryRuns]);
+      return next;
+    });
+  }, []);
 
   const handleRunSmokeTests = useCallback(
     (triggeredBy = 'sre-manual', forceSms = false): Promise<number> => {
@@ -4269,6 +4283,7 @@ export const App: React.FC = () => {
           backupFailureCount={backupFailureCount}
           behindReleasesCount={behindReleasesCount}
           telemetryWarningCount={telemetryWarningCount}
+          telemetryAlertSeverity={telemetryAlertSeverity}
           dietpiPackagesCount={dietpiPackagesCount}
           dietpiAlertCount={dietpiBadges.totalCount}
           dietpiAlertSeverity={dietpiBadges.severity}
@@ -4663,6 +4678,8 @@ export const App: React.FC = () => {
               onOpenInReleases={(slug) =>
                 navigateTo('releases', { appSlug: slug, returnFromCurrent: true })
               }
+              actionableAlerts={actionableTelemetryAlerts}
+              onDismissAlert={handleDismissTelemetryAlert}
             />
           )}
 

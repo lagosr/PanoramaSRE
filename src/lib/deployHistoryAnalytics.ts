@@ -1,6 +1,6 @@
 import { getAppTelemetryTargets } from './buildTelemetry';
 import { formatLocalIsoDate, parseUtcDate } from './formatters';
-import { DeployTelemetryRunRecord, DiscoveredApp } from './types';
+import { DeployTelemetryRunRecord, DiscoveredApp, LocalDockerDiskUsage } from './types';
 
 export type TelemetryTimeRange = '7d' | '14d' | '30d' | 'all';
 
@@ -97,10 +97,145 @@ function median(nums: number[]): number | null {
   return round1(sorted[mid]);
 }
 
+export interface TelemetryActionableAlert {
+  id: string;
+  kind: 'failed_deploy' | 'build_warning' | 'cache_high';
+  severity: 'error' | 'warning';
+  appSlug?: string;
+  appName: string;
+  title: string;
+  detail: string;
+  startedAt?: string;
+  consoleSessionId?: string | null;
+  warnings: string[];
+}
+
 export function isLegacyRun(run: DeployTelemetryRunRecord): boolean {
-  if (run.cache_posture === 'legacy') return true;
+  const posture = (run.cache_posture || '').toLowerCase().trim();
+  if (posture === 'legacy') return true;
+  if (posture === 'static') return false;
   if (!run.engine_version) return true;
   return /^0\.[0-3]\./.test(run.engine_version.trim());
+}
+
+export function computeActionableTelemetryAlerts(params: {
+  apps: DiscoveredApp[];
+  runs: DeployTelemetryRunRecord[];
+  dockerDiskUsage?: LocalDockerDiskUsage | null;
+  dismissedIds?: Iterable<string>;
+}): TelemetryActionableAlert[] {
+  const dismissedSet = new Set(params.dismissedIds || []);
+  const alerts: TelemetryActionableAlert[] = [];
+
+  for (const app of params.apps) {
+    const slug = app.manifest.slug.toLowerCase();
+    const displayName = app.manifest.displayName || app.manifest.slug;
+
+    const appNonLegacyRuns = params.runs
+      .filter((r) => r.app_slug.toLowerCase() === slug && !isLegacyRun(r))
+      .sort(
+        (a, b) =>
+          (parseUtcDate(b.started_at)?.getTime() ?? 0) -
+          (parseUtcDate(a.started_at)?.getTime() ?? 0)
+      );
+    const latestRun = appNonLegacyRuns[0];
+
+    if (latestRun) {
+      const exitFailed =
+        typeof latestRun.exit_code === 'number' && latestRun.exit_code !== 0;
+      const statusFailed = latestRun.status === 'FAILED';
+      const warnings = Array.isArray(latestRun.warnings) ? latestRun.warnings : [];
+
+      if (statusFailed || exitFailed) {
+        const alertId = `run:${latestRun.id}`;
+        if (!dismissedSet.has(alertId)) {
+          alerts.push({
+            id: alertId,
+            kind: 'failed_deploy',
+            severity: 'error',
+            appSlug: slug,
+            appName: displayName,
+            title: `${displayName} latest deploy failed (exit ${latestRun.exit_code ?? 'error'})`,
+            detail:
+              warnings[0] ||
+              `Run ${latestRun.id} (${latestRun.cache_posture}) exited with status ${latestRun.status || 'FAILED'}. Inspect log or re-deploy in Releases & Drift.`,
+            startedAt: latestRun.started_at,
+            consoleSessionId: latestRun.console_session_id,
+            warnings,
+          });
+        }
+        continue;
+      }
+
+      if (
+        (latestRun.status && latestRun.status !== 'OPTIMAL') ||
+        warnings.length > 0
+      ) {
+        const alertId = `run:${latestRun.id}`;
+        if (!dismissedSet.has(alertId)) {
+          alerts.push({
+            id: alertId,
+            kind: 'build_warning',
+            severity: latestRun.status === 'WARN_CEILING' ? 'error' : 'warning',
+            appSlug: slug,
+            appName: displayName,
+            title: `${displayName} reported ${latestRun.status || 'BUILD_WARNING'}`,
+            detail:
+              warnings[0] ||
+              `Latest ${latestRun.cache_posture} build completed with ${latestRun.wall_duration_sec ?? '—'}s wall time and non-optimal budget/regression status.`,
+            startedAt: latestRun.started_at,
+            consoleSessionId: latestRun.console_session_id,
+            warnings,
+          });
+        }
+      }
+      continue;
+    }
+
+    const bt =
+      app.health?.release?.build_telemetry || app.composition?.local_build_telemetry;
+    if (bt && (bt.status !== 'OPTIMAL' || (bt.warnings?.length || 0) > 0)) {
+      const alertId = `manifest:${slug}:${bt.status}`;
+      if (!dismissedSet.has(alertId)) {
+        const warnings = Array.isArray(bt.warnings) ? bt.warnings : [];
+        alerts.push({
+          id: alertId,
+          kind: 'build_warning',
+          severity: bt.status === 'WARN_CEILING' ? 'error' : 'warning',
+          appSlug: slug,
+          appName: displayName,
+          title: `${displayName} reported ${bt.status}`,
+          detail:
+            warnings[0] ||
+            `Latest recorded build telemetry flagged ${bt.status} (${bt.total_duration_sec}s ${bt.cache_posture}).`,
+          warnings,
+        });
+      }
+    }
+  }
+
+  const cacheBytes = params.dockerDiskUsage?.build_cache?.size_bytes ?? 0;
+  if (cacheBytes >= 40_000_000_000) {
+    const alertId = 'cache:high-40gb';
+    if (!dismissedSet.has(alertId)) {
+      const gb = (cacheBytes / 1_000_000_000).toFixed(1);
+      alerts.push({
+        id: alertId,
+        kind: 'cache_high',
+        severity: 'warning',
+        appName: 'Local BuildKit Cache',
+        title: `Local BuildKit cache (${gb} GB) exceeds 40 GB threshold`,
+        detail:
+          'Prune BuildKit layers older than 14 days to reclaim disk space while preserving recent warm caches.',
+        warnings: [],
+      });
+    }
+  }
+
+  return alerts.sort((a, b) => {
+    if (a.severity === b.severity) return 0;
+    return a.severity === 'error' ? -1 : 1;
+  });
 }
 
 export function filterDeployRuns(
