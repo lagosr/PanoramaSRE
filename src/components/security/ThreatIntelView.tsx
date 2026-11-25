@@ -95,7 +95,8 @@ import type {
   ZeroTrustSummary,
 } from '../../lib/types';
 
-type SubViewTab = 'overview' | 'external' | 'internal' | 'allowlist';
+export type ThreatSubViewTab = 'overview' | 'external' | 'internal' | 'allowlist';
+type SubViewTab = ThreatSubViewTab;
 
 function formatRunDuration(startedAt: string, completedAt?: string | null): string | null {
   const s = parseUtcDate(startedAt);
@@ -139,6 +140,9 @@ interface ThreatIntelViewProps {
   onOpenInBottomConsole?: (tabId?: string) => void;
   onAbortJob?: (tabId: string) => void;
   onClearTab?: (tabId: string) => void;
+  initialSubView?: ThreatSubViewTab;
+  initialFocusId?: string;
+  initialNavNonce?: number;
 }
 
 const EMPTY_ZT_SUMMARY: ZeroTrustSummary = {
@@ -205,8 +209,12 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   wshSnapshot = null,
   terminalTabs = [],
   onOpenInBottomConsole,
+  initialSubView,
+  initialFocusId,
+  initialNavNonce = 0,
 }) => {
-  const [subView, setSubView] = useState<SubViewTab>('overview');
+  const [subView, setSubView] = useState<SubViewTab>(() => initialSubView || 'overview');
+  const [focusedItemId, setFocusedItemId] = useState<string | null>(() => initialFocusId || null);
   const [lookbackHours, setLookbackHours] = useState<string>('6');
   const [auditElapsedSec, setAuditElapsedSec] = useState<number>(0);
 
@@ -675,6 +683,60 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
     setActorCountryFilter('ALL');
   }, []);
 
+  const scrollToDomTarget = useCallback((domId: string) => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+    window.setTimeout(() => {
+      const el = document.getElementById(domId);
+      if (el && typeof el.scrollIntoView === 'function') {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 80);
+  }, []);
+
+  const jumpToThreatTarget = useCallback(
+    (
+      targetTab: 'external' | 'internal',
+      domId: string,
+      opts?: { clearFindings?: boolean; clearActors?: boolean }
+    ) => {
+      setSubView(targetTab);
+      if (opts?.clearFindings) {
+        clearFindingFilters();
+      }
+      if (opts?.clearActors) {
+        clearActorFilters();
+        setActorDispositionFilter('ACTIONABLE');
+      }
+      setFocusedItemId(domId);
+      scrollToDomTarget(domId);
+    },
+    [clearActorFilters, clearFindingFilters, scrollToDomTarget]
+  );
+
+  useEffect(() => {
+    if (!initialNavNonce || initialNavNonce <= 0) return;
+    if (initialSubView) {
+      setSubView(initialSubView);
+    }
+    if (initialFocusId) {
+      if (initialFocusId.startsWith('threat-actor-')) {
+        clearActorFilters();
+        setActorDispositionFilter('ACTIONABLE');
+      } else if (initialFocusId.startsWith('threat-finding-')) {
+        clearFindingFilters();
+      }
+      setFocusedItemId(initialFocusId);
+      scrollToDomTarget(initialFocusId);
+    }
+  }, [
+    initialNavNonce,
+    initialSubView,
+    initialFocusId,
+    clearActorFilters,
+    clearFindingFilters,
+    scrollToDomTarget,
+  ]);
+
   const trustedLanCount = useMemo(
     () => lanClients.filter((c) => c.isTrusted).length,
     [lanClients]
@@ -1011,13 +1073,19 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
       }
     };
 
+    const findingDomId = `threat-finding-${f.id}`;
+    const isFocusedFinding = focusedItemId === findingDomId;
+
     return (
       <div
         key={f.id}
-        className={`p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border space-y-2 ${
-          findingDisp !== 'ACTIVE'
-            ? 'border-slate-200/70 dark:border-slate-800/70 opacity-85'
-            : 'border-slate-200 dark:border-slate-800'
+        id={findingDomId}
+        className={`p-4 rounded-xl border space-y-2 transition-shadow ${
+          isFocusedFinding
+            ? 'bg-rose-50/40 dark:bg-rose-950/20 border-rose-500 ring-2 ring-rose-500 shadow-md'
+            : findingDisp !== 'ACTIVE'
+            ? 'bg-slate-50 dark:bg-slate-950 border-slate-200/70 dark:border-slate-800/70 opacity-85'
+            : 'bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800'
         }`}
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1673,6 +1741,207 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
           </div>
         )}
 
+        {/* High / Critical Active Threat Spotlight — Pinned Above the Fold Across All Sub-Views */}
+        {actionableSummary.totalActionable > 0 && (
+          <div
+            data-testid="threat-action-required-spotlight"
+            className="bg-white dark:bg-slate-900 border-2 border-rose-500/60 rounded-2xl p-4 sm:p-5 shadow-md space-y-3"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <ShieldAlert className="w-5 h-5 text-rose-500 shrink-0" />
+                <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 tabular-nums">
+                  Action Required ({actionableSummary.totalActionable} Active Critical/High Issue
+                  {actionableSummary.totalActionable === 1 ? '' : 's'})
+                </h3>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {actionableSummary.externalCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setSubView('external')}
+                    className="btn-tonal text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+                  >
+                    <span>External Perimeter ({actionableSummary.externalCount})</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                )}
+                {actionableSummary.internalCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setSubView('internal')}
+                    className="btn-tonal text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+                  >
+                    <span>Internal Events ({actionableSummary.internalCount})</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="space-y-2 text-xs">
+              {actionableSummary.collectorOutages.map((o) => (
+                <div
+                  key={o.collector}
+                  className="px-3 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-rose-500/40 flex flex-wrap items-center justify-between gap-2"
+                >
+                  <div className="flex items-center gap-2">
+                    <StatusBadge label="OUTAGE" variant="danger" />
+                    <span className="font-semibold text-slate-900 dark:text-slate-100">{o.label}</span>
+                  </div>
+                  <span className="font-mono text-rose-600 dark:text-rose-400">{o.status}</span>
+                </div>
+              ))}
+
+              {actionableSummary.actionableFindings.map((f) => {
+                const isExt = classifyFindingSurface(f.sourceLayer) === 'external';
+                const targetDomId = `threat-finding-${f.id}`;
+                return (
+                  <div
+                    key={`spotlight-find-${f.id}`}
+                    className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-rose-500/35 space-y-2"
+                  >
+                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-2 min-w-0">
+                        <StatusBadge label={f.severity} variant={severityToBadgeVariant(f.severity)} />
+                        <StatusBadge label={f.sourceLayer} variant="neutral" />
+                        <span className="text-[11px] font-mono text-slate-500">{f.ruleId}</span>
+                        <span className="font-semibold text-slate-900 dark:text-slate-100">
+                          {f.title}
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                        {isExt && f.actorIp && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleAllowlistFindingTarget(
+                                'IP',
+                                f.actorIp || '',
+                                `${f.ruleId} (${f.host || 'Perimeter'})`
+                              )
+                            }
+                            className="btn-tonal text-xs whitespace-nowrap flex-shrink-0"
+                            title="Add IP to local allowlist and resolve matching findings"
+                          >
+                            Allowlist IP
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void handleSetFindingDisposition(
+                              f.id,
+                              'RESOLVED',
+                              undefined,
+                              'Operator verified & resolved'
+                            )
+                          }
+                          className="btn-secondary text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                          <span>Mark Resolved</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            jumpToThreatTarget(isExt ? 'external' : 'internal', targetDomId, {
+                              clearFindings: true,
+                            })
+                          }
+                          className="btn-primary text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+                        >
+                          <span>Jump to Details</span>
+                          <ArrowRight className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    <p className="text-xs text-slate-700 dark:text-slate-300">
+                      <CopyableAddressText text={f.summary} />
+                    </p>
+
+                    {(f.host || f.actorIp || f.actorAsn) && (
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] font-mono text-slate-600 dark:text-slate-400">
+                        {f.host && <span>Host: {f.host}</span>}
+                        {f.actorIp && (
+                          <span>
+                            IP: <CopyableValue value={f.actorIp} label="threat actor IP" />
+                          </span>
+                        )}
+                        {f.actorAsn && <span>ASN: {f.actorAsn}</span>}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+              {actionableSummary.deduplicatedActionableActors.map((a) => {
+                const actorDomId = `threat-actor-${a.id}`;
+                return (
+                  <div
+                    key={`spotlight-actor-${a.id}`}
+                    className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-rose-500/35 flex flex-col lg:flex-row lg:items-center justify-between gap-2"
+                  >
+                    <div className="space-y-1 min-w-0">
+                      <div className="flex flex-wrap items-center gap-2 min-w-0">
+                        <StatusBadge
+                          label={a.highestSeverity}
+                          variant={severityToBadgeVariant(a.highestSeverity)}
+                        />
+                        <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">
+                          {a.ipAddress ? (
+                            <CopyableValue value={a.ipAddress} label="actor IP" />
+                          ) : (
+                            a.id
+                          )}
+                        </span>
+                        {a.totalOrigin200s > 0 && (
+                          <StatusBadge label={`${a.totalOrigin200s} Origin 200s`} variant="danger" />
+                        )}
+                        {a.latestClassification && (
+                          <StatusBadge label={a.latestClassification} variant="accent" />
+                        )}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] font-mono text-slate-600 dark:text-slate-400 tabular-nums">
+                        {(a.asn || a.asOrg) && (
+                          <span>
+                            {a.asn ? `AS${a.asn.replace(/^AS/i, '')}` : ''} {a.asOrg || ''}
+                          </span>
+                        )}
+                        <span>{a.totalRequests} requests</span>
+                        {a.country && <span>{a.country}</span>}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                      {a.disposition !== 'ALLOWLISTED' && (
+                        <button
+                          type="button"
+                          onClick={() => void handleAllowlistActor(a)}
+                          className="btn-tonal text-xs whitespace-nowrap flex-shrink-0"
+                        >
+                          Allowlist IP
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          jumpToThreatTarget('external', actorDomId, { clearActors: true })
+                        }
+                        className="btn-primary text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+                      >
+                        <span>Jump to Actor</span>
+                        <ArrowRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Persistent Single-Row 4-Card Telemetry Context Ribbon (Eliminates Per-Tab Duplication) */}
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 pt-1 tabular-nums">
           {/* Card 1: Cloudflare Edge */}
@@ -1870,8 +2139,8 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
       {/* =================================================================== */}
       {subView === 'overview' && (
         <div className="space-y-6">
-          {/* Actionable Triage Status Card */}
-          {actionableSummary.totalActionable === 0 ? (
+          {/* Actionable Triage Status Card (All-Clear state when zero actionable issues; Action Required is pinned above the fold) */}
+          {actionableSummary.totalActionable === 0 && (
             <div className="bg-white dark:bg-slate-900 border border-emerald-500/40 rounded-2xl p-4 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-start gap-3">
                 <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
@@ -1897,116 +2166,6 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                   <ArrowRight className="w-3.5 h-3.5" />
                 </button>
               )}
-            </div>
-          ) : (
-            <div className="bg-white dark:bg-slate-900 border border-rose-500/50 rounded-2xl p-5 shadow-sm space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <ShieldAlert className="w-5 h-5 text-rose-500 shrink-0" />
-                  <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 tabular-nums">
-                    Action Required ({actionableSummary.totalActionable} Active Critical/High Issue{actionableSummary.totalActionable === 1 ? '' : 's'})
-                  </h3>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  {actionableSummary.externalCount > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setSubView('external')}
-                      className="btn-tonal text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
-                    >
-                      <span>Resolve External ({actionableSummary.externalCount})</span>
-                      <ArrowRight className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                  {actionableSummary.internalCount > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setSubView('internal')}
-                      className="btn-tonal text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
-                    >
-                      <span>Resolve Internal ({actionableSummary.internalCount})</span>
-                      <ArrowRight className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                </div>
-              </div>
-              <div className="space-y-1.5 text-xs">
-                {actionableSummary.collectorOutages.map((o) => (
-                  <div
-                    key={o.collector}
-                    className="px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2"
-                  >
-                    <div className="flex items-center gap-2">
-                      <StatusBadge label="OUTAGE" variant="danger" />
-                      <span className="font-semibold text-slate-900 dark:text-slate-100">{o.label}</span>
-                    </div>
-                    <span className="font-mono text-rose-600 dark:text-rose-400">{o.status}</span>
-                  </div>
-                ))}
-                {actionableSummary.actionableFindings.map((f) => (
-                  <div
-                    key={`ov-act-${f.id}`}
-                    className="px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2"
-                  >
-                    <div className="flex flex-wrap items-center gap-2 min-w-0">
-                      <StatusBadge label={f.severity} variant={severityToBadgeVariant(f.severity)} />
-                      <StatusBadge label={f.sourceLayer} variant="neutral" />
-                      <span className="font-semibold text-slate-900 dark:text-slate-100 truncate">
-                        {f.title}
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setSubView(
-                          classifyFindingSurface(f.sourceLayer) === 'external' ? 'external' : 'internal'
-                        )
-                      }
-                      className="btn-ghost text-xs whitespace-nowrap flex-shrink-0"
-                    >
-                      Review →
-                    </button>
-                  </div>
-                ))}
-                {actionableSummary.deduplicatedActionableActors.map((a) => (
-                  <div
-                    key={`ov-actor-${a.id}`}
-                    className="px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2"
-                  >
-                    <div className="flex flex-wrap items-center gap-2 min-w-0">
-                      <StatusBadge
-                        label={a.highestSeverity}
-                        variant={severityToBadgeVariant(a.highestSeverity)}
-                      />
-                      <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">
-                        {a.ipAddress ? (
-                          <CopyableValue value={a.ipAddress} label="actor IP" />
-                        ) : (
-                          a.id
-                        )}
-                      </span>
-                      {a.totalOrigin200s > 0 && (
-                        <StatusBadge label={`${a.totalOrigin200s} Origin 200s`} variant="danger" />
-                      )}
-                      {a.latestClassification && (
-                        <span className="font-mono text-slate-600 dark:text-slate-400">
-                          {a.latestClassification}
-                        </span>
-                      )}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setActorDispositionFilter('ACTIONABLE');
-                        setSubView('external');
-                      }}
-                      className="btn-ghost text-xs whitespace-nowrap flex-shrink-0"
-                    >
-                      Inspect Actor →
-                    </button>
-                  </div>
-                ))}
-              </div>
             </div>
           )}
 
@@ -2301,6 +2460,473 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                 </button>
               </div>
             </div>
+          </div>
+
+          {/* External Deterministic Findings */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-5 h-5 text-[var(--color-brand-text)]" />
+                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 tabular-nums">
+                  External Perimeter Findings (
+                  {hasActiveFindingFilters
+                    ? `${filteredExternalFindings.length} / ${externalFindings.length}`
+                    : externalFindings.length}
+                  )
+                </h3>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {hasActiveFindingFilters && (
+                  <button
+                    type="button"
+                    onClick={clearFindingFilters}
+                    className="btn-ghost text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                    <span>Clear Filters</span>
+                  </button>
+                )}
+                <span className="text-xs font-mono text-slate-500 dark:text-slate-400">
+                  Cloudflare HTTP/WAF, IP Threat Intel, Zero Trust Access &amp; Tunnel rules
+                </span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={findingSearch}
+                  onChange={(e) => setFindingSearch(e.target.value)}
+                  placeholder="Filter IP, ASN, host, rule, ray ID..."
+                  className="w-full min-h-[40px] pl-8 pr-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
+                />
+              </div>
+
+              <CustomSelect
+                value={findingDomainFilter}
+                onChange={setFindingDomainFilter}
+                options={findingDomainOptions}
+              />
+
+              <CustomSelect
+                value={findingVectorFilter}
+                onChange={setFindingVectorFilter}
+                options={findingVectorOptions}
+              />
+
+              <CustomSelect
+                value={findingSeverityFilter}
+                onChange={setFindingSeverityFilter}
+                options={findingSeverityOptions}
+              />
+            </div>
+
+            {externalFindings.length === 0 ? (
+              <div className="p-6 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-center space-y-1">
+                <CheckCircle2 className="w-6 h-6 text-emerald-500 mx-auto" />
+                <div className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+                  No External Deterministic Anomalies Flagged in This Window
+                </div>
+              </div>
+            ) : filteredExternalFindings.length === 0 ? (
+              <div className="p-6 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-center space-y-2.5">
+                <div className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+                  No External Findings Match Active Filters
+                </div>
+                <button
+                  type="button"
+                  onClick={clearFindingFilters}
+                  className="btn-secondary text-xs inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  <span>Clear Finding Filters</span>
+                </button>
+              </div>
+            ) : (() => {
+              const actionableExtList = filteredExternalFindings.filter((f) =>
+                isFindingActionable(f, wafRules)
+              );
+              const infoExtList = filteredExternalFindings.filter(
+                (f) => !isFindingActionable(f, wafRules)
+              );
+              return (
+                <div className="space-y-4">
+                  {actionableExtList.length > 0 ? (
+                    <div className="space-y-3">{actionableExtList.map(renderFindingRow)}</div>
+                  ) : (
+                    !hasActiveFindingFilters && (
+                      <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-emerald-500/30 flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <div className="flex items-center gap-2 text-slate-700 dark:text-slate-300">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                          <span className="font-semibold text-slate-900 dark:text-slate-100">
+                            0 Actionable External Incidents
+                          </span>
+                          <span className="text-slate-500 dark:text-slate-400">
+                            ({infoExtList.length} WAF-covered, low-severity, or resolved item{infoExtList.length === 1 ? '' : 's'})
+                          </span>
+                        </div>
+                      </div>
+                    )
+                  )}
+                  {infoExtList.length > 0 && (
+                    <div className="space-y-2.5">
+                      {!hasActiveFindingFilters && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setShowExternalInformationalFindings((prev) => !prev)
+                          }
+                          className="btn-secondary text-xs inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                        >
+                          <span>
+                            {showExternalInformationalFindings ? 'Hide' : 'Show'} Informational, WAF-Covered &amp; Resolved ({infoExtList.length})
+                          </span>
+                        </button>
+                      )}
+                      {(hasActiveFindingFilters || showExternalInformationalFindings) && (
+                        <div className="space-y-3">{infoExtList.map(renderFindingRow)}</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* Recurring External Threat Actors Ledger */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 tabular-nums">
+                  Recurring External Threat Actors (
+                  {hasActiveActorFilters
+                    ? `${filteredActors.length} / ${actorBucket.length}`
+                    : filteredActors.length}
+                  )
+                </h3>
+                <p className="text-xs text-slate-600 dark:text-slate-400">
+                  Defaults to actionable HIGH/CRITICAL &amp; Origin-200 actors. Background scanners and WAF-covered probes live under Background / Mitigated Noise (auto-expires after 7d unseen).
+                </p>
+              </div>
+
+              {hasActiveActorFilters && (
+                <button
+                  type="button"
+                  onClick={clearActorFilters}
+                  className="btn-ghost text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  <span>Clear Filters</span>
+                </button>
+              )}
+            </div>
+
+            <div className="space-y-2.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-2.5">
+                <div className="relative sm:col-span-2 lg:col-span-6">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={actorSearch}
+                    onChange={(e) => setActorSearch(e.target.value)}
+                    placeholder="Filter IP, ASN, org, host, path..."
+                    className="w-full min-h-[40px] pl-8 pr-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
+                  />
+                </div>
+
+                <div className="lg:col-span-3">
+                  <CustomSelect
+                    value={actorDomainFilter}
+                    onChange={setActorDomainFilter}
+                    options={actorDomainOptions}
+                  />
+                </div>
+
+                <div className="lg:col-span-3">
+                  <CustomSelect
+                    value={actorDispositionFilter}
+                    onChange={setActorDispositionFilter}
+                    options={[
+                      {
+                        value: 'ACTIONABLE',
+                        label: `Actionable Only (${actionableSummary.actionableActors.length})`,
+                      },
+                      {
+                        value: 'NOISE',
+                        label: `Background / Mitigated Noise (${actionableSummary.backgroundNoiseActors.length})`,
+                      },
+                      { value: 'SNOOZED', label: `Snoozed (${actorCounts.snoozed})` },
+                      { value: 'ALLOWLISTED', label: `Allowlisted (${actorCounts.allowlisted})` },
+                      { value: 'RESOLVED', label: `Resolved (${actorCounts.resolved})` },
+                      { value: 'EXPIRED', label: `Expired Noise (${actorCounts.expired})` },
+                      { value: 'ALL', label: `All Actors (${actors.length})` },
+                    ]}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <CustomSelect
+                  value={actorVectorFilter}
+                  onChange={setActorVectorFilter}
+                  options={actorVectorOptions}
+                />
+
+                <CustomSelect
+                  value={actorSeverityFilter}
+                  onChange={setActorSeverityFilter}
+                  options={actorSeverityOptions}
+                />
+
+                <CustomSelect
+                  value={actorCountryFilter}
+                  onChange={setActorCountryFilter}
+                  options={actorCountryOptions}
+                />
+              </div>
+            </div>
+
+            {sourceFeedback && (
+              <div
+                className={`text-xs font-mono px-3 py-2 rounded-xl border ${
+                  sourceFeedback.tone === 'ok'
+                    ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
+                    : 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border-rose-500/30'
+                }`}
+              >
+                {sourceFeedback.text}
+              </div>
+            )}
+
+            {isLoadingActors ? (
+              <div className="p-8 text-center text-xs font-mono text-slate-500">Loading threat actors...</div>
+            ) : filteredActors.length === 0 ? (
+              <div className="p-8 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-center space-y-2.5 text-xs text-slate-500">
+                {actorDispositionFilter === 'ACTIONABLE' && !hasActiveActorFilters ? (
+                  <>
+                    <CheckCircle2 className="w-6 h-6 text-emerald-500 mx-auto" />
+                    <div className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+                      Zero Actionable External Threat Actors
+                    </div>
+                    <div className="text-xs text-slate-600 dark:text-slate-400">
+                      All recurring IPs are either low/medium scanner noise, WAF-covered, snoozed, or allowlisted.
+                    </div>
+                    {actionableSummary.backgroundNoiseActors.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setActorDispositionFilter('NOISE')}
+                        className="btn-secondary text-xs inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                      >
+                        <span>
+                          Inspect Background / Mitigated Noise (
+                          {actionableSummary.backgroundNoiseActors.length})
+                        </span>
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div>
+                      {actorBucket.length > 0 && hasActiveActorFilters
+                        ? 'No threat actors match the active domain, vector, severity, country, or search filters.'
+                        : 'No threat actors match the selected view.'}
+                    </div>
+                    {actorBucket.length > 0 && hasActiveActorFilters && (
+                      <button
+                        type="button"
+                        onClick={clearActorFilters}
+                        className="btn-secondary text-xs inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                        <span>Clear Actor Filters</span>
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {filteredActors.map((actor) => {
+                  const hosts = safeParseJson<string[]>(actor.targetHostsJson, []);
+                  const paths = safeParseJson<string[]>(actor.samplePathsJson, []);
+                  const tags = safeParseJson<string[]>(actor.intelTagsJson, []);
+                  const wafExpr = buildWafRuleExpression(
+                    actor.ipAddress ? [actor.ipAddress] : [],
+                    actor.asn ? [actor.asn] : []
+                  );
+                  const copyKey = `actor-waf-${actor.id}`;
+                  const cfZone = hosts.some((h) => h.includes('parakith')) ? 'parakith.com' : 'panoramadr.com';
+                  const actorCov = evaluateActorWafCoverage(actor, wafRules);
+                  const actorCovered = actorCov.status === 'COVERED';
+                  const actorPartial = actorCov.status === 'PARTIAL';
+                  const isSnoozed = actor.disposition === 'SNOOZED';
+                  const snoozeRem = isSnoozed ? formatSnoozeRemaining(actor.snoozedUntil) : null;
+
+                  const actorDomId = `threat-actor-${actor.id}`;
+                  const isFocusedActor = focusedItemId === actorDomId;
+
+                  return (
+                    <div
+                      key={actor.id}
+                      id={actorDomId}
+                      className={`p-4 rounded-xl border space-y-2.5 transition-shadow ${
+                        isFocusedActor
+                          ? 'bg-rose-50/40 dark:bg-rose-950/20 border-rose-500 ring-2 ring-rose-500 shadow-md'
+                          : 'bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800'
+                      }`}
+                    >
+                      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <StatusBadge
+                            label={actor.highestSeverity}
+                            variant={severityToBadgeVariant(actor.highestSeverity)}
+                          />
+                          <span className="text-sm font-mono font-bold text-slate-900 dark:text-slate-100">
+                            {actor.ipAddress ? (
+                              <CopyableValue value={actor.ipAddress} label="threat actor IP" />
+                            ) : (
+                              actor.id
+                            )}
+                          </span>
+                          {actor.country && (
+                            <span className="px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-[11px] font-mono text-slate-700 dark:text-slate-300">
+                              {actor.country}
+                            </span>
+                          )}
+                          {(actor.asn || actor.asOrg) && (
+                            <span className="text-xs font-mono text-slate-600 dark:text-slate-400">
+                              {actor.asn ? `AS${actor.asn.replace(/^AS/i, '')}` : ''} {actor.asOrg || ''}
+                            </span>
+                          )}
+                          {actor.latestClassification && (
+                            <StatusBadge label={actor.latestClassification} variant="accent" />
+                          )}
+                          {isSnoozed ? (
+                            <span title={actor.snoozedUntil ? `Snoozed until ${formatLocalDateTime(actor.snoozedUntil)}` : undefined}>
+                              <StatusBadge
+                                label={`Snoozed${snoozeRem ? ` · ${snoozeRem}` : ''}`}
+                                variant="info"
+                              />
+                            </span>
+                          ) : (
+                            <StatusBadge
+                              label={actor.disposition}
+                              variant={actor.disposition === 'ACTIVE' ? 'warning' : 'neutral'}
+                            />
+                          )}
+                          {actorCovered && actorCov.primaryRuleName && (
+                            <StatusBadge
+                              label={`WAF Covered: ${actorCov.primaryRuleName}`}
+                              variant="success"
+                            />
+                          )}
+                          {actorPartial && actorCov.primaryRuleName && (
+                            <StatusBadge
+                              label={`Partial WAF: ${actorCov.primaryRuleName}`}
+                              variant="warning"
+                            />
+                          )}
+                          {actor.totalOrigin200s > 0 && (
+                            <StatusBadge
+                              label={`CROSS-OVER: ${actor.totalOrigin200s} Origin 200s`}
+                              variant="danger"
+                            />
+                          )}
+                        </div>
+
+                        <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 shrink-0">
+                          {wafExpr && !actorCovered && (
+                            <button
+                              type="button"
+                              onClick={() => void handleCopyText(copyKey, wafExpr)}
+                              className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                            >
+                              {copiedKey === copyKey ? (
+                                <Check className="w-3.5 h-3.5 text-emerald-500" />
+                              ) : (
+                                <Copy className="w-3.5 h-3.5" />
+                              )}
+                              <span>{copiedKey === copyKey ? 'Copied!' : 'Copy WAF Rule'}</span>
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleOpenExternal(
+                                buildCloudflareSecurityEventsUrl(cfAccountId, cfZone, actor.ipAddress)
+                              )
+                            }
+                            className="btn-ghost text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                            <span>Cloudflare</span>
+                          </button>
+                          {actor.disposition !== 'ALLOWLISTED' && (
+                            <button
+                              type="button"
+                              onClick={() => void handleAllowlistActor(actor)}
+                              className="btn-tonal text-xs whitespace-nowrap flex-shrink-0"
+                              title="Permanently exempt your own trusted IP or ASN from future local PanoramaSRE alerts (never modifies Cloudflare). Use Snooze for external scanner noise."
+                            >
+                              Allowlist
+                            </button>
+                          )}
+                          {isSnoozed || actor.disposition === 'RESOLVED' ? (
+                            <button
+                              type="button"
+                              onClick={() => void handleSetDisposition(actor.id, 'ACTIVE')}
+                              className="btn-secondary text-xs whitespace-nowrap flex-shrink-0"
+                            >
+                              {isSnoozed ? 'Unsnooze' : 'Reopen'}
+                            </button>
+                          ) : (
+                            <SnoozeSplitButton
+                              onSnooze={(days) => void handleSnoozeActor(actor.id, days)}
+                            />
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-mono text-slate-600 dark:text-slate-400 tabular-nums">
+                        <span>Runs seen: {actor.runsSeen}</span>
+                        <span>Requests: {actor.totalRequests}</span>
+                        <span className={actor.totalOrigin200s > 0 ? 'text-rose-600 dark:text-rose-400 font-semibold' : ''}>
+                          Origin 200s: {actor.totalOrigin200s}
+                        </span>
+                        <span title={formatLocalDateTime(actor.lastSeenAt)}>
+                          Last seen: {formatRelativeTime(actor.lastSeenAt)}
+                        </span>
+                        <span title={formatLocalDateTime(actor.firstSeenAt)}>
+                          First seen: {formatRelativeTime(actor.firstSeenAt)}
+                        </span>
+                      </div>
+
+                      {(tags.length > 0 || actor.intelSummary) && (
+                        <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                          {tags.map((t) => (
+                            <StatusBadge key={t} label={`Intel: ${t}`} variant="danger" />
+                          ))}
+                          {actor.intelSummary && (
+                            <span className="text-slate-600 dark:text-slate-400 font-mono text-[11px]">
+                              {actor.intelSummary}
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {(hosts.length > 0 || paths.length > 0) && (
+                        <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400 break-all">
+                          {hosts.length > 0 && <span className="mr-3">Hosts: {hosts.join(', ')}</span>}
+                          {paths.length > 0 && <span>Paths: {paths.slice(0, 6).join(', ')}</span>}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* Active Cloudflare WAF Custom Rules & Free-Plan Slot Budget */}
@@ -2718,465 +3344,6 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
               )}
             </div>
           )}
-
-          {/* External Deterministic Findings */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <ShieldCheck className="w-5 h-5 text-[var(--color-brand-text)]" />
-                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 tabular-nums">
-                  External Perimeter Findings (
-                  {hasActiveFindingFilters
-                    ? `${filteredExternalFindings.length} / ${externalFindings.length}`
-                    : externalFindings.length}
-                  )
-                </h3>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                {hasActiveFindingFilters && (
-                  <button
-                    type="button"
-                    onClick={clearFindingFilters}
-                    className="btn-ghost text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                    <span>Clear Filters</span>
-                  </button>
-                )}
-                <span className="text-xs font-mono text-slate-500 dark:text-slate-400">
-                  Cloudflare HTTP/WAF, IP Threat Intel, Zero Trust Access &amp; Tunnel rules
-                </span>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
-              <div className="relative">
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                <input
-                  type="text"
-                  value={findingSearch}
-                  onChange={(e) => setFindingSearch(e.target.value)}
-                  placeholder="Filter IP, ASN, host, rule, ray ID..."
-                  className="w-full min-h-[40px] pl-8 pr-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
-                />
-              </div>
-
-              <CustomSelect
-                value={findingDomainFilter}
-                onChange={setFindingDomainFilter}
-                options={findingDomainOptions}
-              />
-
-              <CustomSelect
-                value={findingVectorFilter}
-                onChange={setFindingVectorFilter}
-                options={findingVectorOptions}
-              />
-
-              <CustomSelect
-                value={findingSeverityFilter}
-                onChange={setFindingSeverityFilter}
-                options={findingSeverityOptions}
-              />
-            </div>
-
-            {externalFindings.length === 0 ? (
-              <div className="p-6 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-center space-y-1">
-                <CheckCircle2 className="w-6 h-6 text-emerald-500 mx-auto" />
-                <div className="text-sm font-semibold text-slate-800 dark:text-slate-200">
-                  No External Deterministic Anomalies Flagged in This Window
-                </div>
-              </div>
-            ) : filteredExternalFindings.length === 0 ? (
-              <div className="p-6 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-center space-y-2.5">
-                <div className="text-sm font-semibold text-slate-800 dark:text-slate-200">
-                  No External Findings Match Active Filters
-                </div>
-                <button
-                  type="button"
-                  onClick={clearFindingFilters}
-                  className="btn-secondary text-xs inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-                >
-                  <X className="w-3.5 h-3.5" />
-                  <span>Clear Finding Filters</span>
-                </button>
-              </div>
-            ) : (() => {
-              const actionableExtList = filteredExternalFindings.filter((f) =>
-                isFindingActionable(f, wafRules)
-              );
-              const infoExtList = filteredExternalFindings.filter(
-                (f) => !isFindingActionable(f, wafRules)
-              );
-              return (
-                <div className="space-y-4">
-                  {actionableExtList.length > 0 ? (
-                    <div className="space-y-3">{actionableExtList.map(renderFindingRow)}</div>
-                  ) : (
-                    !hasActiveFindingFilters && (
-                      <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-emerald-500/30 flex flex-wrap items-center justify-between gap-2 text-xs">
-                        <div className="flex items-center gap-2 text-slate-700 dark:text-slate-300">
-                          <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                          <span className="font-semibold text-slate-900 dark:text-slate-100">
-                            0 Actionable External Incidents
-                          </span>
-                          <span className="text-slate-500 dark:text-slate-400">
-                            ({infoExtList.length} WAF-covered, low-severity, or resolved item{infoExtList.length === 1 ? '' : 's'})
-                          </span>
-                        </div>
-                      </div>
-                    )
-                  )}
-                  {infoExtList.length > 0 && (
-                    <div className="space-y-2.5">
-                      {!hasActiveFindingFilters && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setShowExternalInformationalFindings((prev) => !prev)
-                          }
-                          className="btn-secondary text-xs inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-                        >
-                          <span>
-                            {showExternalInformationalFindings ? 'Hide' : 'Show'} Informational, WAF-Covered &amp; Resolved ({infoExtList.length})
-                          </span>
-                        </button>
-                      )}
-                      {(hasActiveFindingFilters || showExternalInformationalFindings) && (
-                        <div className="space-y-3">{infoExtList.map(renderFindingRow)}</div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
-          </div>
-
-          {/* Recurring External Threat Actors Ledger */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 tabular-nums">
-                  Recurring External Threat Actors (
-                  {hasActiveActorFilters
-                    ? `${filteredActors.length} / ${actorBucket.length}`
-                    : filteredActors.length}
-                  )
-                </h3>
-                <p className="text-xs text-slate-600 dark:text-slate-400">
-                  Defaults to actionable HIGH/CRITICAL &amp; Origin-200 actors. Background scanners and WAF-covered probes live under Background / Mitigated Noise (auto-expires after 7d unseen).
-                </p>
-              </div>
-
-              {hasActiveActorFilters && (
-                <button
-                  type="button"
-                  onClick={clearActorFilters}
-                  className="btn-ghost text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
-                >
-                  <X className="w-3.5 h-3.5" />
-                  <span>Clear Filters</span>
-                </button>
-              )}
-            </div>
-
-            <div className="space-y-2.5">
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-2.5">
-                <div className="relative sm:col-span-2 lg:col-span-6">
-                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                  <input
-                    type="text"
-                    value={actorSearch}
-                    onChange={(e) => setActorSearch(e.target.value)}
-                    placeholder="Filter IP, ASN, org, host, path..."
-                    className="w-full min-h-[40px] pl-8 pr-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[var(--color-brand)]"
-                  />
-                </div>
-
-                <div className="lg:col-span-3">
-                  <CustomSelect
-                    value={actorDomainFilter}
-                    onChange={setActorDomainFilter}
-                    options={actorDomainOptions}
-                  />
-                </div>
-
-                <div className="lg:col-span-3">
-                  <CustomSelect
-                    value={actorDispositionFilter}
-                    onChange={setActorDispositionFilter}
-                    options={[
-                      {
-                        value: 'ACTIONABLE',
-                        label: `Actionable Only (${actionableSummary.actionableActors.length})`,
-                      },
-                      {
-                        value: 'NOISE',
-                        label: `Background / Mitigated Noise (${actionableSummary.backgroundNoiseActors.length})`,
-                      },
-                      { value: 'SNOOZED', label: `Snoozed (${actorCounts.snoozed})` },
-                      { value: 'ALLOWLISTED', label: `Allowlisted (${actorCounts.allowlisted})` },
-                      { value: 'RESOLVED', label: `Resolved (${actorCounts.resolved})` },
-                      { value: 'EXPIRED', label: `Expired Noise (${actorCounts.expired})` },
-                      { value: 'ALL', label: `All Actors (${actors.length})` },
-                    ]}
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                <CustomSelect
-                  value={actorVectorFilter}
-                  onChange={setActorVectorFilter}
-                  options={actorVectorOptions}
-                />
-
-                <CustomSelect
-                  value={actorSeverityFilter}
-                  onChange={setActorSeverityFilter}
-                  options={actorSeverityOptions}
-                />
-
-                <CustomSelect
-                  value={actorCountryFilter}
-                  onChange={setActorCountryFilter}
-                  options={actorCountryOptions}
-                />
-              </div>
-            </div>
-
-            {sourceFeedback && (
-              <div
-                className={`text-xs font-mono px-3 py-2 rounded-xl border ${
-                  sourceFeedback.tone === 'ok'
-                    ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
-                    : 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border-rose-500/30'
-                }`}
-              >
-                {sourceFeedback.text}
-              </div>
-            )}
-
-            {isLoadingActors ? (
-              <div className="p-8 text-center text-xs font-mono text-slate-500">Loading threat actors...</div>
-            ) : filteredActors.length === 0 ? (
-              <div className="p-8 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-center space-y-2.5 text-xs text-slate-500">
-                {actorDispositionFilter === 'ACTIONABLE' && !hasActiveActorFilters ? (
-                  <>
-                    <CheckCircle2 className="w-6 h-6 text-emerald-500 mx-auto" />
-                    <div className="text-sm font-semibold text-slate-800 dark:text-slate-200">
-                      Zero Actionable External Threat Actors
-                    </div>
-                    <div className="text-xs text-slate-600 dark:text-slate-400">
-                      All recurring IPs are either low/medium scanner noise, WAF-covered, snoozed, or allowlisted.
-                    </div>
-                    {actionableSummary.backgroundNoiseActors.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => setActorDispositionFilter('NOISE')}
-                        className="btn-secondary text-xs inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-                      >
-                        <span>
-                          Inspect Background / Mitigated Noise (
-                          {actionableSummary.backgroundNoiseActors.length})
-                        </span>
-                      </button>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    <div>
-                      {actorBucket.length > 0 && hasActiveActorFilters
-                        ? 'No threat actors match the active domain, vector, severity, country, or search filters.'
-                        : 'No threat actors match the selected view.'}
-                    </div>
-                    {actorBucket.length > 0 && hasActiveActorFilters && (
-                      <button
-                        type="button"
-                        onClick={clearActorFilters}
-                        className="btn-secondary text-xs inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                        <span>Clear Actor Filters</span>
-                      </button>
-                    )}
-                  </>
-                )}
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {filteredActors.map((actor) => {
-                  const hosts = safeParseJson<string[]>(actor.targetHostsJson, []);
-                  const paths = safeParseJson<string[]>(actor.samplePathsJson, []);
-                  const tags = safeParseJson<string[]>(actor.intelTagsJson, []);
-                  const wafExpr = buildWafRuleExpression(
-                    actor.ipAddress ? [actor.ipAddress] : [],
-                    actor.asn ? [actor.asn] : []
-                  );
-                  const copyKey = `actor-waf-${actor.id}`;
-                  const cfZone = hosts.some((h) => h.includes('parakith')) ? 'parakith.com' : 'panoramadr.com';
-                  const actorCov = evaluateActorWafCoverage(actor, wafRules);
-                  const actorCovered = actorCov.status === 'COVERED';
-                  const actorPartial = actorCov.status === 'PARTIAL';
-                  const isSnoozed = actor.disposition === 'SNOOZED';
-                  const snoozeRem = isSnoozed ? formatSnoozeRemaining(actor.snoozedUntil) : null;
-
-                  return (
-                    <div
-                      key={actor.id}
-                      className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-2.5"
-                    >
-                      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <StatusBadge
-                            label={actor.highestSeverity}
-                            variant={severityToBadgeVariant(actor.highestSeverity)}
-                          />
-                          <span className="text-sm font-mono font-bold text-slate-900 dark:text-slate-100">
-                            {actor.ipAddress ? (
-                              <CopyableValue value={actor.ipAddress} label="threat actor IP" />
-                            ) : (
-                              actor.id
-                            )}
-                          </span>
-                          {actor.country && (
-                            <span className="px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-[11px] font-mono text-slate-700 dark:text-slate-300">
-                              {actor.country}
-                            </span>
-                          )}
-                          {(actor.asn || actor.asOrg) && (
-                            <span className="text-xs font-mono text-slate-600 dark:text-slate-400">
-                              {actor.asn ? `AS${actor.asn.replace(/^AS/i, '')}` : ''} {actor.asOrg || ''}
-                            </span>
-                          )}
-                          {actor.latestClassification && (
-                            <StatusBadge label={actor.latestClassification} variant="accent" />
-                          )}
-                          {isSnoozed ? (
-                            <span title={actor.snoozedUntil ? `Snoozed until ${formatLocalDateTime(actor.snoozedUntil)}` : undefined}>
-                              <StatusBadge
-                                label={`Snoozed${snoozeRem ? ` · ${snoozeRem}` : ''}`}
-                                variant="info"
-                              />
-                            </span>
-                          ) : (
-                            <StatusBadge
-                              label={actor.disposition}
-                              variant={actor.disposition === 'ACTIVE' ? 'warning' : 'neutral'}
-                            />
-                          )}
-                          {actorCovered && actorCov.primaryRuleName && (
-                            <StatusBadge
-                              label={`WAF Covered: ${actorCov.primaryRuleName}`}
-                              variant="success"
-                            />
-                          )}
-                          {actorPartial && actorCov.primaryRuleName && (
-                            <StatusBadge
-                              label={`Partial WAF: ${actorCov.primaryRuleName}`}
-                              variant="warning"
-                            />
-                          )}
-                          {actor.totalOrigin200s > 0 && (
-                            <StatusBadge
-                              label={`CROSS-OVER: ${actor.totalOrigin200s} Origin 200s`}
-                              variant="danger"
-                            />
-                          )}
-                        </div>
-
-                        <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 shrink-0">
-                          {wafExpr && !actorCovered && (
-                            <button
-                              type="button"
-                              onClick={() => void handleCopyText(copyKey, wafExpr)}
-                              className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-                            >
-                              {copiedKey === copyKey ? (
-                                <Check className="w-3.5 h-3.5 text-emerald-500" />
-                              ) : (
-                                <Copy className="w-3.5 h-3.5" />
-                              )}
-                              <span>{copiedKey === copyKey ? 'Copied!' : 'Copy WAF Rule'}</span>
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() =>
-                              void handleOpenExternal(
-                                buildCloudflareSecurityEventsUrl(cfAccountId, cfZone, actor.ipAddress)
-                              )
-                            }
-                            className="btn-ghost text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-                          >
-                            <ExternalLink className="w-3.5 h-3.5" />
-                            <span>Cloudflare</span>
-                          </button>
-                          {actor.disposition !== 'ALLOWLISTED' && (
-                            <button
-                              type="button"
-                              onClick={() => void handleAllowlistActor(actor)}
-                              className="btn-tonal text-xs whitespace-nowrap flex-shrink-0"
-                              title="Permanently exempt your own trusted IP or ASN from future local PanoramaSRE alerts (never modifies Cloudflare). Use Snooze for external scanner noise."
-                            >
-                              Allowlist
-                            </button>
-                          )}
-                          {isSnoozed || actor.disposition === 'RESOLVED' ? (
-                            <button
-                              type="button"
-                              onClick={() => void handleSetDisposition(actor.id, 'ACTIVE')}
-                              className="btn-secondary text-xs whitespace-nowrap flex-shrink-0"
-                            >
-                              {isSnoozed ? 'Unsnooze' : 'Reopen'}
-                            </button>
-                          ) : (
-                            <SnoozeSplitButton
-                              onSnooze={(days) => void handleSnoozeActor(actor.id, days)}
-                            />
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-mono text-slate-600 dark:text-slate-400 tabular-nums">
-                        <span>Runs seen: {actor.runsSeen}</span>
-                        <span>Requests: {actor.totalRequests}</span>
-                        <span className={actor.totalOrigin200s > 0 ? 'text-rose-600 dark:text-rose-400 font-semibold' : ''}>
-                          Origin 200s: {actor.totalOrigin200s}
-                        </span>
-                        <span title={formatLocalDateTime(actor.lastSeenAt)}>
-                          Last seen: {formatRelativeTime(actor.lastSeenAt)}
-                        </span>
-                        <span title={formatLocalDateTime(actor.firstSeenAt)}>
-                          First seen: {formatRelativeTime(actor.firstSeenAt)}
-                        </span>
-                      </div>
-
-                      {(tags.length > 0 || actor.intelSummary) && (
-                        <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                          {tags.map((t) => (
-                            <StatusBadge key={t} label={`Intel: ${t}`} variant="danger" />
-                          ))}
-                          {actor.intelSummary && (
-                            <span className="text-slate-600 dark:text-slate-400 font-mono text-[11px]">
-                              {actor.intelSummary}
-                            </span>
-                          )}
-                        </div>
-                      )}
-
-                      {(hosts.length > 0 || paths.length > 0) && (
-                        <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400 break-all">
-                          {hosts.length > 0 && <span className="mr-3">Hosts: {hosts.join(', ')}</span>}
-                          {paths.length > 0 && <span>Paths: {paths.slice(0, 6).join(', ')}</span>}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
         </div>
       )}
 

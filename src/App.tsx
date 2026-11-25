@@ -24,7 +24,8 @@ import type { UnifiZbfPanelTab } from './components/security/UnifiVlanZbfPanel';
 import { DietPiHostView, type DietPiSubTab } from './components/dietpi/DietPiHostView';
 import type { CronActionRequest } from './components/dietpi/CronManagerPanel';
 import { EdgePkiView } from './components/edge/EdgePkiView';
-import { ThreatIntelView } from './components/security/ThreatIntelView';
+import { ThreatIntelView, type ThreatSubViewTab } from './components/security/ThreatIntelView';
+import { classifyFindingSurface } from './lib/threat-utils';
 import { WshHardeningView } from './components/security/WshHardeningView';
 import { ReleasePipelineView } from './components/releases/ReleasePipelineView';
 import { BuildTelemetryView } from './components/telemetry/BuildTelemetryView';
@@ -162,6 +163,15 @@ export const App: React.FC = () => {
   }>({
     tab: 'flow',
     search: '',
+    nonce: 0,
+  });
+  const [threatNav, setThreatNav] = useState<{
+    tab: ThreatSubViewTab;
+    focusId?: string;
+    nonce: number;
+  }>({
+    tab: 'overview',
+    focusId: undefined,
     nonce: 0,
   });
   const [isCronActionBusy, setIsCronActionBusy] = useState<boolean>(false);
@@ -589,6 +599,20 @@ export const App: React.FC = () => {
         }));
       } else if (view === 'settings' && activeTab !== 'settings') {
         setSettingsNav((prev) => ({ tab: 'general', nonce: prev.nonce + 1 }));
+      }
+      if (view === 'security' && (ctx?.tab !== undefined || ctx?.highlightId !== undefined)) {
+        const nextTab: ThreatSubViewTab =
+          ctx?.tab === 'overview' ||
+          ctx?.tab === 'external' ||
+          ctx?.tab === 'internal' ||
+          ctx?.tab === 'allowlist'
+            ? ctx.tab
+            : 'overview';
+        setThreatNav((prev) => ({
+          tab: nextTab,
+          focusId: ctx?.highlightId,
+          nonce: prev.nonce + 1,
+        }));
       }
       setActiveTab(view);
     },
@@ -2972,16 +2996,56 @@ export const App: React.FC = () => {
     [wshSnapshot, fleetCronSummary]
   );
   const dietpiPackagesCount = dietpiBadges.tabs.host.count;
-  const threatBadge = useMemo(
+  const actionableSecuritySummary = useMemo(
     () =>
       computeActionableSecuritySummary({
         latestRun: latestThreatDetail?.run ?? threatRuns[0] ?? null,
         findings: latestThreatDetail?.findings ?? [],
         actors: activeThreatActors,
         wafRules: threatWafRules,
-      }).sidebarBadge,
+      }),
     [latestThreatDetail, threatRuns, activeThreatActors, threatWafRules]
   );
+  const threatBadge = actionableSecuritySummary.sidebarBadge;
+
+  const topThreatSummary = useMemo<{
+    title: string;
+    detail: string;
+    tab: ThreatSubViewTab;
+    focusId?: string;
+  } | null>(() => {
+    const topFinding = actionableSecuritySummary.actionableFindings[0];
+    if (topFinding) {
+      return {
+        title: `${topFinding.severity}: ${topFinding.title}`,
+        detail: `${topFinding.summary}${topFinding.host ? ` • Host: ${topFinding.host}` : ''}`,
+        tab: classifyFindingSurface(topFinding.sourceLayer) === 'external' ? 'external' : 'internal',
+        focusId: `threat-finding-${topFinding.id}`,
+      };
+    }
+    const topActor = actionableSecuritySummary.deduplicatedActionableActors[0];
+    if (topActor) {
+      return {
+        title: `${topActor.highestSeverity} Threat Actor: ${topActor.ipAddress || topActor.id}${
+          topActor.totalOrigin200s > 0 ? ` (${topActor.totalOrigin200s} Origin 200s)` : ''
+        }`,
+        detail: `${topActor.asOrg || topActor.asn || 'External IP'} • ${topActor.totalRequests} reqs${
+          topActor.latestClassification ? ` • ${topActor.latestClassification}` : ''
+        }`,
+        tab: 'external',
+        focusId: `threat-actor-${topActor.id}`,
+      };
+    }
+    const topOutage = actionableSecuritySummary.collectorOutages[0];
+    if (topOutage) {
+      return {
+        title: `Collector Outage: ${topOutage.label} (${topOutage.status})`,
+        detail: '360° Threat & Zero Trust collector failed during the latest audit window.',
+        tab: 'overview',
+      };
+    }
+    return null;
+  }, [actionableSecuritySummary]);
 
   const getWorkspaceRoot = useCallback(() => {
     if (apps.length > 0 && apps[0].workspacePath) {
@@ -3976,11 +4040,17 @@ export const App: React.FC = () => {
         id: 'alert-threat-intel',
         domain: 'Threat & ZT',
         severity: threatBadge.severity === 'error' ? 'critical' : 'warning',
-        title: `${threatBadge.count} Actionable Security Finding${threatBadge.count === 1 ? '' : 's'}`,
-        detail: 'Unmitigated Cloudflare / UniFi SIEM findings or rogue LAN clients require triage.',
-        actionLabel: 'Open Threat SOC',
+        title:
+          topThreatSummary?.title ||
+          `${threatBadge.count} Actionable Security Finding${threatBadge.count === 1 ? '' : 's'}`,
+        detail:
+          topThreatSummary?.detail ||
+          'Unmitigated Cloudflare / UniFi SIEM findings or rogue LAN clients require triage.',
+        actionLabel: topThreatSummary?.focusId ? 'Inspect High Threat' : 'Open Threat SOC',
         onAction: () =>
           navigateTo('security', {
+            tab: topThreatSummary?.tab,
+            highlightId: topThreatSummary?.focusId,
             returnFromCurrent: true,
           }),
       });
@@ -4242,6 +4312,14 @@ export const App: React.FC = () => {
               latestThreatRun={latestThreatDetail?.run ?? threatRuns[0] ?? null}
               threatAlertCount={threatBadge.count}
               threatAlertSeverity={threatBadge.severity}
+              topThreatTitle={topThreatSummary?.title ?? null}
+              topThreatDetail={topThreatSummary?.detail ?? null}
+              topThreatTargetTab={
+                topThreatSummary?.tab === 'external' || topThreatSummary?.tab === 'internal'
+                  ? topThreatSummary.tab
+                  : 'overview'
+              }
+              topThreatFocusId={topThreatSummary?.focusId ?? null}
               terminalTabs={terminalTabs}
               isLoading={apps.length === 0}
               isInitialSyncComplete={hasCompletedInitialSync}
@@ -4266,7 +4344,13 @@ export const App: React.FC = () => {
               onRunPenetrationAudit={() => handleRunPenetrationAudit('hud')}
               onNavigateToTopology={() => navigateTo('topology', { returnFromCurrent: true })}
               onNavigateToHardening={() => navigateTo('hardening', { returnFromCurrent: true })}
-              onNavigateToThreat={() => navigateTo('security', { returnFromCurrent: true })}
+              onNavigateToThreat={(opts) =>
+                navigateTo('security', {
+                  tab: opts?.tab ?? topThreatSummary?.tab,
+                  highlightId: opts?.focusId ?? topThreatSummary?.focusId,
+                  returnFromCurrent: true,
+                })
+              }
               onNavigateToSmoke={() => navigateTo('smoke', { returnFromCurrent: true })}
               onNavigateToPki={() => navigateTo('edge', { returnFromCurrent: true })}
               isDeployingAll={isDeployingAll}
@@ -4629,6 +4713,9 @@ export const App: React.FC = () => {
               onOpenInBottomConsole={handleOpenInBottomConsole}
               onAbortJob={handleAbortJob}
               onClearTab={handleClearTab}
+              initialSubView={threatNav.tab}
+              initialFocusId={threatNav.focusId}
+              initialNavNonce={threatNav.nonce}
             />
           )}
 

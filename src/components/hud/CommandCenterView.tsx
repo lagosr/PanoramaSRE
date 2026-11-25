@@ -46,6 +46,10 @@ interface CommandCenterViewProps {
   latestThreatRun?: ThreatAuditRunRow | null;
   threatAlertCount?: number;
   threatAlertSeverity?: 'error' | 'warning' | null;
+  topThreatTitle?: string | null;
+  topThreatDetail?: string | null;
+  topThreatTargetTab?: 'overview' | 'external' | 'internal';
+  topThreatFocusId?: string | null;
   terminalTabs?: TerminalTab[];
   isLoading: boolean;
   isInitialSyncComplete?: boolean;
@@ -64,7 +68,10 @@ interface CommandCenterViewProps {
   onRunPenetrationAudit?: () => void;
   onNavigateToTopology?: () => void;
   onNavigateToHardening?: () => void;
-  onNavigateToThreat?: () => void;
+  onNavigateToThreat?: (opts?: {
+    tab?: 'overview' | 'external' | 'internal';
+    focusId?: string;
+  }) => void;
   onNavigateToSmoke?: () => void;
   onNavigateToPki?: () => void;
   isDeployingAll?: boolean;
@@ -95,6 +102,10 @@ export function CommandCenterView({
   latestThreatRun = null,
   threatAlertCount = 0,
   threatAlertSeverity = null,
+  topThreatTitle = null,
+  topThreatDetail = null,
+  topThreatTargetTab,
+  topThreatFocusId = null,
   isLoading,
   isInitialSyncComplete = true,
   networkPosture = 'LAN_DIRECT',
@@ -170,6 +181,10 @@ export function CommandCenterView({
       latestThreatRun,
       threatAlertCount,
       threatAlertSeverity,
+      topThreatTitle,
+      topThreatDetail,
+      topThreatTargetTab,
+      topThreatFocusId,
       securityViolationCount,
       failingInvariants,
       hardeningPassingCount,
@@ -191,6 +206,10 @@ export function CommandCenterView({
       latestThreatRun,
       threatAlertCount,
       threatAlertSeverity,
+      topThreatTitle,
+      topThreatDetail,
+      topThreatTargetTab,
+      topThreatFocusId,
       securityViolationCount,
       failingInvariants,
       hardeningPassingCount,
@@ -241,7 +260,7 @@ export function CommandCenterView({
         onNavigateToBackups?.();
         break;
       case 'open_threat':
-        onNavigateToThreat?.();
+        onNavigateToThreat?.({ tab: action.threatTab, focusId: action.threatFocusId });
         break;
       case 'open_smoke':
         onNavigateToSmoke?.();
@@ -264,7 +283,14 @@ export function CommandCenterView({
         onNavigateToRelease?.(behindWshApps[0]?.manifest.slug ?? apps[0]?.manifest.slug ?? '');
         break;
       case 'security':
-        onNavigateToThreat?.();
+        if (threatAlertCount > 0 && topThreatTargetTab) {
+          onNavigateToThreat?.({
+            tab: topThreatTargetTab,
+            focusId: topThreatFocusId ?? undefined,
+          });
+        } else {
+          onNavigateToThreat?.();
+        }
         break;
       case 'hardening':
         (onNavigateToHardening ?? onNavigateToTopology)?.();

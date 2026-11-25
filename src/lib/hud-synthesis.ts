@@ -45,6 +45,8 @@ export interface HudIncidentAction {
   label: string;
   kind: HudIncidentActionKind;
   targetSlug?: string;
+  threatTab?: 'overview' | 'external' | 'internal';
+  threatFocusId?: string;
 }
 
 export interface HudIncidentItem {
@@ -87,6 +89,10 @@ export interface HudSynthesisInput {
   latestThreatRun?: ThreatAuditRunRow | null;
   threatAlertCount?: number;
   threatAlertSeverity?: 'error' | 'warning' | null;
+  topThreatTitle?: string | null;
+  topThreatDetail?: string | null;
+  topThreatTargetTab?: 'overview' | 'external' | 'internal';
+  topThreatFocusId?: string | null;
   securityViolationCount?: number;
   failingInvariants?: SecurityPostureInvariant[];
   hardeningPassingCount?: number;
@@ -253,18 +259,28 @@ export function buildHudIncidentQueue(input: HudSynthesisInput): HudIncidentItem
   const threatCount = input.threatAlertCount ?? 0;
   if (threatCount > 0) {
     const verdict = input.latestThreatRun?.intrusionVerdict;
+    const defaultTitle = `${threatCount} Actionable Security Finding${threatCount > 1 ? 's' : ''} Require Triage`;
+    const defaultDetail = verdict
+      ? `Latest 360° Threat verdict: ${verdict}. Review unmitigated edge actors or internal SIEM events.`
+      : 'Unmitigated Cloudflare WAF / Zero Trust or internal UniFi SIEM findings detected.';
+    const title = input.topThreatTitle
+      ? threatCount === 1
+        ? input.topThreatTitle
+        : `${threatCount} Actionable Security Threats — ${input.topThreatTitle}`
+      : defaultTitle;
+    const detail = input.topThreatDetail || defaultDetail;
     items.push({
       id: 'inc-threat',
       domain: 'threat',
       domainLabel: 'THREAT SOC',
       severity: input.threatAlertSeverity === 'error' ? 'critical' : 'warning',
-      title: `${threatCount} Actionable Security Finding${threatCount > 1 ? 's' : ''} Require Triage`,
-      detail: verdict
-        ? `Latest 360° Threat verdict: ${verdict}. Review unmitigated edge actors or internal SIEM events.`
-        : 'Unmitigated Cloudflare WAF / Zero Trust or internal UniFi SIEM findings detected.',
+      title,
+      detail,
       primaryAction: {
-        label: 'Open Threat SOC',
+        label: input.topThreatFocusId ? 'Inspect High Threat' : 'Open Threat SOC',
         kind: 'open_threat',
+        threatTab: input.topThreatTargetTab,
+        threatFocusId: input.topThreatFocusId || undefined,
       },
     });
   }
