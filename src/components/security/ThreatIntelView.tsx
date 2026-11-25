@@ -1649,7 +1649,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
     <div className="p-6 space-y-6 w-full min-w-0 max-w-[1920px] mx-auto">
       {/* Top 360° Command Header Card */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+        <div className="flex flex-col 2xl:flex-row 2xl:items-center 2xl:justify-between gap-4">
           <div className="space-y-2 min-w-0">
             <div className="flex flex-wrap items-center gap-2.5">
               <div className="w-9 h-9 rounded-xl bg-[var(--color-brand-subtle)] text-[var(--color-brand-text)] border border-[var(--color-brand-ring)] flex items-center justify-center shrink-0">
@@ -1717,7 +1717,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
           </div>
 
           {/* Primary Actions Bar */}
-          <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 shrink-0">
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
             <div className="w-40">
               <CustomSelect
                 value={lookbackHours}
@@ -2014,7 +2014,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                     key={`spotlight-find-${f.id}`}
                     className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-rose-500/35 space-y-2"
                   >
-                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2">
+                    <div className="flex flex-col gap-2 min-w-0">
                       <div className="flex flex-wrap items-center gap-2 min-w-0">
                         <StatusBadge label={f.severity} variant={severityToBadgeVariant(f.severity)} />
                         <StatusBadge label={f.sourceLayer} variant="neutral" />
@@ -2023,7 +2023,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                           {f.title}
                         </span>
                       </div>
-                      <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                      <div className="flex flex-wrap items-center gap-1.5 w-full min-w-0">
                         {spotlightMatchedEmail && !isSpotlightEmailTrusted && (
                           <button
                             type="button"
@@ -2774,9 +2774,12 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
       {subView === 'external' && (
         <div className="space-y-6">
           {/* External Action Header */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
-            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-              <div className="space-y-1">
+          <div
+            data-testid="threat-external-header-card"
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4"
+          >
+            <div className="flex flex-col gap-3 min-w-0">
+              <div className="space-y-1.5 min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <Globe className="w-5 h-5 text-sky-600 dark:text-sky-400 shrink-0" />
                   <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
@@ -2792,7 +2795,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                 </p>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <div className="flex flex-wrap items-center gap-2 w-full min-w-0 pt-1">
                 <button
                   type="button"
                   onClick={() => void handleOpenExternal(buildCloudflareSecurityEventsUrl(cfAccountId, 'panoramadr.com'))}
@@ -3311,7 +3314,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
             className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4"
           >
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-              <div className="space-y-1">
+              <div className="space-y-1 min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <ShieldCheck className="w-5 h-5 text-[var(--color-brand-text)] shrink-0" />
                   <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
@@ -3330,7 +3333,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                 </p>
               </div>
 
-              <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 shrink-0">
+              <div className="flex flex-wrap items-center gap-2 lg:shrink-0">
                 <button
                   type="button"
                   onClick={() => void loadWafRules(true)}
@@ -3741,9 +3744,12 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
           )}
 
           {/* Internal Action Header & Hardware Telemetry */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
-            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-              <div className="space-y-1">
+          <div
+            data-testid="threat-internal-header-card"
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4"
+          >
+            <div className="flex flex-col gap-3 min-w-0">
+              <div className="space-y-1.5 min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <Wifi className="w-5 h-5 text-[var(--color-brand-text)] shrink-0" />
                   <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
@@ -3759,11 +3765,11 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                   />
                 </div>
                 <p className="text-xs text-slate-600 dark:text-slate-400">
-                  Monitors your private LAN hardware (<code className="font-mono">{unifiBaseUrl}</code>), device MAC baseline, UniFi CyberSecure IPS/CEF alerts, WSH SSH auth, and <code className="font-mono">PanoramaAuth</code>. Actions apply in UniFi Console, WSH Firewall, or the `unifi-siem` collector.
+                  Monitors your private LAN hardware (<code className="font-mono">{unifiBaseUrl}</code>), device MAC baseline, UniFi CyberSecure IPS/CEF alerts, WSH SSH auth, and <code className="font-mono">PanoramaAuth</code>. Actions apply in UniFi Console, WSH Firewall, or the <code className="font-mono">unifi-siem</code> collector.
                 </p>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <div className="flex flex-wrap items-center gap-2 w-full min-w-0 pt-1">
                 <button
                   type="button"
                   onClick={() => void handleOpenExternal(buildUnifiConsoleUrl(unifiBaseUrl, 'clients'))}

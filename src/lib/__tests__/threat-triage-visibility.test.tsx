@@ -327,4 +327,64 @@ describe('High-threat triage visibility and direct HUD drill-down', () => {
     expect(allowlistHtml).toContain('Sync Access Emails Now');
     expect(allowlistHtml).toContain('Family Access');
   });
+
+  it('stacks Internal LAN and External Perimeter multi-button header cards vertically without shrink-0 crushing', () => {
+    const internalHtml = renderToStaticMarkup(
+      <ThreatIntelView
+        latestDetail={makeDetail()}
+        runs={[makeRun()]}
+        settings={null}
+        isRunningAudit={false}
+        onRunAuditNow={vi.fn()}
+        onEscalateRunToCarbon={vi.fn()}
+        onSelectRunId={vi.fn()}
+        onRefreshAll={vi.fn()}
+        onNavigateToSettings={vi.fn()}
+        onNavigateToUnifiZbf={vi.fn()}
+        onNavigateToSiemRelease={vi.fn()}
+        initialSubView="internal"
+      />
+    );
+
+    const internalCardMatch = internalHtml.match(
+      /<div data-testid="threat-internal-header-card"[\s\S]*?<\/div><\/div><\/div>/
+    );
+    expect(internalCardMatch).not.toBeNull();
+    const internalCard = internalCardMatch![0];
+    expect(internalCard).toContain('flex flex-col gap-3 min-w-0');
+    expect(internalCard).toContain('flex flex-wrap items-center gap-2 w-full min-w-0 pt-1');
+    expect(internalCard).not.toContain('lg:flex-row');
+    expect(internalCard).not.toContain('flex-wrap items-center gap-2 shrink-0');
+    expect(internalCard).toContain('UniFi Clients');
+    expect(internalCard).toContain('UniFi Flows / IPS');
+    expect(internalCard).toContain('UniFi Firewall');
+    expect(internalCard).toContain('UniFi Network &amp; ZBF');
+    expect(internalCard).toContain('LAN Device Baseline');
+    expect(internalCard).toContain('Manage SIEM');
+
+    const externalHtml = renderToStaticMarkup(
+      <ThreatIntelView
+        latestDetail={makeDetail()}
+        runs={[makeRun()]}
+        settings={null}
+        isRunningAudit={false}
+        onRunAuditNow={vi.fn()}
+        onEscalateRunToCarbon={vi.fn()}
+        onSelectRunId={vi.fn()}
+        onRefreshAll={vi.fn()}
+        onNavigateToSettings={vi.fn()}
+        initialSubView="external"
+      />
+    );
+
+    const externalCardMatch = externalHtml.match(
+      /<div data-testid="threat-external-header-card"[\s\S]*?<\/div><\/div><\/div>/
+    );
+    expect(externalCardMatch).not.toBeNull();
+    const externalCard = externalCardMatch![0];
+    expect(externalCard).toContain('flex flex-col gap-3 min-w-0');
+    expect(externalCard).toContain('flex flex-wrap items-center gap-2 w-full min-w-0 pt-1');
+    expect(externalCard).not.toContain('lg:flex-row');
+    expect(externalCard).not.toContain('flex-wrap items-center gap-2 shrink-0');
+  });
 });
