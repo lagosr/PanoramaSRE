@@ -72,9 +72,18 @@ export const ReleaseFleetRail: React.FC<ReleaseFleetRailProps> = ({
   }, [apps, isInitialSyncComplete]);
 
   const filteredApps = useMemo(() => {
-    if (filterMode === 'all' || !isInitialSyncComplete) return apps;
-    return apps.filter(isAppDeployCandidate);
-  }, [apps, filterMode, isInitialSyncComplete]);
+    const base =
+      filterMode === 'all' || !isInitialSyncComplete ? [...apps] : apps.filter(isAppDeployCandidate);
+    if (!isInitialSyncComplete) return base;
+    return base.sort((a, b) => {
+      const critA = isAppCritical(a, { isInitialSyncComplete, networkPosture }) ? 0 : 1;
+      const critB = isAppCritical(b, { isInitialSyncComplete, networkPosture }) ? 0 : 1;
+      if (critA !== critB) return critA - critB;
+      const candA = isAppDeployCandidate(a) ? 0 : 1;
+      const candB = isAppDeployCandidate(b) ? 0 : 1;
+      return candA - candB;
+    });
+  }, [apps, filterMode, isInitialSyncComplete, networkPosture]);
 
   return (
     <aside
@@ -90,7 +99,13 @@ export const ReleaseFleetRail: React.FC<ReleaseFleetRailProps> = ({
               Fleet Targets
             </h2>
           </div>
-          <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400 tabular-nums whitespace-nowrap">
+          <span
+            className={`text-[11px] font-mono tabular-nums whitespace-nowrap ${
+              isInitialSyncComplete && behindCount > 0
+                ? 'bg-amber-500/20 text-amber-900 dark:text-amber-200 border border-amber-500/60 font-bold px-2 py-0.5 rounded-full'
+                : 'text-slate-500 dark:text-slate-400'
+            }`}
+          >
             {isInitialSyncComplete ? `${behindCount} behind` : 'Syncing...'}
           </span>
         </div>
@@ -133,15 +148,18 @@ export const ReleaseFleetRail: React.FC<ReleaseFleetRailProps> = ({
               networkPosture,
             });
             const undeployedCount = comp?.undeployed_commits?.length || 0;
+            const aheadCount = comp?.ahead_count ?? undeployedCount;
             const isLocalDirty = Boolean(comp?.local_dirty);
+            const isDeployCandidate = isInitialSyncComplete && isAppDeployCandidate(app);
             const needsDeploy =
+              isDeployCandidate ||
               undeployedCount > 0 ||
               isLocalDirty ||
               comp?.state === 'AHEAD' ||
               comp?.state === 'LOCAL_WIP' ||
               app.provenanceState === 'DIRTY_PROD' ||
               app.provenanceState === 'DIVERGED';
-            const isWipOnly = !isCritical && undeployedCount === 0 && isLocalDirty;
+            const isWipOnly = !isCritical && aheadCount === 0 && undeployedCount === 0 && isLocalDirty;
             const isDeploying = Boolean(getAppDeployJob(app.manifest.slug));
             const isSelected = selectedSlug === app.manifest.slug;
             const isChecked = batchSelectedSlugs.has(app.manifest.slug);
@@ -154,11 +172,15 @@ export const ReleaseFleetRail: React.FC<ReleaseFleetRailProps> = ({
               <div
                 key={app.manifest.slug}
                 onClick={() => onSelectApp(app.manifest.slug)}
-                className={`px-3.5 py-2.5 cursor-pointer transition-colors border-l-2 ${
+                className={`px-3.5 py-2.5 cursor-pointer transition-colors border-l-4 ${
                   isSelected
-                    ? 'border-l-[var(--color-brand)] bg-slate-50 dark:bg-slate-800/60'
+                    ? isDeployCandidate && !isCritical
+                      ? 'border-l-[var(--color-brand)] bg-amber-500/15 dark:bg-amber-500/15'
+                      : 'border-l-[var(--color-brand)] bg-slate-50 dark:bg-slate-800/60'
                     : isCritical
                     ? 'border-l-rose-500 bg-rose-50/40 dark:bg-rose-950/15 hover:bg-rose-50/70 dark:hover:bg-rose-950/30'
+                    : isDeployCandidate
+                    ? 'border-l-amber-500 bg-amber-500/[0.08] dark:bg-amber-500/[0.11] hover:bg-amber-500/15'
                     : 'border-l-transparent hover:bg-slate-50 dark:hover:bg-slate-800/40'
                 }`}
               >
@@ -233,6 +255,19 @@ export const ReleaseFleetRail: React.FC<ReleaseFleetRailProps> = ({
                         <span>•</span>
                         <span className="truncate">{buildBadge.shortLabel}</span>
                       </div>
+
+                      {!isCritical && isDeployCandidate && (
+                        <div className="mt-1 text-[10px] font-semibold text-amber-800 dark:text-amber-300 flex items-center gap-1 truncate tabular-nums">
+                          <Rocket className="w-2.5 h-2.5 shrink-0" />
+                          <span className="truncate">
+                            {aheadCount > 0
+                              ? `Release ready · ${aheadCount} commit${aheadCount === 1 ? '' : 's'} ahead`
+                              : isLocalDirty
+                              ? 'Local uncommitted changes'
+                              : 'Drift detected · Release ready'}
+                          </span>
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -260,13 +295,13 @@ export const ReleaseFleetRail: React.FC<ReleaseFleetRailProps> = ({
                         LIVE
                       </span>
                     ) : isWipOnly ? (
-                      <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/40">
+                      <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-amber-500/25 text-amber-950 dark:text-amber-200 border border-amber-500/60">
                         WIP
                       </span>
                     ) : needsDeploy ? (
-                      <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-rose-500/15 text-rose-700 dark:text-rose-300 border border-rose-500/40 tabular-nums">
-                        +{undeployedCount}
-                        {isLocalDirty ? '*' : ''}
+                      <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-amber-500 text-slate-950 shadow-sm inline-flex items-center gap-1 tabular-nums">
+                        <Rocket className="w-2.5 h-2.5" />
+                        {aheadCount > 0 ? `READY +${aheadCount}${isLocalDirty ? '*' : ''}` : 'READY'}
                       </span>
                     ) : (
                       <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/25">

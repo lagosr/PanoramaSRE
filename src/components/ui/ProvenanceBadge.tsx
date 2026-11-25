@@ -15,7 +15,7 @@ export function ProvenanceBadge({ state, aheadCount = 0, behindCount = 0 }: Prov
       );
     case 'AHEAD':
       return (
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-500/15 text-amber-900 dark:text-amber-300 border border-amber-500/30 whitespace-nowrap">
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/20 text-amber-950 dark:text-amber-200 border border-amber-500/60 shadow-[0_0_10px_rgba(245,158,11,0.18)] whitespace-nowrap">
           <span className="w-1.5 h-1.5 rounded-full bg-amber-600 dark:bg-amber-400 animate-pulse"></span>
           BEHIND BY {aheadCount}
         </span>

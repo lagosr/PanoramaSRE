@@ -122,6 +122,7 @@ export function ReleasePipelineView({
   onReapplyHardening,
 }: ReleasePipelineViewProps) {
   const [localSelectedAppSlug, setLocalSelectedAppSlug] = useState<string>(apps[0]?.manifest.slug || '');
+  const [hasUserSelectedApp, setHasUserSelectedApp] = useState<boolean>(false);
   const [localTrackedJobIds, setLocalTrackedJobIds] = useState<Record<string, string>>({});
   const [bumpVersion, setBumpVersion] = useState<string>('none');
   const [allowDirty, setAllowDirty] = useState<boolean>(false);
@@ -176,14 +177,16 @@ export function ReleasePipelineView({
       });
   };
 
-  // Resolve active running app slug if any
+  // Resolve active running app slug & behind candidates
   const runningApp = apps.find((a) => !!getAppDeployJob(a.manifest.slug));
+  const behindApps = isInitialSyncComplete ? apps.filter(isAppDeployCandidate) : [];
 
   const effectiveSelectedSlug =
     (controlledAppSlug && apps.some((a) => a.manifest.slug === controlledAppSlug)
       ? controlledAppSlug
       : undefined) ||
     (!controlledAppSlug && runningApp ? runningApp.manifest.slug : undefined) ||
+    (!hasUserSelectedApp && behindApps[0] ? behindApps[0].manifest.slug : undefined) ||
     (localSelectedAppSlug && apps.some((a) => a.manifest.slug === localSelectedAppSlug)
       ? localSelectedAppSlug
       : undefined) ||
@@ -191,6 +194,7 @@ export function ReleasePipelineView({
     '';
 
   const handleSelectApp = (slug: string) => {
+    setHasUserSelectedApp(true);
     setLocalSelectedAppSlug(slug);
     onSelectAppSlug?.(slug);
     setRollbackTag('');
@@ -592,6 +596,12 @@ export function ReleasePipelineView({
     });
   }
 
+  const selectedIsBehind = isInitialSyncComplete && Boolean(selectedApp && isAppDeployCandidate(selectedApp));
+  const selectedAheadCount =
+    selectedApp?.composition?.ahead_count ??
+    selectedApp?.composition?.undeployed_commits?.length ??
+    0;
+
   return (
     <div className="p-6 w-full min-w-0 max-w-[1920px] mx-auto space-y-5">
       {/* Control Tower Header */}
@@ -752,6 +762,53 @@ export function ReleasePipelineView({
         </div>
       )}
 
+      {/* Above-the-Fold Release Ready Spotlight Banner */}
+      {behindApps.length > 0 && (
+        <div
+          data-testid="releases-behind-banner"
+          className="rounded-2xl border-2 border-amber-500/60 bg-white dark:bg-slate-900 p-4 shadow-md flex flex-col lg:flex-row lg:items-center justify-between gap-3"
+        >
+          <div className="flex items-start gap-3 min-w-0">
+            <div className="p-2 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-700 dark:text-amber-300 shrink-0">
+              <Rocket className="w-4 h-4" />
+            </div>
+            <div className="min-w-0">
+              <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 tabular-nums">
+                {behindApps.length} {behindApps.length === 1 ? 'Site' : 'Sites'} Behind Production — Ready for Release
+              </h3>
+              <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
+                Local <code className="font-mono">HEAD</code> is ahead of live production. Select a target to inspect its diff or launch its deployment pipeline.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {behindApps.map((bApp) => {
+              const ahead = bApp.composition?.ahead_count ?? bApp.composition?.undeployed_commits?.length ?? 0;
+              const isSelectedTarget = selectedApp?.manifest.slug === bApp.manifest.slug;
+              return (
+                <button
+                  key={bApp.manifest.slug}
+                  type="button"
+                  onClick={() => handleSelectApp(bApp.manifest.slug)}
+                  className={`text-xs font-mono font-bold px-3 py-1.5 rounded-xl border inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 cursor-pointer transition-colors tabular-nums ${
+                    isSelectedTarget
+                      ? 'btn-primary'
+                      : 'bg-amber-500/15 hover:bg-amber-500/25 text-amber-950 dark:text-amber-200 border-amber-500/50'
+                  }`}
+                >
+                  <Rocket className="w-3.5 h-3.5 shrink-0" />
+                  <span>{bApp.manifest.displayName}</span>
+                  <span className="opacity-85">
+                    {ahead > 0 ? `(+${ahead})` : bApp.composition?.local_dirty ? '(WIP)' : '(DRIFT)'}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Master-Detail Deployment Control Tower (Left Sticky Rail + Right Workbench) */}
       <div className="flex flex-col lg:flex-row items-start gap-5 w-full min-w-0">
         <ReleaseFleetRail
@@ -773,14 +830,20 @@ export function ReleasePipelineView({
       {selectedApp && (
         <div className="flex-1 min-w-0 w-full space-y-4">
           {/* Active Production Deployment Header Card */}
-          <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm">
+          <div
+            className={`rounded-2xl border bg-white dark:bg-slate-900 p-4 shadow-sm ${
+              selectedIsBehind
+                ? 'border-amber-500/60 ring-1 ring-amber-500/30'
+                : 'border-slate-200 dark:border-slate-800'
+            }`}
+          >
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800/80 pb-3.5 mb-3.5">
               <div className="flex items-center gap-2.5">
                 <div className="w-9 h-9 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
                   <Server className="w-4 h-4" />
                 </div>
                 <div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span className="text-xs uppercase tracking-wider font-semibold text-slate-400">
                       {isWshService ? 'Active WSH Service Container' : 'Active Production Release'}
                     </span>
@@ -802,6 +865,12 @@ export function ReleasePipelineView({
                           : 'STOPPED'
                         : selectedApp.health?.status?.toUpperCase() || 'UNREACHABLE'}
                     </span>
+                    {selectedIsBehind && (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold font-mono bg-amber-500 text-slate-950 shadow-sm tabular-nums">
+                        <Rocket className="w-3 h-3" />
+                        RELEASE READY{selectedAheadCount > 0 ? ` · +${selectedAheadCount}` : ''}
+                      </span>
+                    )}
                   </div>
                   <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2 mt-0.5">
                     {selectedApp.manifest.displayName}

@@ -9,7 +9,7 @@ import {
 } from '../../lib/types';
 import { ProvenanceBadge } from '../ui/ProvenanceBadge';
 import { BlastRadiusBadge } from '../ui/BlastRadiusBadge';
-import { AlertCircle, HardDriveDownload, XCircle, Globe, MessageSquare, Server } from 'lucide-react';
+import { AlertCircle, HardDriveDownload, XCircle, Globe, MessageSquare, Server, Rocket } from 'lucide-react';
 
 interface FleetAppCardProps {
   app: DiscoveredApp;
@@ -64,6 +64,8 @@ export function FleetAppCard({
           ? 'bg-rose-50 dark:bg-rose-950/30 border-rose-500/80 shadow-[0_0_24px_rgba(244,63,94,0.2)] ring-1 ring-rose-500/50'
           : isBackupFailed
           ? 'bg-rose-50 dark:bg-rose-950/20 border-rose-500/60 shadow-sm'
+          : deployCandidate
+          ? 'bg-white dark:bg-slate-900 border-amber-500/75 dark:border-amber-500/65 shadow-sm ring-1 ring-amber-500/35'
           : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm hover:border-slate-300 dark:hover:border-slate-700'
       }`}
     >
@@ -90,6 +92,32 @@ export function FleetAppCard({
           <span className="font-mono text-[10px] uppercase tracking-wider bg-rose-700 dark:bg-rose-600 text-white px-1.5 py-0.5 rounded">
             FAILED
           </span>
+        </div>
+      )}
+
+      {/* Release Ready Highlight Banner if local HEAD is ahead of production */}
+      {!isCritical && !isBackupFailed && deployCandidate && (
+        <div
+          data-testid={`fleet-card-release-ready-${app.manifest.slug}`}
+          className="mb-3 px-3 py-1.5 rounded-lg bg-amber-500/15 border border-amber-500/45 flex items-center justify-between gap-2 text-amber-950 dark:text-amber-200 text-xs font-semibold"
+        >
+          <div className="flex items-center gap-1.5 min-w-0">
+            <Rocket className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+            <span className="truncate">
+              {aheadCount > 0
+                ? `RELEASE READY: ${aheadCount} COMMIT${aheadCount === 1 ? '' : 'S'} AHEAD`
+                : 'RELEASE READY: LOCAL DRIFT'}
+            </span>
+          </div>
+          {onNavigateToRelease && (
+            <button
+              type="button"
+              onClick={() => onNavigateToRelease(app.manifest.slug)}
+              className="font-mono text-[10px] uppercase tracking-wider bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-2 py-0.5 rounded whitespace-nowrap flex-shrink-0 cursor-pointer transition-colors"
+            >
+              Deploy →
+            </button>
+          )}
         </div>
       )}
 

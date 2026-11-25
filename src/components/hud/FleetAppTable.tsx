@@ -97,6 +97,8 @@ export const FleetAppTable: React.FC<FleetAppTableProps> = ({
                   className={
                     isCritical
                       ? 'bg-rose-50/70 dark:bg-rose-950/20'
+                      : deployCandidate
+                      ? 'bg-amber-50/70 dark:bg-amber-500/[0.08] hover:bg-amber-100/60 dark:hover:bg-amber-500/15 border-l-4 border-l-amber-500'
                       : 'hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors'
                   }
                 >

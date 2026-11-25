@@ -222,14 +222,17 @@ export function CommandCenterView({
   const incidentQueue = useMemo(() => buildHudIncidentQueue(synthesisInput), [synthesisInput]);
   const scorecardCards = useMemo(() => buildHudScorecard(synthesisInput), [synthesisInput]);
 
+  const allBehindApps = useMemo(() => {
+    if (!isInitialSyncComplete) return [];
+    return apps.filter(isAppDeployCandidate);
+  }, [apps, isInitialSyncComplete]);
+
   const behindWshApps = useMemo(() => {
     if (!isInitialSyncComplete) return [];
-    return apps.filter(
-      (a) =>
-        (!a.manifest.hostingTarget || a.manifest.hostingTarget === 'wsh-docker') &&
-        isAppDeployCandidate(a)
+    return allBehindApps.filter(
+      (a) => !a.manifest.hostingTarget || a.manifest.hostingTarget === 'wsh-docker'
     );
-  }, [apps, isInitialSyncComplete]);
+  }, [allBehindApps, isInitialSyncComplete]);
 
   const handleIncidentAction = (action: HudIncidentAction) => {
     switch (action.kind) {
@@ -280,7 +283,7 @@ export function CommandCenterView({
   const handleScorecardNavigate = (view: NavSectionId) => {
     switch (view) {
       case 'releases':
-        onNavigateToRelease?.(behindWshApps[0]?.manifest.slug ?? apps[0]?.manifest.slug ?? '');
+        onNavigateToRelease?.(allBehindApps[0]?.manifest.slug ?? apps[0]?.manifest.slug ?? '');
         break;
       case 'security':
         if (threatAlertCount > 0 && topThreatTargetTab) {
@@ -368,6 +371,21 @@ export function CommandCenterView({
           </div>
 
           <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5 shrink-0">
+            {allBehindApps.length > 0 && behindWshApps.length === 0 && onNavigateToRelease && (
+              <button
+                type="button"
+                onClick={() => onNavigateToRelease(allBehindApps[0].manifest.slug)}
+                className="inline-flex items-center gap-1.5 text-xs font-mono font-bold py-1.5 px-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-sm whitespace-nowrap flex-shrink-0 cursor-pointer transition-colors"
+              >
+                <Rocket className="w-3.5 h-3.5" />
+                <span>
+                  Release Ready: {allBehindApps[0].manifest.displayName}
+                  {(allBehindApps[0].composition?.ahead_count ?? 0) > 0
+                    ? ` (+${allBehindApps[0].composition?.ahead_count})`
+                    : ''} →
+                </span>
+              </button>
+            )}
             {behindWshApps.length > 0 && onTriggerDeployAll && (
               <button
                 type="button"
