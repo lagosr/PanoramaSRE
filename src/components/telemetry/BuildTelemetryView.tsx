@@ -15,6 +15,7 @@ import {
   buildTrendSeries,
   computeTelemetryKpis,
   filterDeployRuns,
+  isBuildKitCacheHigh,
 } from '../../lib/deployHistoryAnalytics';
 import { DeployTrendChart } from './DeployTrendChart';
 import { StageWaterfallChart } from './StageWaterfallChart';
@@ -140,8 +141,7 @@ export const BuildTelemetryView: React.FC<BuildTelemetryViewProps> = ({
 
   const tabIdSet = useMemo(() => new Set(terminalTabs.map((t) => t.id)), [terminalTabs]);
 
-  const buildCacheGb = (dockerDiskUsage?.build_cache.size_bytes ?? 0) / 1_000_000_000;
-  const cacheHighAlert = buildCacheGb >= 40;
+  const cacheHighAlert = isBuildKitCacheHigh(dockerDiskUsage);
 
   return (
     <div className="p-6 w-full min-w-0 max-w-[1920px] mx-auto space-y-6">
@@ -174,10 +174,10 @@ export const BuildTelemetryView: React.FC<BuildTelemetryViewProps> = ({
               onClick={onPruneBuildKitCache}
               disabled={isPruningCache}
               className="btn-tonal text-xs flex items-center gap-1.5"
-              title="Reclaim BuildKit layers older than 14 days (336h) while preserving recent caches"
+              title="Reclaim BuildKit cache layers unused for more than 3 days (72h) while preserving recent warm caches"
             >
               <Trash2 className="w-3.5 h-3.5" />
-              <span>{isPruningCache ? 'Pruning Cache...' : 'Prune Stale BuildKit Cache (>14d)'}</span>
+              <span>{isPruningCache ? 'Pruning Cache...' : 'Prune Stale BuildKit Cache (>3d)'}</span>
             </button>
           </div>
         </div>
@@ -352,7 +352,7 @@ export const BuildTelemetryView: React.FC<BuildTelemetryViewProps> = ({
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                         <span>
-                          {isPruningCache ? 'Pruning Cache...' : 'Prune Stale Cache (>14d)'}
+                          {isPruningCache ? 'Pruning Cache...' : 'Prune Stale Cache (>3d)'}
                         </span>
                       </button>
                     )}

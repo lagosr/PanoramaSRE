@@ -118,6 +118,18 @@ export function isLegacyRun(run: DeployTelemetryRunRecord): boolean {
   return /^0\.[0-3]\./.test(run.engine_version.trim());
 }
 
+export const BUILDKIT_RECLAIMABLE_WARN_BYTES = 35_000_000_000; // 35 GB reclaimable
+export const BUILDKIT_TOTAL_WARN_BYTES = 100_000_000_000; // 100 GB total (7-app shared layer steady state)
+
+export function isBuildKitCacheHigh(dockerDiskUsage?: LocalDockerDiskUsage | null): boolean {
+  const totalBytes = dockerDiskUsage?.build_cache?.size_bytes ?? 0;
+  const reclaimableBytes = dockerDiskUsage?.build_cache?.reclaimable_bytes ?? 0;
+  return (
+    reclaimableBytes >= BUILDKIT_RECLAIMABLE_WARN_BYTES ||
+    totalBytes >= BUILDKIT_TOTAL_WARN_BYTES
+  );
+}
+
 export function computeActionableTelemetryAlerts(params: {
   apps: DiscoveredApp[];
   runs: DeployTelemetryRunRecord[];
@@ -214,19 +226,21 @@ export function computeActionableTelemetryAlerts(params: {
     }
   }
 
-  const cacheBytes = params.dockerDiskUsage?.build_cache?.size_bytes ?? 0;
-  if (cacheBytes >= 40_000_000_000) {
-    const alertId = 'cache:high-40gb';
+  if (isBuildKitCacheHigh(params.dockerDiskUsage)) {
+    const alertId = 'cache:high-threshold';
     if (!dismissedSet.has(alertId)) {
-      const gb = (cacheBytes / 1_000_000_000).toFixed(1);
+      const totalGb = ((params.dockerDiskUsage?.build_cache?.size_bytes ?? 0) / 1_000_000_000).toFixed(1);
+      const reclaimGb = (
+        (params.dockerDiskUsage?.build_cache?.reclaimable_bytes ?? 0) / 1_000_000_000
+      ).toFixed(1);
       alerts.push({
         id: alertId,
         kind: 'cache_high',
         severity: 'warning',
         appName: 'Local BuildKit Cache',
-        title: `Local BuildKit cache (${gb} GB) exceeds 40 GB threshold`,
+        title: `Local BuildKit cache (${totalGb} GB total, ${reclaimGb} GB reclaimable) exceeds budget`,
         detail:
-          'Prune BuildKit layers older than 14 days to reclaim disk space while preserving recent warm caches.',
+          'Prune BuildKit cache layers unused for more than 3 days (72h) to reclaim disk space while preserving recent warm caches.',
         warnings: [],
       });
     }

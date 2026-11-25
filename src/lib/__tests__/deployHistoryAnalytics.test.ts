@@ -188,8 +188,8 @@ describe('deployHistoryAnalytics', () => {
     });
     expect(clearedByNewRun).toHaveLength(0);
 
-    // High BuildKit cache (>40 GB) produces an actionable warning alert
-    const cacheAlerts = computeActionableTelemetryAlerts({
+    // Healthy 7-app warm cache steady state (76.4 GB shared total, 21.4 GB reclaimable) triggers zero alerts
+    const steadyAlerts = computeActionableTelemetryAlerts({
       apps: [parakithApp],
       runs: [newerSuccessRun],
       dockerDiskUsage: {
@@ -197,16 +197,56 @@ describe('deployHistoryAnalytics', () => {
         containers: { total_count: 0, active_count: 0, size_bytes: 0, reclaimable_bytes: 0 },
         volumes: { total_count: 0, active_count: 0, size_bytes: 0, reclaimable_bytes: 0 },
         build_cache: {
-          total_count: 12,
-          active_count: 4,
-          size_bytes: 45_000_000_000,
-          reclaimable_bytes: 20_000_000_000,
+          total_count: 919,
+          active_count: 0,
+          size_bytes: 76_420_000_000,
+          reclaimable_bytes: 21_440_000_000,
         },
         captured_at: '2026-11-25T08:00:00Z',
       },
     });
-    expect(cacheAlerts).toHaveLength(1);
-    expect(cacheAlerts[0].kind).toBe('cache_high');
-    expect(cacheAlerts[0].severity).toBe('warning');
+    expect(steadyAlerts).toHaveLength(0);
+
+    // Total BuildKit cache >= 100 GB triggers an actionable warning alert
+    const totalHighAlerts = computeActionableTelemetryAlerts({
+      apps: [parakithApp],
+      runs: [newerSuccessRun],
+      dockerDiskUsage: {
+        images: { total_count: 0, active_count: 0, size_bytes: 0, reclaimable_bytes: 0 },
+        containers: { total_count: 0, active_count: 0, size_bytes: 0, reclaimable_bytes: 0 },
+        volumes: { total_count: 0, active_count: 0, size_bytes: 0, reclaimable_bytes: 0 },
+        build_cache: {
+          total_count: 1107,
+          active_count: 0,
+          size_bytes: 109_200_000_000,
+          reclaimable_bytes: 21_440_000_000,
+        },
+        captured_at: '2026-11-25T08:00:00Z',
+      },
+    });
+    expect(totalHighAlerts).toHaveLength(1);
+    expect(totalHighAlerts[0].kind).toBe('cache_high');
+    expect(totalHighAlerts[0].severity).toBe('warning');
+
+    // Reclaimable BuildKit bloat >= 35 GB triggers an actionable warning alert even below 100 GB total
+    const reclaimHighAlerts = computeActionableTelemetryAlerts({
+      apps: [parakithApp],
+      runs: [newerSuccessRun],
+      dockerDiskUsage: {
+        images: { total_count: 0, active_count: 0, size_bytes: 0, reclaimable_bytes: 0 },
+        containers: { total_count: 0, active_count: 0, size_bytes: 0, reclaimable_bytes: 0 },
+        volumes: { total_count: 0, active_count: 0, size_bytes: 0, reclaimable_bytes: 0 },
+        build_cache: {
+          total_count: 500,
+          active_count: 0,
+          size_bytes: 60_000_000_000,
+          reclaimable_bytes: 36_000_000_000,
+        },
+        captured_at: '2026-11-25T08:00:00Z',
+      },
+    });
+    expect(reclaimHighAlerts).toHaveLength(1);
+    expect(reclaimHighAlerts[0].kind).toBe('cache_high');
+    expect(reclaimHighAlerts[0].severity).toBe('warning');
   });
 });

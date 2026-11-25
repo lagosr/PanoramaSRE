@@ -78,6 +78,7 @@ describe('Telemetry UI stability and actionable callouts', () => {
     expect(withAlertHtml).toContain('Open in Releases');
     expect(withAlertHtml).toContain('Filter Ledger');
     expect(withAlertHtml).toContain('Dismiss');
+    expect(withAlertHtml).toContain('Prune Stale BuildKit Cache (&gt;3d)');
 
     const cleanHtml = renderToStaticMarkup(
       <BuildTelemetryView

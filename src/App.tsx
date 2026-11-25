@@ -3541,8 +3541,10 @@ export const App: React.FC = () => {
     setIsPruningBuildKitCache(true);
     const newTab: TerminalTab = {
       id: jobId,
-      title: 'Prune BuildKit Cache (>14d)',
-      lines: ['[PanoramaSRE] Pruning Docker BuildKit cache entries older than 14 days (336h)...'],
+      title: 'Prune BuildKit Cache (>3d)',
+      lines: [
+        '[PanoramaSRE] Pruning Docker BuildKit cache layers unused for more than 3 days (72h, --all)...',
+      ],
       isRunning: true,
       createdAt: new Date().toISOString(),
       pageScope: 'telemetry',
@@ -3554,9 +3556,9 @@ export const App: React.FC = () => {
 
     void runStreamJob({
       jobId,
-      label: 'Prune BuildKit Cache (>14d)',
+      label: 'Prune BuildKit Cache (>3d)',
       command: 'docker',
-      args: ['buildx', 'prune', '--filter', 'until=336h', '-f'],
+      args: ['buildx', 'prune', '--all', '--filter', 'until=72h', '-f'],
       workingDir: getWorkspaceRoot(),
       lockType: 'None',
       onLine: (line) => {
@@ -3568,7 +3570,7 @@ export const App: React.FC = () => {
         void refreshDeployTelemetry();
         showActionFeedback(
           exitCode === 0
-            ? 'Pruned BuildKit cache entries older than 14 days.'
+            ? 'Pruned BuildKit cache layers unused for more than 3 days.'
             : `BuildKit cache prune exited ${exitCode}.`,
           exitCode === 0 ? 'success' : 'error',
           5000
