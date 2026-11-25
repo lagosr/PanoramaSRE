@@ -133,27 +133,39 @@ export function ReleasePipelineView({
   const [cfDeploymentsError, setCfDeploymentsError] = useState<string | null>(null);
   const [siemEnvConfig, setSiemEnvConfig] = useState<UnifiSiemEnvConfigDto | null>(null);
   const [showDeployAllModal, setShowDeployAllModal] = useState<boolean>(false);
-  const [batchSelectedSlugs, setBatchSelectedSlugs] = useState<Set<string>>(() => new Set());
+  const [batchSelectedOrder, setBatchSelectedOrder] = useState<string[]>([]);
   const [inspectApp, setInspectApp] = useState<DiscoveredApp | null>(null);
 
   const toggleBatchSlug = (slug: string) => {
-    setBatchSelectedSlugs((prev) => {
-      const next = new Set(prev);
-      if (next.has(slug)) next.delete(slug);
-      else next.add(slug);
+    setBatchSelectedOrder((prev) =>
+      prev.includes(slug) ? prev.filter((s) => s !== slug) : [...prev, slug]
+    );
+  };
+
+  const moveBatchSlug = (slug: string, direction: 'up' | 'down') => {
+    setBatchSelectedOrder((prev) => {
+      const idx = prev.indexOf(slug);
+      if (idx < 0) return prev;
+      const targetIdx = direction === 'up' ? idx - 1 : idx + 1;
+      if (targetIdx < 0 || targetIdx >= prev.length) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(idx, 1);
+      next.splice(targetIdx, 0, moved);
       return next;
     });
   };
 
   const selectAllBehindForBatch = () => {
-    const behindWsh = apps
-      .filter(
-        (a) =>
-          (!a.manifest.hostingTarget || a.manifest.hostingTarget === 'wsh-docker') &&
-          isAppDeployCandidate(a)
-      )
-      .map((a) => a.manifest.slug);
-    setBatchSelectedSlugs(new Set(behindWsh));
+    const behindWsh = apps.filter(
+      (a) =>
+        (!a.manifest.hostingTarget || a.manifest.hostingTarget === 'wsh-docker') &&
+        isAppDeployCandidate(a)
+    );
+    const ordered = [
+      ...behindWsh.filter((a) => a.manifest.slug === 'auth'),
+      ...behindWsh.filter((a) => a.manifest.slug !== 'auth'),
+    ].map((a) => a.manifest.slug);
+    setBatchSelectedOrder(ordered);
   };
 
   // Helper to detect if an app has an active running deployment/rollback job
@@ -815,10 +827,11 @@ export function ReleasePipelineView({
           apps={apps}
           selectedSlug={selectedApp?.manifest.slug || ''}
           onSelectApp={handleSelectApp}
-          batchSelectedSlugs={batchSelectedSlugs}
+          batchSelectedOrder={batchSelectedOrder}
           onToggleBatchSlug={toggleBatchSlug}
+          onMoveBatchSlug={moveBatchSlug}
           onSelectAllBehindBatch={selectAllBehindForBatch}
-          onClearBatchSelection={() => setBatchSelectedSlugs(new Set())}
+          onClearBatchSelection={() => setBatchSelectedOrder([])}
           onOpenBatchDeploy={() => setShowDeployAllModal(true)}
           onInspectApp={(app) => setInspectApp(app)}
           getAppDeployJob={getAppDeployJob}
@@ -1809,13 +1822,13 @@ export function ReleasePipelineView({
         isOpen={showDeployAllModal}
         apps={apps}
         initialSelectedSlugs={
-          batchSelectedSlugs.size > 0 ? Array.from(batchSelectedSlugs) : undefined
+          batchSelectedOrder.length > 0 ? batchSelectedOrder : undefined
         }
         isInitialSyncComplete={isInitialSyncComplete}
         networkPosture={networkPosture}
         onConfirm={(options: BatchDeployOptions) => {
           setShowDeployAllModal(false);
-          setBatchSelectedSlugs(new Set());
+          setBatchSelectedOrder([]);
           onTriggerDeployAll(
             options.selectedApps,
             options.bumpVersion,

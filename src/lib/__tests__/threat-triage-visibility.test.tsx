@@ -154,6 +154,8 @@ describe('High-threat triage visibility and direct HUD drill-down', () => {
 
     expect(html).toContain('2607:fb91:7c6:892:ac39:bbf2:83c8:a0d8');
     expect(html).toContain('Trust Email (family@example.com)');
+    expect(html).toContain('Email:');
+    expect(html).toContain('family@example.com');
     expect(html).toContain('1 Family Session Verified');
     expect(html).toContain('Mark Resolved');
     expect(html).toContain('Allowlist IP');

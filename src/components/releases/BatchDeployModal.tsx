@@ -5,20 +5,69 @@ import {
   isAppCritical,
   isAppDeployCandidate,
 } from '../../lib/types';
-import { 
-  Rocket, 
-  X, 
-  ArrowUp, 
-  ArrowDown, 
-  CheckSquare, 
-  Square, 
-  Layers, 
+import {
+  Rocket,
+  X,
+  ArrowUp,
+  ArrowDown,
+  GripVertical,
+  RotateCcw,
+  CheckSquare,
+  Square,
+  Layers,
   Info,
   Lock,
-  AlertTriangle
+  AlertTriangle,
 } from 'lucide-react';
 import { CustomSelect, SelectOption } from '../ui/CustomSelect';
 import { ToggleSwitch } from '@lagosr/panorama-ui-kit';
+
+export function buildInitialOrderedBatchApps(
+  deployableApps: DiscoveredApp[],
+  initialSelectedSlugs?: string[]
+): DiscoveredApp[] {
+  const bySlug = new Map(deployableApps.map((a) => [a.manifest.slug, a]));
+  const explicitOrdered: DiscoveredApp[] = [];
+  const seen = new Set<string>();
+
+  if (initialSelectedSlugs && initialSelectedSlugs.length > 0) {
+    for (const slug of initialSelectedSlugs) {
+      const match = bySlug.get(slug);
+      if (match && !seen.has(slug)) {
+        explicitOrdered.push(match);
+        seen.add(slug);
+      }
+    }
+  }
+
+  const remaining = deployableApps.filter((a) => !seen.has(a.manifest.slug));
+  const remainingSorted = [
+    ...remaining.filter((a) => a.manifest.slug === 'auth'),
+    ...remaining.filter((a) => a.manifest.slug !== 'auth'),
+  ];
+
+  return [...explicitOrdered, ...remainingSorted];
+}
+
+export function reorderBatchApps(
+  list: DiscoveredApp[],
+  fromIndex: number,
+  toIndex: number
+): DiscoveredApp[] {
+  if (
+    fromIndex < 0 ||
+    fromIndex >= list.length ||
+    toIndex < 0 ||
+    toIndex >= list.length ||
+    fromIndex === toIndex
+  ) {
+    return list;
+  }
+  const next = [...list];
+  const [moved] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, moved);
+  return next;
+}
 
 export interface BatchDeployOptions {
   selectedApps: DiscoveredApp[];
@@ -56,13 +105,30 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
   networkPosture,
 }) => {
   // Maintain ordered list of all apps
-  const [orderedApps, setOrderedApps] = useState<DiscoveredApp[]>([]);
+  const [orderedApps, setOrderedApps] = useState<DiscoveredApp[]>(() => {
+    const deployableApps = apps.filter(
+      (a) => !a.manifest.hostingTarget || a.manifest.hostingTarget === 'wsh-docker'
+    );
+    return buildInitialOrderedBatchApps(deployableApps, initialSelectedSlugs);
+  });
   // Set of selected app slugs
-  const [selectedSlugs, setSelectedSlugs] = useState<Set<string>>(new Set());
+  const [selectedSlugs, setSelectedSlugs] = useState<Set<string>>(() => {
+    const deployableApps = apps.filter(
+      (a) => !a.manifest.hostingTarget || a.manifest.hostingTarget === 'wsh-docker'
+    );
+    const allowedSet = new Set(deployableApps.map((a) => a.manifest.slug));
+    const explicitInitial = (initialSelectedSlugs || []).filter((slug) => allowedSet.has(slug));
+    if (explicitInitial.length > 0) return new Set(explicitInitial);
+    const drifted = deployableApps.filter(isAppDeployCandidate);
+    if (drifted.length > 0) return new Set(drifted.map((a) => a.manifest.slug));
+    return new Set(deployableApps.map((a) => a.manifest.slug));
+  });
   const [bumpVersion, setBumpVersion] = useState<string>('none');
   const [allowDirty, setAllowDirty] = useState<boolean>(false);
   const [autoRollbackOnSmokeFailure, setAutoRollbackOnSmokeFailure] = useState<boolean>(true);
   const [confirmText, setConfirmText] = useState<string>('');
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
   const wasOpenRef = useRef(false);
 
@@ -75,13 +141,9 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
       (a) => !a.manifest.hostingTarget || a.manifest.hostingTarget === 'wsh-docker'
     );
     if (isOpen && !wasOpenRef.current) {
-      // First time the modal opens: initialize state
+      // First time the modal opens: initialize state preserving any custom pre-selected order
       wasOpenRef.current = true;
-      const initialSorted = [
-        ...deployableApps.filter((a) => a.manifest.slug === 'auth'),
-        ...deployableApps.filter((a) => a.manifest.slug !== 'auth'),
-      ];
-      setOrderedApps(initialSorted);
+      setOrderedApps(buildInitialOrderedBatchApps(deployableApps, initialSelectedSlugs));
 
       const allowedSet = new Set(deployableApps.map((a) => a.manifest.slug));
       const explicitInitial = (initialSelectedSlugs || []).filter((slug) =>
@@ -115,7 +177,7 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
       });
       // CRITICAL: Preserve user's checkboxes and confirmText without disruption
     }
-  }, [isOpen, apps]);
+  }, [isOpen, apps, initialSelectedSlugs]);
 
   if (!isOpen) return null;
 
@@ -148,12 +210,11 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
   // Reordering helpers
   const moveApp = (index: number, direction: 'up' | 'down') => {
     const targetIndex = direction === 'up' ? index - 1 : index + 1;
-    if (targetIndex < 0 || targetIndex >= orderedApps.length) return;
+    setOrderedApps((prev) => reorderBatchApps(prev, index, targetIndex));
+  };
 
-    const next = [...orderedApps];
-    const [moved] = next.splice(index, 1);
-    next.splice(targetIndex, 0, moved);
-    setOrderedApps(next);
+  const handleResetDefaultOrder = () => {
+    setOrderedApps((prev) => buildInitialOrderedBatchApps(prev));
   };
 
   // The active deployment execution queue: only selected apps, in their chosen sequence
@@ -200,38 +261,68 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
 
         {/* Top Quick Actions Bar */}
         <div className="flex flex-wrap items-center justify-between gap-2 py-2 border-b border-slate-200 dark:border-slate-800 shrink-0 text-xs">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="text-slate-500 dark:text-slate-400 font-mono">Select:</span>
             <button
               type="button"
               onClick={selectAll}
-              className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 transition-colors"
+              className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 transition-colors cursor-pointer"
             >
               All ({wshApps.length})
             </button>
             <button
               type="button"
               onClick={selectOnlyDrifted}
-              className="px-2 py-0.5 rounded bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30 transition-colors"
+              className="px-2 py-0.5 rounded bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30 transition-colors cursor-pointer"
             >
               Undeployed Drift Only
             </button>
             <button
               type="button"
               onClick={selectNone}
-              className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-400 transition-colors"
+              className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-400 transition-colors cursor-pointer"
             >
               Clear
             </button>
+            <button
+              type="button"
+              onClick={handleResetDefaultOrder}
+              disabled={isProcessing}
+              className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-colors inline-flex items-center gap-1 cursor-pointer disabled:opacity-40"
+              title="Reset sequence to PanoramaAuth first followed by remaining targets"
+            >
+              <RotateCcw className="w-3 h-3" />
+              <span>Reset Order</span>
+            </button>
           </div>
 
-          <span className="font-mono text-emerald-600 dark:text-emerald-400 font-semibold">
+          <span className="font-mono text-emerald-600 dark:text-emerald-400 font-semibold tabular-nums">
             {executionQueue.length} of {wshApps.length} selected for deployment
           </span>
         </div>
 
+        {/* Live Custom Execution Sequence Strip */}
+        {executionQueue.length > 0 && (
+          <div
+            data-testid="batch-execution-order-preview"
+            className="mt-3 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 shrink-0 flex flex-wrap items-center gap-1.5 text-[11px] font-mono tabular-nums"
+          >
+            <span className="text-slate-500 dark:text-slate-400 font-semibold mr-1">
+              Execution Order:
+            </span>
+            {executionQueue.map((app, qIdx) => (
+              <React.Fragment key={`exec-seq-${app.manifest.slug}`}>
+                {qIdx > 0 && <span className="text-slate-400">→</span>}
+                <span className="px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-emerald-500/40 text-slate-900 dark:text-slate-100 font-semibold">
+                  {qIdx + 1}. {app.manifest.displayName}
+                </span>
+              </React.Fragment>
+            ))}
+          </div>
+        )}
+
         {/* Reorderable Application Execution List */}
-        <div className="flex-1 overflow-y-auto custom-scrollbar my-4 space-y-2 pr-1">
+        <div className="flex-1 overflow-y-auto custom-scrollbar my-3 space-y-2 pr-1">
           {orderedApps.map((app, idx) => {
             const isSelected = selectedSlugs.has(app.manifest.slug);
             const isAuth = app.manifest.slug === 'auth';
@@ -239,22 +330,50 @@ export const BatchDeployModal: React.FC<BatchDeployModalProps> = ({
             const hasDrift = undeployedCount > 0 || app.composition?.local_dirty;
             const isCritical = isAppCritical(app, { isInitialSyncComplete, networkPosture });
             const queuePosition = executionQueue.findIndex((a) => a.manifest.slug === app.manifest.slug);
+            const isDragTarget = dragOverIndex === idx && dragIndex !== null && dragIndex !== idx;
 
             return (
               <div
                 key={app.manifest.slug}
+                draggable={!isProcessing}
+                onDragStart={() => setDragIndex(idx)}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  if (dragOverIndex !== idx) setDragOverIndex(idx);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (dragIndex !== null && dragIndex !== idx) {
+                    setOrderedApps((prev) => reorderBatchApps(prev, dragIndex, idx));
+                  }
+                  setDragIndex(null);
+                  setDragOverIndex(null);
+                }}
+                onDragEnd={() => {
+                  setDragIndex(null);
+                  setDragOverIndex(null);
+                }}
                 className={`p-3 rounded-lg border transition-all flex items-center justify-between gap-3 ${
-                  isSelected
+                  isDragTarget
+                    ? 'border-[var(--color-brand)] ring-2 ring-[var(--color-brand)] bg-slate-50 dark:bg-slate-900'
+                    : isSelected
                     ? 'bg-slate-50 dark:bg-slate-950/80 border-emerald-500/40 shadow-sm'
                     : 'bg-slate-50/50 dark:bg-slate-950/30 border-slate-200 dark:border-slate-800/60 opacity-60'
-                }`}
+                } ${dragIndex === idx ? 'opacity-50' : ''}`}
               >
-                {/* Left: Checkbox + Priority Step Pill */}
-                <div className="flex items-center gap-3 min-w-0">
+                {/* Left: Drag Handle + Checkbox + App Metadata */}
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <span
+                    className={`text-slate-400 shrink-0 ${isProcessing ? 'opacity-30' : 'cursor-grab active:cursor-grabbing hover:text-slate-600 dark:hover:text-slate-200'}`}
+                    title="Drag to reorder deployment sequence"
+                    aria-hidden="true"
+                  >
+                    <GripVertical className="w-4 h-4" />
+                  </span>
                   <button
                     type="button"
                     onClick={() => toggleAppSelection(app.manifest.slug)}
-                    className="text-slate-400 hover:text-emerald-500 dark:hover:text-emerald-400 shrink-0"
+                    className="text-slate-400 hover:text-emerald-500 dark:hover:text-emerald-400 shrink-0 cursor-pointer"
                   >
                     {isSelected ? (
                       <CheckSquare className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />

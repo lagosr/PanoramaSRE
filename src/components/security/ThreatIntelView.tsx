@@ -20,6 +20,7 @@ import {
   Wifi,
   Globe,
   Lock,
+  Mail,
   Server,
   AlertTriangle,
   Sliders,
@@ -105,6 +106,20 @@ type SubViewTab = ThreatSubViewTab;
 function parsePolicyGrants(grantsJson: string): CfAccessPolicyGrantDto[] {
   const parsed = safeParseJson<CfAccessPolicyGrantDto[]>(grantsJson, []);
   return Array.isArray(parsed) ? parsed : [];
+}
+
+function extractFindingActorEmail(f: ThreatFindingRow): string | null {
+  const parsed = safeParseJson<{
+    matchedAccessEmails?: string[];
+    email?: string;
+    actorEmail?: string;
+  }>(f.evidenceJson, {});
+  const candidate =
+    parsed.matchedAccessEmails?.[0]?.trim() ||
+    parsed.email?.trim() ||
+    parsed.actorEmail?.trim() ||
+    '';
+  return candidate || null;
 }
 
 function PolicyGrantProvenanceChips({ grants }: { grants: CfAccessPolicyGrantDto[] }) {
@@ -492,6 +507,25 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   );
   const effectivePolicyPermissionHint =
     syncPermissionHint ?? zeroTrustSummary.accessPoliciesPermissionHint ?? null;
+
+  const actorEmailByIp = useMemo(() => {
+    const map = new Map<string, { email: string; verified: boolean; source?: string }>();
+    for (const s of zeroTrustSummary.verifiedFamilySessions ?? []) {
+      const ipKey = (s.ipAddress || '').trim().toLowerCase();
+      if (ipKey && s.email?.trim()) {
+        map.set(ipKey, { email: s.email.trim(), verified: true, source: s.authSource });
+      }
+    }
+    for (const f of activeFindings) {
+      const ipKey = (f.actorIp || '').trim().toLowerCase();
+      if (!ipKey || map.has(ipKey)) continue;
+      const email = extractFindingActorEmail(f);
+      if (email) {
+        map.set(ipKey, { email, verified: false });
+      }
+    }
+    return map;
+  }, [zeroTrustSummary.verifiedFamilySessions, activeFindings]);
 
   const internalSummary = useMemo(
     () => safeParseJson<InternalNetworkSummary>(activeRun?.internalSummaryJson, EMPTY_INTERNAL_SUMMARY),
@@ -1453,6 +1487,18 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
               IP: <CopyableValue value={f.actorIp} label="actor IP" />
             </span>
           )}
+          {(() => {
+            const actorEmail =
+              extractFindingActorEmail(f) ||
+              (f.actorIp ? actorEmailByIp.get(f.actorIp.trim().toLowerCase())?.email : null);
+            return actorEmail ? (
+              <span className="inline-flex items-center gap-1 text-slate-700 dark:text-slate-300">
+                <Mail className="w-3 h-3 text-amber-500 shrink-0" />
+                <span>Email:</span>
+                <CopyableValue value={actorEmail} label="actor email" />
+              </span>
+            ) : null;
+          })()}
           {f.actorAsn && <span>ASN: {f.actorAsn}</span>}
           {rayIds.length > 0 && <span>Rays: {rayIds.slice(0, 4).join(', ')}</span>}
         </div>
@@ -2044,7 +2090,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                       <CopyableAddressText text={f.summary} />
                     </p>
 
-                    {(f.host || f.actorIp || f.actorAsn) && (
+                    {(f.host || f.actorIp || f.actorAsn || spotlightMatchedEmail) && (
                       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] font-mono text-slate-600 dark:text-slate-400">
                         {f.host && <span>Host: {f.host}</span>}
                         {f.actorIp && (
@@ -2052,6 +2098,20 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                             IP: <CopyableValue value={f.actorIp} label="threat actor IP" />
                           </span>
                         )}
+                        {(() => {
+                          const resolvedEmail =
+                            extractFindingActorEmail(f) ||
+                            (f.actorIp
+                              ? actorEmailByIp.get(f.actorIp.trim().toLowerCase())?.email
+                              : null);
+                          return resolvedEmail ? (
+                            <span className="inline-flex items-center gap-1 text-slate-800 dark:text-slate-200 font-semibold">
+                              <Mail className="w-3 h-3 text-amber-500 shrink-0" />
+                              <span>Email:</span>
+                              <CopyableValue value={resolvedEmail} label="actor email" />
+                            </span>
+                          ) : null;
+                        })()}
                         {f.actorAsn && <span>ASN: {f.actorAsn}</span>}
                       </div>
                     )}
@@ -2087,6 +2147,17 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                         )}
                       </div>
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] font-mono text-slate-600 dark:text-slate-400 tabular-nums">
+                        {(() => {
+                          const info = a.ipAddress
+                            ? actorEmailByIp.get(a.ipAddress.trim().toLowerCase())
+                            : undefined;
+                          return info ? (
+                            <span className="inline-flex items-center gap-1 text-slate-800 dark:text-slate-200 font-semibold">
+                              <Mail className="w-3 h-3 text-amber-500 shrink-0" />
+                              <CopyableValue value={info.email} label="actor email" />
+                            </span>
+                          ) : null;
+                        })()}
                         {(a.asn || a.asOrg) && (
                           <span>
                             {a.asn ? `AS${a.asn.replace(/^AS/i, '')}` : ''} {a.asOrg || ''}
@@ -2276,14 +2347,30 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
               {zeroTrustSummary.accessAppCount} Access app(s) • Mutations: {zeroTrustSummary.auditMutations}
             </div>
             {(zeroTrustSummary.verifiedFamilySessions?.length ?? 0) > 0 && (
-              <div
-                className="text-[11px] font-mono text-emerald-700 dark:text-emerald-400 truncate"
-                title={zeroTrustSummary.verifiedFamilySessions
-                  ?.map((s) => `${s.email} (${s.authSource} • ${s.requests} reqs)`)
-                  .join('\n')}
-              >
-                {zeroTrustSummary.verifiedFamilySessions!.length} Family Session
-                {zeroTrustSummary.verifiedFamilySessions!.length === 1 ? '' : 's'} Verified
+              <div className="space-y-0.5 pt-0.5">
+                <div
+                  className="text-[11px] font-mono text-emerald-700 dark:text-emerald-400 truncate"
+                  title={zeroTrustSummary.verifiedFamilySessions
+                    ?.map((s) => `${s.email} (${s.authSource} • ${s.requests} reqs)`)
+                    .join('\n')}
+                >
+                  {zeroTrustSummary.verifiedFamilySessions!.length} Family Session
+                  {zeroTrustSummary.verifiedFamilySessions!.length === 1 ? '' : 's'} Verified
+                </div>
+                <div className="flex flex-wrap gap-1 text-[10px] font-mono text-emerald-800 dark:text-emerald-300">
+                  {Array.from(
+                    new Set(
+                      zeroTrustSummary.verifiedFamilySessions!.map((s) => s.email).filter(Boolean)
+                    )
+                  ).map((email) => (
+                    <span
+                      key={`zt-fam-${email}`}
+                      className="px-1.5 py-0.2 rounded bg-emerald-500/10 border border-emerald-500/30 truncate max-w-full"
+                    >
+                      {email}
+                    </span>
+                  ))}
+                </div>
               </div>
             )}
           </div>
@@ -3062,6 +3149,23 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                               actor.id
                             )}
                           </span>
+                          {(() => {
+                            const info = actor.ipAddress
+                              ? actorEmailByIp.get(actor.ipAddress.trim().toLowerCase())
+                              : undefined;
+                            return info ? (
+                              <span
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[11px] font-mono ${
+                                  info.verified
+                                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-800 dark:text-emerald-300'
+                                    : 'bg-amber-500/10 border-amber-500/30 text-amber-800 dark:text-amber-300'
+                                }`}
+                              >
+                                <Mail className="w-3 h-3 shrink-0" />
+                                <CopyableValue value={info.email} label="actor email" />
+                              </span>
+                            ) : null;
+                          })()}
                           {actor.country && (
                             <span className="px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-[11px] font-mono text-slate-700 dark:text-slate-300">
                               {actor.country}

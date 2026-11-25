@@ -2,6 +2,8 @@ import React, { useMemo, useState } from 'react';
 import { SegmentedControl } from '@lagosr/panorama-ui-kit';
 import {
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
   CheckSquare,
   Eye,
   Globe,
@@ -28,8 +30,9 @@ interface ReleaseFleetRailProps {
   apps: DiscoveredApp[];
   selectedSlug: string;
   onSelectApp: (slug: string) => void;
-  batchSelectedSlugs: Set<string>;
+  batchSelectedOrder: string[];
   onToggleBatchSlug: (slug: string) => void;
+  onMoveBatchSlug?: (slug: string, direction: 'up' | 'down') => void;
   onSelectAllBehindBatch: () => void;
   onClearBatchSelection: () => void;
   onOpenBatchDeploy: () => void;
@@ -44,8 +47,9 @@ export const ReleaseFleetRail: React.FC<ReleaseFleetRailProps> = ({
   apps,
   selectedSlug,
   onSelectApp,
-  batchSelectedSlugs,
+  batchSelectedOrder,
   onToggleBatchSlug,
+  onMoveBatchSlug,
   onSelectAllBehindBatch,
   onClearBatchSelection,
   onOpenBatchDeploy,
@@ -162,7 +166,8 @@ export const ReleaseFleetRail: React.FC<ReleaseFleetRailProps> = ({
             const isWipOnly = !isCritical && aheadCount === 0 && undeployedCount === 0 && isLocalDirty;
             const isDeploying = Boolean(getAppDeployJob(app.manifest.slug));
             const isSelected = selectedSlug === app.manifest.slug;
-            const isChecked = batchSelectedSlugs.has(app.manifest.slug);
+            const batchOrderIdx = batchSelectedOrder.indexOf(app.manifest.slug);
+            const isChecked = batchOrderIdx >= 0;
             const appIdent =
               app.manifest.containerName || app.manifest.slug || app.manifest.appId;
             const telResolved = resolveActiveBuildTelemetry(app.health?.release, comp);
@@ -321,6 +326,38 @@ export const ReleaseFleetRail: React.FC<ReleaseFleetRailProps> = ({
                       <Eye className="w-2.5 h-2.5" />
                       <span>Diff</span>
                     </button>
+                    {isWshDocker && isChecked && (
+                      <div
+                        className="inline-flex items-center gap-0.5 rounded bg-emerald-500/15 border border-emerald-500/40 px-1 py-0.5 text-[10px] font-mono text-emerald-800 dark:text-emerald-200 tabular-nums"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <span className="font-bold">#{batchOrderIdx + 1}</span>
+                        {onMoveBatchSlug && (
+                          <>
+                            <button
+                              type="button"
+                              disabled={batchOrderIdx === 0 || isDeployingAll}
+                              onClick={() => onMoveBatchSlug(app.manifest.slug, 'up')}
+                              aria-label={`Move ${app.manifest.displayName} earlier in batch order`}
+                              title="Move earlier in batch order"
+                              className="p-0.5 rounded hover:bg-emerald-500/20 disabled:opacity-25 cursor-pointer"
+                            >
+                              <ArrowUp className="w-2.5 h-2.5" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={batchOrderIdx === batchSelectedOrder.length - 1 || isDeployingAll}
+                              onClick={() => onMoveBatchSlug(app.manifest.slug, 'down')}
+                              aria-label={`Move ${app.manifest.displayName} later in batch order`}
+                              title="Move later in batch order"
+                              className="p-0.5 rounded hover:bg-emerald-500/20 disabled:opacity-25 cursor-pointer"
+                            >
+                              <ArrowDown className="w-2.5 h-2.5" />
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -331,7 +368,7 @@ export const ReleaseFleetRail: React.FC<ReleaseFleetRailProps> = ({
 
       {/* Rail Sticky Footer: Batch Orchestration Shortcuts */}
       <div className="px-3.5 py-2.5 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 flex items-center justify-between gap-2">
-        {batchSelectedSlugs.size > 0 ? (
+        {batchSelectedOrder.length > 0 ? (
           <>
             <button
               type="button"
@@ -340,7 +377,7 @@ export const ReleaseFleetRail: React.FC<ReleaseFleetRailProps> = ({
               className="btn-primary text-xs py-1.5 px-3 flex-1 justify-center whitespace-nowrap"
             >
               <Rocket className="w-3.5 h-3.5" />
-              <span>Batch Deploy ({batchSelectedSlugs.size})</span>
+              <span>Batch Deploy ({batchSelectedOrder.length})</span>
             </button>
             <button
               type="button"
