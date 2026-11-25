@@ -3,8 +3,8 @@ use crate::commands::monitor::load_env_key_from_workspace;
 use crate::commands::unifi_ops::{collect_unifi_snapshot, test_unifi_api_key, UnifiSecuritySnapshot};
 use crate::commands::workspace::resolve_suite_workspace_root;
 use crate::db::{
-    LanClientBaselineRow, SreDatabase, ThreatActorRow, ThreatAllowlistRow, ThreatAuditRunRow,
-    ThreatFindingRow, WafRuleOverrideRow,
+    LanClientBaselineRow, QuarantineReconcileOutcome, QuarantinedAccessEmailRow, SreDatabase,
+    ThreatActorRow, ThreatAllowlistRow, ThreatAuditRunRow, ThreatFindingRow, WafRuleOverrideRow,
 };
 use crate::dev_supervisor::DevSupervisor;
 use crate::pushover::{
@@ -34,6 +34,8 @@ const SETTING_UNIFI_KEY_DPAPI: &str = "unifi_api_key_dpapi";
 const SETTING_UNIFI_TOPOLOGY_CACHE: &str = "unifi_topology_cache_v1";
 const SETTING_CF_WAF_RULES_CACHE: &str = "cf_waf_rules_cache_v1";
 const THREAT_DEDUP_KEY: &str = "threat_audit::summary";
+const THREAT_QUARANTINE_DEDUP_KEY: &str = "threat_audit::quarantined_emails";
+const THREAT_REVOKED_DEDUP_KEY: &str = "threat_audit::revoked_emails";
 const RUN_WINDOWS_REG_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_WINDOWS_REG_VALUE: &str = "PanoramaSRE";
 
@@ -404,6 +406,55 @@ pub struct CloudflareWafSnapshotDto {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CfAccessPolicyGrant {
+    pub app_uid: String,
+    pub app_name: String,
+    pub app_domain: String,
+    pub policy_id: String,
+    pub policy_name: String,
+    pub decision: String,
+    pub precedence: i64,
+    pub reusable: bool,
+    pub session_duration: Option<String>,
+    pub policy_created_at: Option<String>,
+    pub policy_updated_at: Option<String>,
+    pub via_group_id: Option<String>,
+    pub via_group_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CfAttachedAccessPolicySummary {
+    pub app_uid: String,
+    pub app_name: String,
+    pub app_domain: String,
+    pub policy_id: String,
+    pub policy_name: String,
+    pub decision: String,
+    pub precedence: i64,
+    pub reusable: bool,
+    pub session_duration: Option<String>,
+    pub policy_created_at: Option<String>,
+    pub policy_updated_at: Option<String>,
+    pub email_count: usize,
+    pub emails: Vec<String>,
+    pub broad_rules: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CfAccessPolicySyncResultDto {
+    pub sync_ok: bool,
+    pub permission_hint: Option<String>,
+    pub attached_policies: Vec<CfAttachedAccessPolicySummary>,
+    pub quarantined_emails: Vec<QuarantinedAccessEmailRow>,
+    pub newly_quarantined_count: usize,
+    pub pending_count: usize,
+    pub auto_revoked_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CloudflareSecuritySnapshot {
     pub account_id: String,
     pub zones: Vec<CfZoneSummary>,
@@ -420,6 +471,272 @@ pub struct CloudflareSecuritySnapshot {
     pub waf_zones_budget: Vec<CfZoneWafBudgetDto>,
     #[serde(default)]
     pub waf_read_status: String,
+    #[serde(default)]
+    pub access_policies_sync_ok: bool,
+    #[serde(default)]
+    pub access_policies_permission_hint: Option<String>,
+    #[serde(default)]
+    pub attached_access_policies: Vec<CfAttachedAccessPolicySummary>,
+    #[serde(default)]
+    pub access_policy_email_grants: HashMap<String, Vec<CfAccessPolicyGrant>>,
+}
+
+pub fn is_wsh_access_app_domain(app: &Value) -> bool {
+    let domain = app
+        .get("domain")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if domain == "wsh.panoramadr.com" || domain.starts_with("wsh.panoramadr.com/") {
+        return true;
+    }
+    if let Some(arr) = app.get("self_hosted_domains").and_then(|v| v.as_array()) {
+        for item in arr {
+            let d = item.as_str().unwrap_or("").trim().to_ascii_lowercase();
+            if d == "wsh.panoramadr.com" || d.starts_with("wsh.panoramadr.com/") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn collect_emails_from_access_rules(
+    rules: Option<&Value>,
+    groups_by_id: &HashMap<String, (String, Vec<String>)>,
+    out_emails: &mut Vec<(String, Option<String>, Option<String>)>,
+    out_broad_rules: &mut Vec<String>,
+) {
+    let Some(arr) = rules.and_then(|v| v.as_array()) else {
+        return;
+    };
+    for rule in arr {
+        let Some(obj) = rule.as_object() else {
+            continue;
+        };
+        if let Some(email) = obj
+            .get("email")
+            .and_then(|v| v.get("email"))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            out_emails.push((email.to_ascii_lowercase(), None, None));
+        }
+        if obj.get("everyone").is_some() {
+            out_broad_rules.push("everyone".to_string());
+        }
+        if let Some(domain) = obj
+            .get("email_domain")
+            .and_then(|v| v.get("domain"))
+            .and_then(|v| v.as_str())
+        {
+            out_broad_rules.push(format!("email_domain:{}", domain));
+        }
+        if let Some(gid) = obj
+            .get("group")
+            .and_then(|v| v.get("id"))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            if let Some((gname, gemails)) = groups_by_id.get(gid) {
+                for em in gemails {
+                    out_emails.push((
+                        em.to_ascii_lowercase(),
+                        Some(gid.to_string()),
+                        Some(gname.clone()),
+                    ));
+                }
+            }
+        }
+    }
+}
+
+pub fn extract_wsh_access_policy_grants(
+    apps_list: &[Value],
+    policies_by_app_uid: &HashMap<String, Vec<Value>>,
+    groups_list: &[Value],
+) -> (
+    Vec<CfAttachedAccessPolicySummary>,
+    HashMap<String, Vec<CfAccessPolicyGrant>>,
+) {
+    let mut groups_by_id: HashMap<String, (String, Vec<String>)> = HashMap::new();
+    for g in groups_list {
+        let gid = g
+            .get("id")
+            .or_else(|| g.get("uid"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if gid.is_empty() {
+            continue;
+        }
+        let gname = g
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Access Group")
+            .trim()
+            .to_string();
+        let mut gemails = Vec::new();
+        if let Some(inc) = g.get("include").and_then(|v| v.as_array()) {
+            for r in inc {
+                if let Some(em) = r
+                    .get("email")
+                    .and_then(|v| v.get("email"))
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    gemails.push(em.to_ascii_lowercase());
+                }
+            }
+        }
+        groups_by_id.insert(gid, (gname, gemails));
+    }
+
+    let mut attached_summaries = Vec::new();
+    let mut grants_by_email: HashMap<String, Vec<CfAccessPolicyGrant>> = HashMap::new();
+
+    for app in apps_list {
+        if !is_wsh_access_app_domain(app) {
+            continue;
+        }
+        let app_uid = app
+            .get("uid")
+            .or_else(|| app.get("id"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if app_uid.is_empty() {
+            continue;
+        }
+        let app_name = app
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("wsh")
+            .trim()
+            .to_string();
+        let app_domain = app
+            .get("domain")
+            .and_then(|v| v.as_str())
+            .unwrap_or("wsh.panoramadr.com")
+            .trim()
+            .to_string();
+        let app_session_duration = app
+            .get("session_duration")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        let pols = policies_by_app_uid
+            .get(&app_uid)
+            .cloned()
+            .unwrap_or_default();
+
+        for pol in pols {
+            let policy_id = pol
+                .get("id")
+                .or_else(|| pol.get("uid"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let policy_name = pol
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unnamed Policy")
+                .trim()
+                .to_string();
+            let decision = pol
+                .get("decision")
+                .and_then(|v| v.as_str())
+                .unwrap_or("allow")
+                .trim()
+                .to_ascii_lowercase();
+            let precedence = pol.get("precedence").and_then(|v| v.as_i64()).unwrap_or(0);
+            let reusable = pol.get("reusable").and_then(|v| v.as_bool()).unwrap_or(false);
+            let pol_session_dur = pol
+                .get("session_duration")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .or_else(|| app_session_duration.clone());
+            let policy_created_at = pol
+                .get("created_at")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            let policy_updated_at = pol
+                .get("updated_at")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+
+            let mut matched_emails = Vec::new();
+            let mut broad_rules = Vec::new();
+            if decision == "bypass" {
+                broad_rules.push("decision:bypass".to_string());
+            }
+            collect_emails_from_access_rules(
+                pol.get("include"),
+                &groups_by_id,
+                &mut matched_emails,
+                &mut broad_rules,
+            );
+            broad_rules.sort();
+            broad_rules.dedup();
+
+            let mut unique_policy_emails: Vec<String> = Vec::new();
+            let mut seen_in_policy: HashSet<String> = HashSet::new();
+
+            for (email_lower, via_group_id, via_group_name) in matched_emails {
+                if seen_in_policy.insert(email_lower.clone()) {
+                    unique_policy_emails.push(email_lower.clone());
+                }
+                if decision == "allow" {
+                    grants_by_email.entry(email_lower).or_default().push(CfAccessPolicyGrant {
+                        app_uid: app_uid.clone(),
+                        app_name: app_name.clone(),
+                        app_domain: app_domain.clone(),
+                        policy_id: policy_id.clone(),
+                        policy_name: policy_name.clone(),
+                        decision: decision.clone(),
+                        precedence,
+                        reusable,
+                        session_duration: pol_session_dur.clone(),
+                        policy_created_at: policy_created_at.clone(),
+                        policy_updated_at: policy_updated_at.clone(),
+                        via_group_id,
+                        via_group_name,
+                    });
+                }
+            }
+
+            attached_summaries.push(CfAttachedAccessPolicySummary {
+                app_uid: app_uid.clone(),
+                app_name: app_name.clone(),
+                app_domain: app_domain.clone(),
+                policy_id,
+                policy_name,
+                decision,
+                precedence,
+                reusable,
+                session_duration: pol_session_dur,
+                policy_created_at,
+                policy_updated_at,
+                email_count: unique_policy_emails.len(),
+                emails: unique_policy_emails,
+                broad_rules,
+            });
+        }
+    }
+
+    attached_summaries.sort_by(|a, b| a.precedence.cmp(&b.precedence).then(a.policy_name.cmp(&b.policy_name)));
+    (attached_summaries, grants_by_email)
 }
 
 async fn cf_rest_get(
@@ -825,6 +1142,7 @@ pub async fn collect_cloudflare_snapshot(
 
     let mut app_domains_by_uid: HashMap<String, String> = HashMap::new();
     let mut access_app_count = 0usize;
+    let mut wsh_apps_list: Vec<Value> = Vec::new();
     if let Ok(apps_val) = apps_res {
         if let Some(arr) = apps_val.get("result").and_then(|v| v.as_array()) {
             access_app_count = arr.len();
@@ -835,9 +1153,87 @@ pub async fn collect_cloudflare_snapshot(
                 ) {
                     app_domains_by_uid.insert(uid.to_string(), dom.to_string());
                 }
+                if is_wsh_access_app_domain(app) {
+                    wsh_apps_list.push(app.clone());
+                }
             }
         }
     }
+
+    // Fetch attached Access policies ONLY for wsh.panoramadr.com app(s) + groups if referenced
+    let mut access_policies_sync_ok = false;
+    let mut access_policies_permission_hint: Option<String> = None;
+    let mut policies_by_app_uid: HashMap<String, Vec<Value>> = HashMap::new();
+    let mut groups_list: Vec<Value> = Vec::new();
+
+    if !wsh_apps_list.is_empty() {
+        let mut all_pols_ok = true;
+        let mut needs_groups = false;
+        for wsh_app in &wsh_apps_list {
+            let uid = wsh_app
+                .get("uid")
+                .or_else(|| wsh_app.get("id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if uid.is_empty() {
+                continue;
+            }
+            let p_pols = format!("/accounts/{}/access/apps/{}/policies", account_id, uid);
+            match cf_rest_get(client, token, &p_pols, &[]).await {
+                Ok(pol_val) => {
+                    let arr = pol_val
+                        .get("result")
+                        .and_then(|v| v.as_array())
+                        .cloned()
+                        .unwrap_or_default();
+                    for p in &arr {
+                        if let Some(inc) = p.get("include").and_then(|v| v.as_array()) {
+                            if inc.iter().any(|r| r.get("group").is_some()) {
+                                needs_groups = true;
+                            }
+                        }
+                    }
+                    policies_by_app_uid.insert(uid, arr);
+                }
+                Err(err) => {
+                    all_pols_ok = false;
+                    access_policies_permission_hint = Some(if err.contains("403") {
+                        "Missing Cloudflare token permission 'Account → Access: Apps and Policies → Read' for Access policy quarantine sync.".to_string()
+                    } else {
+                        err
+                    });
+                }
+            }
+        }
+
+        if all_pols_ok && needs_groups {
+            let p_groups = format!("/accounts/{}/access/groups", account_id);
+            match cf_rest_get(client, token, &p_groups, &[]).await {
+                Ok(g_val) => {
+                    groups_list = g_val
+                        .get("result")
+                        .and_then(|v| v.as_array())
+                        .cloned()
+                        .unwrap_or_default();
+                }
+                Err(err) => {
+                    all_pols_ok = false;
+                    access_policies_permission_hint = Some(if err.contains("403") {
+                        "Access policy references an Access Group; add 'Account → Access: Organizations, Identity Providers, and Groups → Read' to your Cloudflare token.".to_string()
+                    } else {
+                        err
+                    });
+                }
+            }
+        }
+
+        access_policies_sync_ok = all_pols_ok;
+    }
+
+    let (attached_access_policies, access_policy_email_grants) =
+        extract_wsh_access_policy_grants(&wsh_apps_list, &policies_by_app_uid, &groups_list);
 
     let mut access_logs = Vec::new();
     if let Ok(al_val) = access_logs_res {
@@ -1023,6 +1419,10 @@ pub async fn collect_cloudflare_snapshot(
         waf_rules: merged_waf.rules,
         waf_zones_budget: merged_waf.zones,
         waf_read_status: merged_waf.waf_read_status,
+        access_policies_sync_ok,
+        access_policies_permission_hint,
+        attached_access_policies,
+        access_policy_email_grants,
     })
 }
 
@@ -1860,6 +2260,84 @@ impl SessionAuthIndex {
                         );
                     }
                 }
+
+                // 3. PanoramaAuth successful audit_logs (roaming heartbeats & token exchanges joined with users.email)
+                for log_entry in &wsh.panorama_auth.audit_logs {
+                    let status = log_entry
+                        .get("status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .trim();
+                    if !status.eq_ignore_ascii_case("SUCCESS") {
+                        continue;
+                    }
+                    let action = log_entry
+                        .get("action")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .trim()
+                        .to_ascii_uppercase();
+                    if !matches!(
+                        action.as_str(),
+                        "LOGIN" | "APP_TOKEN_ISSUED" | "OAUTH_TOKEN_ISSUED" | "SESSION_IP_ROAMED"
+                    ) {
+                        continue;
+                    }
+                    let ip_raw = log_entry
+                        .get("ip_address")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .trim();
+                    let email_raw = log_entry
+                        .get("user_email")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .trim();
+                    if email_raw.is_empty() || !is_public_routable_ip(ip_raw) {
+                        continue;
+                    }
+                    let ip_key = ip_raw.to_ascii_lowercase();
+                    if anomalous_ips.contains(&ip_key) {
+                        continue;
+                    }
+                    let uid_str = log_entry
+                        .get("user_id")
+                        .and_then(|v| {
+                            v.as_str()
+                                .map(|s| s.trim().to_string())
+                                .or_else(|| v.as_i64().map(|n| n.to_string()))
+                        })
+                        .unwrap_or_default();
+                    if !uid_str.is_empty() && anomalous_user_ids.contains(&uid_str) {
+                        continue;
+                    }
+
+                    let email_allowlisted =
+                        is_allowlisted(allowlist, None, None, Some(email_raw), None);
+
+                    Self::insert_proof(
+                        &mut idx.exact_ips,
+                        ip_key,
+                        AuthSessionProof {
+                            email: email_raw.to_string(),
+                            source: "PanoramaAuth Audit".to_string(),
+                            country: String::new(),
+                            is_allowlisted_email: email_allowlisted,
+                        },
+                    );
+                    if let Some(prefix) = ipv6_prefix_64(ip_raw) {
+                        Self::insert_proof(
+                            &mut idx.v6_prefixes,
+                            prefix,
+                            AuthSessionProof {
+                                email: email_raw.to_string(),
+                                source: "PanoramaAuth Audit (/64)".to_string(),
+                                country: String::new(),
+                                is_allowlisted_email: email_allowlisted,
+                            },
+                        );
+                    }
+                }
             }
         }
 
@@ -2244,6 +2722,32 @@ pub fn evaluate_stage0_triage(
     allowlist: &[ThreatAllowlistRow],
     prior_lan_clients: &[LanClientBaselineRow],
     prior_actors: &[ThreatActorRow],
+) -> Stage0TriageResult {
+    evaluate_stage0_triage_with_quarantine(
+        run_id,
+        now_iso,
+        cf_opt,
+        unifi_opt,
+        wsh_opt,
+        allowlist,
+        prior_lan_clients,
+        prior_actors,
+        &HashSet::new(),
+        &[],
+    )
+}
+
+pub fn evaluate_stage0_triage_with_quarantine(
+    run_id: &str,
+    now_iso: &str,
+    cf_opt: Option<&CloudflareSecuritySnapshot>,
+    unifi_opt: Option<&UnifiSecuritySnapshot>,
+    wsh_opt: Option<&WshSecuritySnapshot>,
+    allowlist: &[ThreatAllowlistRow],
+    prior_lan_clients: &[LanClientBaselineRow],
+    prior_actors: &[ThreatActorRow],
+    rejected_emails: &HashSet<String>,
+    newly_attached_policy_names: &[String],
 ) -> Stage0TriageResult {
     let mut overall_sev = String::from("LOW");
     let mut hard_hit = false;
@@ -2780,11 +3284,81 @@ pub fn evaluate_stage0_triage(
             }
         }
 
+        // Overly broad Cloudflare Access policies on wsh.panoramadr.com (everyone / domain / bypass)
+        for pol in &cf.attached_access_policies {
+            if !pol.broad_rules.is_empty() {
+                make_finding(
+                    "CLOUDFLARE",
+                    "ZT_OVERLY_BROAD_POLICY",
+                    "HIGH",
+                    "ZERO_TRUST",
+                    format!(
+                        "Overly Broad Zero Trust Policy on {} ({})",
+                        pol.app_domain, pol.policy_name
+                    ),
+                    format!(
+                        "Cloudflare Access policy '{}' (#{}, {}) on {} contains broad rule(s): [{}]. Replace with explicit family email allow rules.",
+                        pol.policy_name,
+                        pol.precedence,
+                        pol.decision,
+                        pol.app_domain,
+                        pol.broad_rules.join(", ")
+                    ),
+                    Some(pol.app_domain.clone()),
+                    None,
+                    None,
+                    vec![],
+                    json!(pol),
+                );
+            }
+        }
+        if !newly_attached_policy_names.is_empty() {
+            make_finding(
+                "CLOUDFLARE",
+                "ZT_NEW_ACCESS_POLICY_ATTACHED",
+                "MEDIUM",
+                "ZERO_TRUST",
+                format!(
+                    "New Access Policy Attached to wsh.panoramadr.com ({})",
+                    newly_attached_policy_names.join(", ")
+                ),
+                format!(
+                    "Detected newly attached Cloudflare Access policy/policies on wsh.panoramadr.com: {}. Verify this change under Threat & Zero Trust → Allowlist.",
+                    newly_attached_policy_names.join(", ")
+                ),
+                Some("wsh.panoramadr.com".to_string()),
+                None,
+                None,
+                vec![],
+                json!({ "newlyAttachedPolicies": newly_attached_policy_names }),
+            );
+        }
+
         // Zero Trust Access logs
         let mut denied_by_email_ip: HashMap<String, usize> = HashMap::new();
         for al in &cf.access_logs {
             if al.allowed {
                 cf_access_allowed += 1;
+                let email_low = al.email.trim().to_ascii_lowercase();
+                if !email_low.is_empty() && rejected_emails.contains(&email_low) {
+                    suspect_ips.insert(al.ip_address.clone());
+                    make_finding(
+                        "CLOUDFLARE",
+                        "ZT_REJECTED_EMAIL_LOGIN",
+                        "HIGH",
+                        "ZERO_TRUST",
+                        format!("Rejected Quarantine Email Logged Into Access ({})", al.email),
+                        format!(
+                            "User '{}' was previously rejected in PanoramaSRE Zero Trust Quarantine, yet Cloudflare Access allowed login to {} from {} ({}). Remove them from Cloudflare Access immediately.",
+                            al.email, al.app_domain, al.ip_address, al.country
+                        ),
+                        Some(al.app_domain.clone()),
+                        Some(al.ip_address.clone()),
+                        None,
+                        if al.ray_id.is_empty() { vec![] } else { vec![al.ray_id.clone()] },
+                        json!(al),
+                    );
+                }
                 let allowlisted = is_allowlisted(
                     allowlist,
                     Some(&al.ip_address),
@@ -3613,6 +4187,9 @@ pub fn evaluate_stage0_triage(
         "tunnels": cf_tunnel_summary,
         "auditMutations": cf_audit_mutations,
         "verifiedFamilySessions": verified_family_json,
+        "attachedAccessPolicies": cf_opt.map(|c| &c.attached_access_policies).cloned().unwrap_or_default(),
+        "accessPoliciesSyncOk": cf_opt.map(|c| c.access_policies_sync_ok).unwrap_or(false),
+        "accessPoliciesPermissionHint": cf_opt.and_then(|c| c.access_policies_permission_hint.clone()),
     });
     let internal_summary = json!({
         "unifiDevicesTotal": unifi_opt.map(|u| u.devices.len()).unwrap_or(0),
@@ -4415,6 +4992,228 @@ async fn notify_threat_audit(
     }
 }
 
+fn summarize_grants_for_notification(grants_json: &str) -> String {
+    let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(grants_json) else {
+        return "wsh.panoramadr.com".to_string();
+    };
+    let parts: Vec<String> = arr
+        .iter()
+        .take(2)
+        .filter_map(|g| {
+            let pname = g.get("policyName").and_then(|v| v.as_str()).unwrap_or("Policy");
+            let prec = g.get("precedence").and_then(|v| v.as_i64()).unwrap_or(0);
+            let reusable = g.get("reusable").and_then(|v| v.as_bool()).unwrap_or(false);
+            let dur = g.get("sessionDuration").and_then(|v| v.as_str()).unwrap_or("");
+            let created = g
+                .get("policyCreatedAt")
+                .and_then(|v| v.as_str())
+                .map(|s| s.chars().take(10).collect::<String>())
+                .unwrap_or_default();
+            let scope = if reusable { "Reusable" } else { "App-Local" };
+            let mut meta = vec![format!("#{}", prec), scope.to_string()];
+            if !dur.is_empty() {
+                meta.push(dur.to_string());
+            }
+            if !created.is_empty() {
+                meta.push(format!("created {}", created));
+            }
+            Some(format!("{} ({})", pname, meta.join(" · ")))
+        })
+        .collect();
+    if parts.is_empty() {
+        "wsh.panoramadr.com".to_string()
+    } else {
+        parts.join("; ")
+    }
+}
+
+async fn notify_quarantine_outcomes(
+    app: &AppHandle,
+    db: &Arc<Mutex<SreDatabase>>,
+    outcome: &QuarantineReconcileOutcome,
+) {
+    let (push_prefs, creds_opt, prev_quarantine, prev_revoked) = {
+        let Ok(guard) = db.lock() else {
+            return;
+        };
+        (
+            load_pushover_preferences(&guard),
+            resolve_pushover_credentials(&guard),
+            guard
+                .get_pushover_alert_state(THREAT_QUARANTINE_DEDUP_KEY)
+                .ok()
+                .flatten(),
+            guard
+                .get_pushover_alert_state(THREAT_REVOKED_DEDUP_KEY)
+                .ok()
+                .flatten(),
+        )
+    };
+
+    // 1. Pending quarantine emails -> Priority 1 Pushover + desktop toast (deduplicated by email fingerprint)
+    if outcome.pending_all.is_empty() {
+        if let Ok(guard) = db.lock() {
+            let _ = guard.upsert_pushover_alert_state(
+                THREAT_QUARANTINE_DEDUP_KEY,
+                "quarantine:clear",
+                false,
+                0,
+                None,
+            );
+        }
+    } else {
+        let mut pending_emails: Vec<String> = outcome
+            .pending_all
+            .iter()
+            .map(|r| r.email.clone())
+            .collect();
+        pending_emails.sort();
+        let fingerprint = format!("pending:{}", pending_emails.join(","));
+        let already_sent = prev_quarantine
+            .as_ref()
+            .map(|p| p.is_failing && p.fingerprint == fingerprint)
+            .unwrap_or(false);
+
+        if !already_sent {
+            let toast_body = format!(
+                "{} Access email(s) in Quarantine awaiting approval: {}",
+                outcome.pending_all.len(),
+                pending_emails.join(", ")
+            );
+            let _ = app
+                .notification()
+                .builder()
+                .title("PanoramaSRE • Quarantined Zero Trust Email Pending Approval")
+                .body(sanitize_bounded(&toast_body, 220))
+                .show();
+
+            if push_prefs.enabled {
+                if let Some(ref creds) = creds_opt {
+                    let mut bullets: Vec<FormattedBulletItem> = outcome
+                        .pending_all
+                        .iter()
+                        .take(5)
+                        .map(|r| FormattedBulletItem {
+                            label: r.email.clone(),
+                            detail: sanitize_bounded(
+                                &summarize_grants_for_notification(&r.policy_grants_json),
+                                180,
+                            ),
+                        })
+                        .collect();
+                    bullets.push(FormattedBulletItem {
+                        label: "Action Required".to_string(),
+                        detail: "Open Threat & Zero Trust → Allowlist in PanoramaSRE to Approve or Reject.".to_string(),
+                    });
+                    let html = build_scannable_html_message(
+                        "Quarantined Cloudflare Access Emails (wsh.panoramadr.com):",
+                        &bullets,
+                        None,
+                        MAX_SCANNABLE_MESSAGE_CHARS,
+                    );
+                    let device_opt = if push_prefs.device.is_empty() {
+                        None
+                    } else {
+                        Some(push_prefs.device.as_str())
+                    };
+                    if dispatch_pushover_message(
+                        creds,
+                        &format!(
+                            "PanoramaSRE • {} Quarantined Zero Trust Email{}",
+                            outcome.pending_all.len(),
+                            if outcome.pending_all.len() == 1 { "" } else { "s" }
+                        ),
+                        &html,
+                        1,
+                        Some(push_prefs.failure_sound.as_str()),
+                        device_opt,
+                        None,
+                        None,
+                    )
+                    .await
+                    .is_ok()
+                    {
+                        let now_ts = Utc::now().to_rfc3339();
+                        if let Ok(guard) = db.lock() {
+                            let _ = guard.upsert_pushover_alert_state(
+                                THREAT_QUARANTINE_DEDUP_KEY,
+                                &fingerprint,
+                                true,
+                                prev_quarantine.map(|p| p.consecutive_count + 1).unwrap_or(1),
+                                Some(&now_ts),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Auto-revoked removed emails -> Normal priority (0) informational notice
+    if !outcome.auto_revoked.is_empty() && push_prefs.enabled {
+        if let Some(ref creds) = creds_opt {
+            let mut rev_emails: Vec<String> = outcome
+                .auto_revoked
+                .iter()
+                .map(|r| r.email.clone())
+                .collect();
+            rev_emails.sort();
+            let rev_fp = format!("revoked:{}", rev_emails.join(","));
+            let already_sent = prev_revoked
+                .as_ref()
+                .map(|p| p.is_failing && p.fingerprint == rev_fp)
+                .unwrap_or(false);
+            if !already_sent {
+                let bullets = vec![
+                    FormattedBulletItem {
+                        label: "Revoked Email(s)".to_string(),
+                        detail: rev_emails.join(", "),
+                    },
+                    FormattedBulletItem {
+                        label: "Reason".to_string(),
+                        detail: "Removed from wsh.panoramadr.com Cloudflare Access policies; trust auto-revoked from local Allowlist.".to_string(),
+                    },
+                ];
+                let html = build_scannable_html_message(
+                    "Cloudflare Access Email Removed & Revoked:",
+                    &bullets,
+                    None,
+                    MAX_SCANNABLE_MESSAGE_CHARS,
+                );
+                let device_opt = if push_prefs.device.is_empty() {
+                    None
+                } else {
+                    Some(push_prefs.device.as_str())
+                };
+                if dispatch_pushover_message(
+                    creds,
+                    "PanoramaSRE • Zero Trust Email Auto-Revoked",
+                    &html,
+                    0,
+                    Some(push_prefs.recovery_sound.as_str()),
+                    device_opt,
+                    None,
+                    None,
+                )
+                .await
+                .is_ok()
+                {
+                    let now_ts = Utc::now().to_rfc3339();
+                    if let Ok(guard) = db.lock() {
+                        let _ = guard.upsert_pushover_alert_state(
+                            THREAT_REVOKED_DEDUP_KEY,
+                            &rev_fp,
+                            true,
+                            1,
+                            Some(&now_ts),
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreatAuditProgressEvent {
@@ -4681,15 +5480,53 @@ pub async fn execute_threat_audit_pipeline(
     }
 
     let now_iso = started_at.to_rfc3339();
-    let stage0 = evaluate_stage0_triage(
+
+    // Sync attached wsh.panoramadr.com Cloudflare Access emails into Quarantine & re-load allowlist
+    let mut quarantine_outcome = QuarantineReconcileOutcome::default();
+    let mut rejected_emails: HashSet<String> = HashSet::new();
+    let mut refreshed_allowlist = allowlist.clone();
+
+    if let Ok(guard) = db.lock() {
+        if let Some(ref cf) = cf_opt {
+            let discovered_vec: Vec<(String, String)> = cf
+                .access_policy_email_grants
+                .iter()
+                .map(|(email, grants)| {
+                    (
+                        email.clone(),
+                        serde_json::to_string(grants).unwrap_or_else(|_| "[]".to_string()),
+                    )
+                })
+                .collect();
+            if let Ok(out) = guard.reconcile_cf_access_policy_emails(
+                &discovered_vec,
+                cf.access_policies_sync_ok,
+                &now_iso,
+            ) {
+                quarantine_outcome = out;
+            }
+            refreshed_allowlist = guard.list_threat_allowlist().unwrap_or(allowlist);
+        }
+        if let Ok(qrows) = guard.list_quarantined_access_emails() {
+            for r in qrows {
+                if r.status == "REJECTED" {
+                    rejected_emails.insert(r.email.to_ascii_lowercase());
+                }
+            }
+        }
+    }
+
+    let stage0 = evaluate_stage0_triage_with_quarantine(
         &run_id,
         &now_iso,
         cf_opt.as_ref(),
         unifi_opt.as_ref(),
         wsh_opt.as_ref(),
-        &allowlist,
+        &refreshed_allowlist,
         &prior_lan,
         &prior_actors,
+        &rejected_emails,
+        &quarantine_outcome.newly_attached_policy_names,
     );
 
     emit_audit_progress(
@@ -5042,6 +5879,7 @@ pub async fn execute_threat_audit_pipeline(
     };
 
     let _ = app.emit("sre://threat-audit-updated", &detail);
+    let _ = app.emit("sre://threat-quarantine-updated", &quarantine_outcome.pending_all);
     emit_audit_progress(
         app,
         run_id_ref,
@@ -5063,6 +5901,7 @@ pub async fn execute_threat_audit_pipeline(
         ),
     );
     notify_threat_audit(app, db, &run_row, &stage0.findings, brief_final.as_ref(), &prefs).await;
+    notify_quarantine_outcomes(app, db, &quarantine_outcome).await;
 
     Ok(detail)
 }
@@ -5774,6 +6613,212 @@ pub async fn delete_threat_allowlist(
     guard
         .delete_threat_allowlist(&id)
         .map_err(|e| format!("Failed to delete allowlist rule: {}", e))
+}
+
+#[tauri::command]
+pub async fn get_quarantined_access_emails(
+    db: State<'_, Arc<Mutex<SreDatabase>>>,
+) -> Result<Vec<QuarantinedAccessEmailRow>, String> {
+    let guard = db.lock().map_err(|e| format!("DB mutex poisoned: {}", e))?;
+    guard
+        .list_quarantined_access_emails()
+        .map_err(|e| format!("Failed to list quarantined Access emails: {}", e))
+}
+
+#[tauri::command]
+pub async fn sync_cloudflare_access_emails_now(
+    app: AppHandle,
+    db: State<'_, Arc<Mutex<SreDatabase>>>,
+) -> Result<CfAccessPolicySyncResultDto, String> {
+    let (cf_token_opt, cf_acct_opt) = {
+        let guard = db.lock().map_err(|e| format!("DB mutex poisoned: {}", e))?;
+        (
+            resolve_dpapi_or_env_secret(&guard, SETTING_CF_TOKEN_DPAPI, "CLOUDFLARE_API_TOKEN")
+                .map(|r| r.value),
+            guard.get_setting(SETTING_CF_ACCOUNT_ID).ok().flatten(),
+        )
+    };
+    let cf_token = cf_token_opt
+        .ok_or_else(|| "Cloudflare API token is not configured in Settings.".to_string())?;
+    let client = shared_cloudflare_client()
+        .ok_or_else(|| "Failed to initialize Cloudflare HTTP client".to_string())?;
+
+    let (account_id, _) =
+        resolve_cf_account_and_zones(client, &cf_token, cf_acct_opt.as_deref()).await?;
+    let p_apps = format!("/accounts/{}/access/apps", account_id);
+    let apps_val = cf_rest_get(client, &cf_token, &p_apps, &[]).await?;
+    let wsh_apps: Vec<Value> = apps_val
+        .get("result")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter(|a| is_wsh_access_app_domain(a)).cloned().collect())
+        .unwrap_or_default();
+
+    let mut sync_ok = !wsh_apps.is_empty();
+    let mut permission_hint: Option<String> = if wsh_apps.is_empty() {
+        Some("No wsh.panoramadr.com Cloudflare Access app found on this account.".to_string())
+    } else {
+        None
+    };
+    let mut policies_by_app_uid: HashMap<String, Vec<Value>> = HashMap::new();
+    let mut groups_list: Vec<Value> = Vec::new();
+    let mut needs_groups = false;
+
+    for wsh_app in &wsh_apps {
+        let uid = wsh_app
+            .get("uid")
+            .or_else(|| wsh_app.get("id"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if uid.is_empty() {
+            continue;
+        }
+        let p_pols = format!("/accounts/{}/access/apps/{}/policies", account_id, uid);
+        match cf_rest_get(client, &cf_token, &p_pols, &[]).await {
+            Ok(pol_val) => {
+                let arr = pol_val
+                    .get("result")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                for p in &arr {
+                    if let Some(inc) = p.get("include").and_then(|v| v.as_array()) {
+                        if inc.iter().any(|r| r.get("group").is_some()) {
+                            needs_groups = true;
+                        }
+                    }
+                }
+                policies_by_app_uid.insert(uid, arr);
+            }
+            Err(err) => {
+                sync_ok = false;
+                permission_hint = Some(err);
+            }
+        }
+    }
+
+    if sync_ok && needs_groups {
+        let p_groups = format!("/accounts/{}/access/groups", account_id);
+        match cf_rest_get(client, &cf_token, &p_groups, &[]).await {
+            Ok(g_val) => {
+                groups_list = g_val
+                    .get("result")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+            }
+            Err(err) => {
+                sync_ok = false;
+                permission_hint = Some(err);
+            }
+        }
+    }
+
+    let (attached_policies, grants_by_email) =
+        extract_wsh_access_policy_grants(&wsh_apps, &policies_by_app_uid, &groups_list);
+    let now_iso = Utc::now().to_rfc3339();
+    let discovered_vec: Vec<(String, String)> = grants_by_email
+        .iter()
+        .map(|(email, grants)| {
+            (
+                email.clone(),
+                serde_json::to_string(grants).unwrap_or_else(|_| "[]".to_string()),
+            )
+        })
+        .collect();
+
+    let (outcome, all_rows) = {
+        let guard = db.lock().map_err(|e| format!("DB mutex poisoned: {}", e))?;
+        let out = guard
+            .reconcile_cf_access_policy_emails(&discovered_vec, sync_ok, &now_iso)
+            .map_err(|e| format!("Failed reconciling Access emails: {}", e))?;
+        let rows = guard
+            .list_quarantined_access_emails()
+            .map_err(|e| format!("Failed listing quarantined Access emails: {}", e))?;
+        (out, rows)
+    };
+
+    let _ = app.emit("sre://threat-quarantine-updated", &outcome.pending_all);
+    notify_quarantine_outcomes(&app, &db, &outcome).await;
+
+    Ok(CfAccessPolicySyncResultDto {
+        sync_ok,
+        permission_hint,
+        attached_policies,
+        quarantined_emails: all_rows,
+        newly_quarantined_count: outcome.newly_quarantined.len(),
+        pending_count: outcome.pending_all.len(),
+        auto_revoked_count: outcome.auto_revoked.len(),
+    })
+}
+
+#[tauri::command]
+pub async fn approve_quarantined_access_email(
+    app: AppHandle,
+    db: State<'_, Arc<Mutex<SreDatabase>>>,
+    email: String,
+    label: Option<String>,
+) -> Result<QuarantinedAccessEmailRow, String> {
+    let now_iso = Utc::now().to_rfc3339();
+    let (row, pending_all) = {
+        let guard = db.lock().map_err(|e| format!("DB mutex poisoned: {}", e))?;
+        let row = guard
+            .approve_quarantined_access_email(&email, label.as_deref(), &now_iso)
+            .map_err(|e| format!("Failed to approve Access email: {}", e))?;
+        let pending: Vec<QuarantinedAccessEmailRow> = guard
+            .list_quarantined_access_emails()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|r| r.status == "PENDING")
+            .collect();
+        if pending.is_empty() {
+            let _ = guard.upsert_pushover_alert_state(
+                THREAT_QUARANTINE_DEDUP_KEY,
+                "quarantine:clear",
+                false,
+                0,
+                None,
+            );
+        }
+        (row, pending)
+    };
+    let _ = app.emit("sre://threat-quarantine-updated", &pending_all);
+    Ok(row)
+}
+
+#[tauri::command]
+pub async fn reject_quarantined_access_email(
+    app: AppHandle,
+    db: State<'_, Arc<Mutex<SreDatabase>>>,
+    email: String,
+    note: Option<String>,
+) -> Result<QuarantinedAccessEmailRow, String> {
+    let now_iso = Utc::now().to_rfc3339();
+    let (row, pending_all) = {
+        let guard = db.lock().map_err(|e| format!("DB mutex poisoned: {}", e))?;
+        let row = guard
+            .reject_quarantined_access_email(&email, note.as_deref(), &now_iso)
+            .map_err(|e| format!("Failed to reject Access email: {}", e))?;
+        let pending: Vec<QuarantinedAccessEmailRow> = guard
+            .list_quarantined_access_emails()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|r| r.status == "PENDING")
+            .collect();
+        if pending.is_empty() {
+            let _ = guard.upsert_pushover_alert_state(
+                THREAT_QUARANTINE_DEDUP_KEY,
+                "quarantine:clear",
+                false,
+                0,
+                None,
+            );
+        }
+        (row, pending)
+    };
+    let _ = app.emit("sre://threat-quarantine-updated", &pending_all);
+    Ok(row)
 }
 
 #[tauri::command]

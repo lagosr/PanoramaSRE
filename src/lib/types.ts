@@ -1272,6 +1272,60 @@ export interface CfTunnelInfo {
   activeConnections: number;
 }
 
+export interface CfAccessPolicyGrantDto {
+  appUid: string;
+  appName: string;
+  appDomain: string;
+  policyId: string;
+  policyName: string;
+  decision: string;
+  precedence: number;
+  reusable: boolean;
+  sessionDuration?: string | null;
+  policyCreatedAt?: string | null;
+  policyUpdatedAt?: string | null;
+  viaGroupId?: string | null;
+  viaGroupName?: string | null;
+}
+
+export interface CfAttachedAccessPolicyDto {
+  appUid: string;
+  appName: string;
+  appDomain: string;
+  policyId: string;
+  policyName: string;
+  decision: string;
+  precedence: number;
+  reusable: boolean;
+  sessionDuration?: string | null;
+  policyCreatedAt?: string | null;
+  policyUpdatedAt?: string | null;
+  emailCount: number;
+  emails: string[];
+  broadRules: string[];
+}
+
+export interface QuarantinedAccessEmailRow {
+  email: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'REMOVED' | string;
+  policyGrantsJson: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  reviewedAt?: string | null;
+  removedAt?: string | null;
+  reviewNote?: string | null;
+}
+
+export interface CfAccessPolicySyncResultDto {
+  syncOk: boolean;
+  permissionHint?: string | null;
+  attachedPolicies: CfAttachedAccessPolicyDto[];
+  quarantinedEmails: QuarantinedAccessEmailRow[];
+  newlyQuarantinedCount: number;
+  pendingCount: number;
+  autoRevokedCount: number;
+}
+
 export interface VerifiedFamilySessionDto {
   email: string;
   ipAddress: string;
@@ -1291,6 +1345,9 @@ export interface ZeroTrustSummary {
   tunnels: CfTunnelInfo[];
   auditMutations: number;
   verifiedFamilySessions?: VerifiedFamilySessionDto[];
+  attachedAccessPolicies?: CfAttachedAccessPolicyDto[];
+  accessPoliciesSyncOk?: boolean;
+  accessPoliciesPermissionHint?: string | null;
 }
 
 export interface InternalNetworkSummary {

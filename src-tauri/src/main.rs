@@ -24,11 +24,13 @@ mod tests {
     };
     use panorama_sre_lib::commands::threat_intel_ops::{
         build_waf_rule_expression, classify_host_sensitivity, evaluate_stage0_triage,
+        evaluate_stage0_triage_with_quarantine, extract_wsh_access_policy_grants,
         find_active_non_us_waf_rule, ipv6_prefix_64, is_allowlisted, is_public_routable_ip,
         parse_gemini_threat_brief, parse_unifi_cef_ndjson, should_dispatch_threat_pushover,
-        should_escalate_to_tier2, validate_ipv4_list, CfAccessLogEntry, CfAuditLogEntry,
-        CfHttpEvent, CfIpIntelInfo, CfWafRuleDto, CfZoneSummary, CloudflareSecuritySnapshot,
-        DomainProfile, PanoramaAuthTelemetry, WshSecuritySnapshot,
+        should_escalate_to_tier2, validate_ipv4_list, CfAccessLogEntry, CfAccessPolicyGrant,
+        CfAttachedAccessPolicySummary, CfAuditLogEntry, CfHttpEvent, CfIpIntelInfo, CfWafRuleDto,
+        CfZoneSummary, CloudflareSecuritySnapshot, DomainProfile, PanoramaAuthTelemetry,
+        WshSecuritySnapshot,
     };
     use panorama_sre_lib::commands::unifi_ops::{
         enrich_unifi_topology, merge_unifi_network_detail, parse_unifi_clients_json,
@@ -1279,6 +1281,10 @@ mod tests {
             waf_rules: vec![],
             waf_zones_budget: vec![],
             waf_read_status: "ok".into(),
+            access_policies_sync_ok: true,
+            access_policies_permission_hint: None,
+            attached_access_policies: vec![],
+            access_policy_email_grants: Default::default(),
         };
 
         let unifi_snap = UnifiSecuritySnapshot {
@@ -1540,6 +1546,10 @@ mod tests {
             }],
             waf_zones_budget: vec![],
             waf_read_status: "ok".into(),
+            access_policies_sync_ok: true,
+            access_policies_permission_hint: None,
+            attached_access_policies: vec![],
+            access_policy_email_grants: Default::default(),
         };
 
         let triage = evaluate_stage0_triage(
@@ -1818,6 +1828,10 @@ mod tests {
                 waf_rules: vec![],
                 waf_zones_budget: vec![],
                 waf_read_status: "ok".into(),
+                access_policies_sync_ok: true,
+                access_policies_permission_hint: None,
+                attached_access_policies: vec![],
+                access_policy_email_grants: Default::default(),
             };
             let triage_quiet = evaluate_stage0_triage(
                 "run-quiet",
@@ -2539,6 +2553,10 @@ mod tests {
             waf_rules: vec![],
             waf_zones_budget: vec![],
             waf_read_status: "ok".to_string(),
+            access_policies_sync_ok: true,
+            access_policies_permission_hint: None,
+            attached_access_policies: vec![],
+            access_policy_email_grants: std::collections::HashMap::new(),
         }
     }
 
@@ -2774,5 +2792,296 @@ mod tests {
             .find(|f| f.rule_id == "ORIGIN_BREACH_THROUGH")
             .expect("unauthenticated ORIGIN_BREACH_THROUGH");
         assert!(finding_unauth.evidence_json.contains("UNAUTHENTICATED"));
+    }
+
+    #[test]
+    fn test_extract_wsh_access_policy_grants_filters_wsh_only_and_detects_broad_rules() {
+        let apps = vec![
+            serde_json::json!({
+                "uid": "app-wsh",
+                "domain": "wsh.panoramadr.com",
+                "name": "WSH"
+            }),
+            serde_json::json!({
+                "uid": "app-other",
+                "domain": "protect.panoramadr.com",
+                "name": "Protect"
+            }),
+        ];
+        let mut policies_by_app_uid = std::collections::HashMap::new();
+        policies_by_app_uid.insert(
+            "app-wsh".to_string(),
+            vec![
+                serde_json::json!({
+                    "id": "pol-fam",
+                    "name": "Family Access",
+                    "decision": "allow",
+                    "precedence": 1,
+                    "reusable": true,
+                    "session_duration": "730h",
+                    "created_at": "2026-10-01T00:00:00Z",
+                    "updated_at": "2026-11-01T00:00:00Z",
+                    "include": [
+                        { "email": { "email": "LagosR@gmail.com" } },
+                        { "group": { "id": "grp-1" } }
+                    ]
+                }),
+                serde_json::json!({
+                    "id": "pol-broad",
+                    "name": "Accidental Broad Bypass",
+                    "decision": "bypass",
+                    "precedence": 2,
+                    "reusable": false,
+                    "session_duration": "24h",
+                    "include": [{ "everyone": {} }]
+                }),
+            ],
+        );
+        policies_by_app_uid.insert(
+            "app-other".to_string(),
+            vec![serde_json::json!({
+                "id": "pol-other",
+                "name": "LAN Only",
+                "decision": "allow",
+                "precedence": 1,
+                "include": [{ "email": { "email": "lanonly@example.com" } }]
+            })],
+        );
+        let groups = vec![serde_json::json!({
+            "id": "grp-1",
+            "name": "Family Group",
+            "include": [{ "email": { "email": "joylagos@gmail.com" } }]
+        })];
+
+        let (policies, grants_by_email): (
+            Vec<CfAttachedAccessPolicySummary>,
+            std::collections::HashMap<String, Vec<CfAccessPolicyGrant>>,
+        ) = extract_wsh_access_policy_grants(&apps, &policies_by_app_uid, &groups);
+
+        assert_eq!(policies.len(), 2);
+        assert!(policies.iter().any(|p| p.policy_id == "pol-broad" && !p.broad_rules.is_empty()));
+        assert!(grants_by_email.contains_key("lagosr@gmail.com"));
+        assert!(grants_by_email.contains_key("joylagos@gmail.com"));
+        assert!(!grants_by_email.contains_key("lanonly@example.com"));
+        let joy_grant = &grants_by_email["joylagos@gmail.com"][0];
+        assert_eq!(joy_grant.via_group_name.as_deref(), Some("Family Group"));
+        assert_eq!(joy_grant.precedence, 1);
+        assert!(joy_grant.reusable);
+    }
+
+    #[test]
+    fn test_quarantine_reconcile_approve_reject_remove_readd_and_outage_guard() {
+        let unique = format!(
+            "panoramasre-quarantine-test-{}.sqlite",
+            uuid::Uuid::new_v4()
+        );
+        let db_path = std::env::temp_dir().join(&unique);
+        let db = SreDatabase::new(&db_path).expect("open db");
+
+        let grant_a = serde_json::json!([{
+            "policyId": "pol-fam",
+            "policyName": "Family Access",
+            "decision": "allow",
+            "precedence": 1,
+            "reusable": true,
+            "sessionDuration": "730h"
+        }])
+        .to_string();
+        let grant_b = serde_json::json!([{
+            "policyId": "pol-ext",
+            "policyName": "Extended Family Access",
+            "decision": "allow",
+            "precedence": 2,
+            "reusable": true,
+            "sessionDuration": "24h"
+        }])
+        .to_string();
+
+        // 1. New email arrives in PENDING quarantine (NOT in threat_allowlist yet)
+        let o1 = db
+            .reconcile_cf_access_policy_emails(
+                &[("newcousin@gmail.com".to_string(), grant_a.clone())],
+                true,
+                "2026-11-25T00:00:00Z",
+            )
+            .expect("reconcile 1");
+        assert_eq!(o1.newly_quarantined.len(), 1);
+        assert_eq!(o1.pending_all.len(), 1);
+        assert!(db.list_threat_allowlist().expect("allowlist").is_empty());
+
+        // 2. Outage guard (sync_ok = false + empty list) MUST preserve existing rows without revoking
+        let o_outage = db
+            .reconcile_cf_access_policy_emails(&[], false, "2026-11-25T00:05:00Z")
+            .expect("outage guard");
+        assert_eq!(o_outage.pending_all.len(), 1);
+        assert!(o_outage.auto_revoked.is_empty());
+
+        // 3. Approve puts email into threat_allowlist; Reject removes it
+        let approved = db
+            .approve_quarantined_access_email(
+                "newcousin@gmail.com",
+                Some("Approved Cousin"),
+                "2026-11-25T00:10:00Z",
+            )
+            .expect("approve");
+        assert_eq!(approved.status, "APPROVED");
+        assert_eq!(db.list_threat_allowlist().expect("allowlist").len(), 1);
+
+        // Attach a second email via a new policy -> detects newly_attached_policy_names
+        let o2 = db
+            .reconcile_cf_access_policy_emails(
+                &[
+                    ("newcousin@gmail.com".to_string(), grant_a.clone()),
+                    ("attacker@evil.test".to_string(), grant_b.clone()),
+                ],
+                true,
+                "2026-11-25T00:15:00Z",
+            )
+            .expect("reconcile 2");
+        assert_eq!(o2.newly_attached_policy_names, vec!["Extended Family Access".to_string()]);
+
+        let rejected = db
+            .reject_quarantined_access_email(
+                "attacker@evil.test",
+                Some("Unexpected Access policy grant"),
+                "2026-11-25T00:20:00Z",
+            )
+            .expect("reject");
+        assert_eq!(rejected.status, "REJECTED");
+
+        // 4. Removal lifecycle on sync_ok = true auto-revokes approved email from threat_allowlist
+        let o3 = db
+            .reconcile_cf_access_policy_emails(&[], true, "2026-11-25T00:25:00Z")
+            .expect("reconcile removal");
+        assert_eq!(o3.auto_revoked.len(), 1);
+        assert_eq!(o3.auto_revoked[0].email, "newcousin@gmail.com");
+        assert!(db.list_threat_allowlist().expect("allowlist cleared").is_empty());
+
+        // 5. Re-adding removed email returns it to PENDING quarantine
+        let o4 = db
+            .reconcile_cf_access_policy_emails(
+                &[("newcousin@gmail.com".to_string(), grant_a)],
+                true,
+                "2026-11-25T00:30:00Z",
+            )
+            .expect("reconcile readd");
+        assert_eq!(o4.newly_quarantined.len(), 1);
+        assert_eq!(o4.newly_quarantined[0].status, "PENDING");
+
+        drop(db);
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn test_rejected_access_email_fires_high_alert_even_on_shared_ip() {
+        let shared_ip = "2607:fb91:7c6:892:ac39:bbf2:83c8:a0d8";
+        let mut cf = make_cf_snapshot_for_family_tests(
+            vec![make_basket_http_event(shared_ip)],
+            vec![
+                CfAccessLogEntry {
+                    created_at: "2026-11-24T23:54:00Z".to_string(),
+                    action: "login".to_string(),
+                    allowed: true,
+                    country: "US".to_string(),
+                    email: "family@example.com".to_string(),
+                    ip_address: shared_ip.to_string(),
+                    app_domain: "wsh.panoramadr.com".to_string(),
+                    ray_id: "ray-ok".to_string(),
+                },
+                CfAccessLogEntry {
+                    created_at: "2026-11-24T23:56:00Z".to_string(),
+                    action: "login".to_string(),
+                    allowed: true,
+                    country: "US".to_string(),
+                    email: "compromised@example.com".to_string(),
+                    ip_address: shared_ip.to_string(),
+                    app_domain: "wsh.panoramadr.com".to_string(),
+                    ray_id: "ray-bad".to_string(),
+                },
+            ],
+        );
+        cf.attached_access_policies = vec![CfAttachedAccessPolicySummary {
+            app_uid: "app-wsh".to_string(),
+            app_name: "WSH".to_string(),
+            app_domain: "wsh.panoramadr.com".to_string(),
+            policy_id: "pol-broad".to_string(),
+            policy_name: "Open Wildcard Bypass".to_string(),
+            decision: "bypass".to_string(),
+            precedence: 1,
+            reusable: true,
+            session_duration: Some("24h".to_string()),
+            policy_created_at: None,
+            policy_updated_at: None,
+            email_count: 0,
+            emails: vec![],
+            broad_rules: vec!["everyone".to_string()],
+        }];
+
+        let allowlist = make_email_allowlist_entry("family@example.com");
+        let mut rejected = std::collections::HashSet::new();
+        rejected.insert("compromised@example.com".to_string());
+        let newly_attached = vec!["Rogue Access Policy".to_string()];
+
+        let res = evaluate_stage0_triage_with_quarantine(
+            "run-quar-reject",
+            "2026-11-25T00:00:00Z",
+            Some(&cf),
+            None,
+            None,
+            &allowlist,
+            &[],
+            &[],
+            &rejected,
+            &newly_attached,
+        );
+
+        assert_eq!(res.overall_severity, "HIGH");
+        assert!(res.findings.iter().any(|f| f.rule_id == "ZT_REJECTED_EMAIL_LOGIN" && f.severity == "HIGH"));
+        assert!(res.findings.iter().any(|f| f.rule_id == "ZT_OVERLY_BROAD_POLICY" && f.severity == "HIGH"));
+        assert!(res.findings.iter().any(|f| f.rule_id == "ZT_NEW_ACCESS_POLICY_ATTACHED" && f.severity == "MEDIUM"));
+    }
+
+    #[test]
+    fn test_panorama_auth_audit_log_roam_correlates_approved_family_email() {
+        let roamed_ip = "174.51.88.21";
+        let cf = make_cf_snapshot_for_family_tests(vec![make_basket_http_event(roamed_ip)], vec![]);
+        let wsh = WshSecuritySnapshot {
+            panorama_auth: PanoramaAuthTelemetry {
+                available: true,
+                audit_logs: vec![serde_json::json!({
+                    "id": "aud-roam-1",
+                    "action": "SESSION_IP_ROAMED",
+                    "status": "SUCCESS",
+                    "user_id": "u-joy",
+                    "user_email": "joylagos@gmail.com",
+                    "ip_address": roamed_ip,
+                    "created_at": "2026-11-24 23:55:00"
+                })],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let allowlist = make_email_allowlist_entry("joylagos@gmail.com");
+
+        let res = evaluate_stage0_triage(
+            "run-fam-audit-roam",
+            "2026-11-25T00:00:00Z",
+            Some(&cf),
+            None,
+            Some(&wsh),
+            &allowlist,
+            &[],
+            &[],
+        );
+
+        assert_eq!(res.overall_severity, "LOW");
+        assert!(!res.hard_hit);
+        assert!(res.findings.is_empty());
+        let sessions = res.zero_trust_summary["verifiedFamilySessions"]
+            .as_array()
+            .expect("verifiedFamilySessions array");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0]["email"], "joylagos@gmail.com");
+        assert_eq!(sessions[0]["authSource"], "PanoramaAuth Audit");
     }
 }

@@ -7,6 +7,7 @@ import {
   NavSectionId,
   NetworkPosture,
   OptInComplianceSnapshot,
+  QuarantinedAccessEmailRow,
   SecurityPostureInvariant,
   SmokeTestRun,
   SslFleetSummary,
@@ -45,7 +46,7 @@ export interface HudIncidentAction {
   label: string;
   kind: HudIncidentActionKind;
   targetSlug?: string;
-  threatTab?: 'overview' | 'external' | 'internal';
+  threatTab?: 'overview' | 'external' | 'internal' | 'allowlist';
   threatFocusId?: string;
 }
 
@@ -91,8 +92,9 @@ export interface HudSynthesisInput {
   threatAlertSeverity?: 'error' | 'warning' | null;
   topThreatTitle?: string | null;
   topThreatDetail?: string | null;
-  topThreatTargetTab?: 'overview' | 'external' | 'internal';
+  topThreatTargetTab?: 'overview' | 'external' | 'internal' | 'allowlist';
   topThreatFocusId?: string | null;
+  pendingQuarantinedEmails?: QuarantinedAccessEmailRow[];
   securityViolationCount?: number;
   failingInvariants?: SecurityPostureInvariant[];
   hardeningPassingCount?: number;
@@ -285,6 +287,33 @@ export function buildHudIncidentQueue(input: HudSynthesisInput): HudIncidentItem
     });
   }
 
+  const pendingQuarantined = (input.pendingQuarantinedEmails ?? []).filter(
+    (q) => q.status === 'PENDING'
+  );
+  if (pendingQuarantined.length > 0) {
+    const emailPreview = pendingQuarantined
+      .slice(0, 3)
+      .map((q) => q.email)
+      .join(', ');
+    items.push({
+      id: 'inc-quarantine-emails',
+      domain: 'threat',
+      domainLabel: 'ZT QUARANTINE',
+      severity: 'warning',
+      title: `${pendingQuarantined.length} Zero Trust Access Email${
+        pendingQuarantined.length === 1 ? '' : 's'
+      } Pending Quarantine Approval`,
+      detail: `${emailPreview}${
+        pendingQuarantined.length > 3 ? ` (+${pendingQuarantined.length - 3} more)` : ''
+      } synced from Cloudflare Access policies for wsh.panoramadr.com and remain untrusted until approved.`,
+      primaryAction: {
+        label: 'Review Quarantine',
+        kind: 'open_threat',
+        threatTab: 'allowlist',
+      },
+    });
+  }
+
   // 5. Production Smoke Tests
   const latestSmoke = input.smokeRuns?.[0];
   if (latestSmoke && latestSmoke.failed > 0) {
@@ -406,6 +435,9 @@ export function buildHudScorecard(input: HudSynthesisInput): HudScorecardCard[] 
   const hardeningPass =
     input.hardeningPassingCount ?? Math.max(0, hardeningTotal - secViolations);
   const threatCount = input.threatAlertCount ?? 0;
+  const pendingQuarantineCount = (input.pendingQuarantinedEmails ?? []).filter(
+    (q) => q.status === 'PENDING'
+  ).length;
   const verdict = input.latestThreatRun?.intrusionVerdict || 'CLEAN';
 
   const securityCard: HudScorecardCard = {
@@ -415,14 +447,19 @@ export function buildHudScorecard(input: HudSynthesisInput): HudScorecardCard[] 
       ? 'syncing'
       : secViolations > 0 || input.threatAlertSeverity === 'error'
       ? 'critical'
-      : threatCount > 0
+      : threatCount > 0 || pendingQuarantineCount > 0
       ? 'warning'
       : 'healthy',
     headline: !synced ? 'Checking...' : verdict,
     subtext: !synced
       ? 'Awaiting SOC & WSH scan'
+      : pendingQuarantineCount > 0
+      ? `${hardeningPass}/${hardeningTotal} Hardened · ${threatCount} actionable · ${pendingQuarantineCount} quarantined`
       : `${hardeningPass}/${hardeningTotal} Hardened · ${threatCount} actionable`,
-    targetView: secViolations > 0 && threatCount === 0 ? 'hardening' : 'security',
+    targetView:
+      secViolations > 0 && threatCount === 0 && pendingQuarantineCount === 0
+        ? 'hardening'
+        : 'security',
   };
 
   // 3. DietPi WSH Host

@@ -79,6 +79,7 @@ import {
   ThreatAuditProgressEvent,
   CfWafRuleDto,
   CloudflareWafSnapshotDto,
+  QuarantinedAccessEmailRow,
 } from './lib/types';
 import { computeActionableSecuritySummary } from './lib/threat-actionability';
 import { inferPageScopeFromJob } from './lib/stream-utils';
@@ -258,6 +259,7 @@ export const App: React.FC = () => {
   const [latestThreatDetail, setLatestThreatDetail] = useState<ThreatRunDetailDto | null>(null);
   const [activeThreatActors, setActiveThreatActors] = useState<ThreatActorRow[]>([]);
   const [threatWafRules, setThreatWafRules] = useState<CfWafRuleDto[]>([]);
+  const [quarantinedAccessEmails, setQuarantinedAccessEmails] = useState<QuarantinedAccessEmailRow[]>([]);
   const [isRunningThreatAudit, setIsRunningThreatAudit] = useState<boolean>(false);
   const [threatAuditProgress, setThreatAuditProgress] = useState<{
     runId: string;
@@ -1291,19 +1293,21 @@ export const App: React.FC = () => {
   // Initial sync on mount (all tiers once on startup + cached opt-ins hydration)
   const refreshThreatIntelState = useCallback(async (preferredRunId?: string) => {
     try {
-      const [settingsDto, runsList, activeActorsList, wafSnap] = await Promise.all([
+      const [settingsDto, runsList, activeActorsList, wafSnap, quarantinedList] = await Promise.all([
         invoke<ThreatIntelSettingsViewDto>('get_threat_intel_settings'),
         invoke<ThreatAuditRunRow[]>('get_threat_audit_runs', { limit: 30 }),
         invoke<ThreatActorRow[]>('get_threat_actors', { disposition: 'ACTIVE' }),
         invoke<CloudflareWafSnapshotDto>('get_cloudflare_waf_rules', { forceRefresh: false }).catch(
           () => null
         ),
+        invoke<QuarantinedAccessEmailRow[]>('get_quarantined_access_emails').catch(() => []),
       ]);
       setThreatSettings(settingsDto);
       const safeRuns = Array.isArray(runsList) ? runsList : [];
       setThreatRuns(safeRuns);
       setActiveThreatActors(Array.isArray(activeActorsList) ? activeActorsList : []);
       setThreatWafRules(Array.isArray(wafSnap?.rules) ? wafSnap.rules : []);
+      setQuarantinedAccessEmails(Array.isArray(quarantinedList) ? quarantinedList : []);
 
       const latestRunId = safeRuns[0]?.id;
       if (latestRunId) {
@@ -1370,6 +1374,7 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     let unlistenThreat: (() => void) | undefined;
+    let unlistenQuarantine: (() => void) | undefined;
     listen<ThreatRunDetailDto>('sre://threat-audit-updated', (event) => {
       const detail = event.payload;
       if (detail?.run?.id) {
@@ -1382,8 +1387,18 @@ export const App: React.FC = () => {
     }).then((unsub) => {
       unlistenThreat = unsub;
     });
+    listen<QuarantinedAccessEmailRow[]>('sre://threat-quarantine-updated', () => {
+      void invoke<QuarantinedAccessEmailRow[]>('get_quarantined_access_emails')
+        .then((rows) => {
+          setQuarantinedAccessEmails(Array.isArray(rows) ? rows : []);
+        })
+        .catch(() => {});
+    }).then((unsub) => {
+      unlistenQuarantine = unsub;
+    });
     return () => {
       if (unlistenThreat) unlistenThreat();
+      if (unlistenQuarantine) unlistenQuarantine();
     };
   }, [refreshThreatIntelState]);
 
@@ -3007,6 +3022,10 @@ export const App: React.FC = () => {
     [latestThreatDetail, threatRuns, activeThreatActors, threatWafRules]
   );
   const threatBadge = actionableSecuritySummary.sidebarBadge;
+  const pendingQuarantinedEmails = useMemo(
+    () => quarantinedAccessEmails.filter((q) => q.status === 'PENDING'),
+    [quarantinedAccessEmails]
+  );
 
   const topThreatSummary = useMemo<{
     title: string;
@@ -4055,6 +4074,30 @@ export const App: React.FC = () => {
           }),
       });
     }
+    if (pendingQuarantinedEmails.length > 0) {
+      unifiedAlerts.push({
+        id: 'alert-threat-quarantine',
+        domain: 'ZT Quarantine',
+        severity: 'warning',
+        title: `${pendingQuarantinedEmails.length} Zero Trust Access Email${
+          pendingQuarantinedEmails.length === 1 ? '' : 's'
+        } Pending Quarantine Approval`,
+        detail: `${pendingQuarantinedEmails
+          .slice(0, 3)
+          .map((q) => q.email)
+          .join(', ')}${
+          pendingQuarantinedEmails.length > 3
+            ? ` (+${pendingQuarantinedEmails.length - 3} more)`
+            : ''
+        } synced from wsh.panoramadr.com Cloudflare Access policies.`,
+        actionLabel: 'Review Quarantine',
+        onAction: () =>
+          navigateTo('security', {
+            tab: 'allowlist',
+            returnFromCurrent: true,
+          }),
+      });
+    }
     if (dietpiBadges.totalCount > 0 && dietpiBadges.severity) {
       unifiedAlerts.push({
         id: 'alert-dietpi-host',
@@ -4236,8 +4279,12 @@ export const App: React.FC = () => {
           topologyAlertSeverity={topologyBadges.ingressSeverity}
           smokeFailureCount={smokeFailureCount}
           unreadOptInsCount={optInSnapshot?.unreadCount ?? 0}
-          threatAlertCount={threatBadge.count}
-          threatAlertSeverity={threatBadge.severity}
+          threatAlertCount={
+            threatBadge.count > 0 ? threatBadge.count : pendingQuarantinedEmails.length
+          }
+          threatAlertSeverity={
+            threatBadge.severity ?? (pendingQuarantinedEmails.length > 0 ? 'warning' : null)
+          }
           sslAlertCount={sslAlertCount}
           sslAlertSeverity={sslAlertSeverity}
           sslMinDays={sslMinDays}
@@ -4320,6 +4367,7 @@ export const App: React.FC = () => {
                   : 'overview'
               }
               topThreatFocusId={topThreatSummary?.focusId ?? null}
+              pendingQuarantinedEmails={pendingQuarantinedEmails}
               terminalTabs={terminalTabs}
               isLoading={apps.length === 0}
               isInitialSyncComplete={hasCompletedInitialSync}
@@ -4716,6 +4764,10 @@ export const App: React.FC = () => {
               initialSubView={threatNav.tab}
               initialFocusId={threatNav.focusId}
               initialNavNonce={threatNav.nonce}
+              quarantinedAccessEmails={quarantinedAccessEmails}
+              onQuarantineChanged={() => {
+                void refreshThreatIntelState(selectedThreatDetail?.run?.id);
+              }}
             />
           )}
 

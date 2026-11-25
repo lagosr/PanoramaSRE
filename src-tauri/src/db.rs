@@ -198,6 +198,27 @@ pub struct ThreatAllowlistRow {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct QuarantinedAccessEmailRow {
+    pub email: String,
+    pub status: String,
+    pub policy_grants_json: String,
+    pub first_seen_at: String,
+    pub last_seen_at: String,
+    pub reviewed_at: Option<String>,
+    pub removed_at: Option<String>,
+    pub review_note: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct QuarantineReconcileOutcome {
+    pub newly_quarantined: Vec<QuarantinedAccessEmailRow>,
+    pub pending_all: Vec<QuarantinedAccessEmailRow>,
+    pub auto_revoked: Vec<QuarantinedAccessEmailRow>,
+    pub newly_attached_policy_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WafRuleOverrideRow {
     pub id: String,
     pub zone_name: String,
@@ -482,6 +503,17 @@ impl SreDatabase {
                 enabled INTEGER NOT NULL DEFAULT 1,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(zone_name, rule_name)
+            );
+
+            CREATE TABLE IF NOT EXISTS quarantined_access_emails (
+                email TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                policy_grants_json TEXT NOT NULL DEFAULT '[]',
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                reviewed_at TEXT,
+                removed_at TEXT,
+                review_note TEXT
             );"
         )?;
 
@@ -2386,6 +2418,363 @@ impl SreDatabase {
         self.conn
             .execute("DELETE FROM threat_allowlist WHERE id = ?1", params![id])?;
         Ok(())
+    }
+
+    pub fn list_quarantined_access_emails(&self) -> Result<Vec<QuarantinedAccessEmailRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT email, status, policy_grants_json, first_seen_at, last_seen_at, reviewed_at, removed_at, review_note
+             FROM quarantined_access_emails
+             ORDER BY CASE UPPER(status)
+                        WHEN 'PENDING' THEN 0
+                        WHEN 'REJECTED' THEN 1
+                        WHEN 'APPROVED' THEN 2
+                        ELSE 3
+                      END,
+                      email ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(QuarantinedAccessEmailRow {
+                email: row.get(0)?,
+                status: row.get(1)?,
+                policy_grants_json: row.get(2)?,
+                first_seen_at: row.get(3)?,
+                last_seen_at: row.get(4)?,
+                reviewed_at: row.get(5)?,
+                removed_at: row.get(6)?,
+                review_note: row.get(7)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    fn extract_policy_ids_and_names(grants_json: &str) -> Vec<(String, String)> {
+        let Ok(serde_json::Value::Array(arr)) = serde_json::from_str::<serde_json::Value>(grants_json) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for item in arr {
+            let pid = item
+                .get("policyId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let pname = item
+                .get("policyName")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if !pid.is_empty() {
+                out.push((pid, if pname.is_empty() { "Unnamed Policy".to_string() } else { pname }));
+            }
+        }
+        out
+    }
+
+    pub fn reconcile_cf_access_policy_emails(
+        &self,
+        discovered: &[(String, String)],
+        sync_ok: bool,
+        now_iso: &str,
+    ) -> Result<QuarantineReconcileOutcome> {
+        let mut outcome = QuarantineReconcileOutcome::default();
+        if !sync_ok && discovered.is_empty() {
+            outcome.pending_all = self
+                .list_quarantined_access_emails()?
+                .into_iter()
+                .filter(|r| r.status == "PENDING")
+                .collect();
+            return Ok(outcome);
+        }
+
+        let existing_rows = self.list_quarantined_access_emails()?;
+        let mut existing_map: std::collections::HashMap<String, QuarantinedAccessEmailRow> =
+            existing_rows
+                .iter()
+                .map(|r| (r.email.to_ascii_lowercase(), r.clone()))
+                .collect();
+
+        let existing_allowlist_emails: std::collections::HashSet<String> = self
+            .list_threat_allowlist()?
+            .into_iter()
+            .filter(|r| r.entry_type.eq_ignore_ascii_case("EMAIL"))
+            .map(|r| r.value.trim().to_ascii_lowercase())
+            .collect();
+
+        let mut known_active_policy_ids: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for row in &existing_rows {
+            if row.status != "REMOVED" {
+                for (pid, _) in Self::extract_policy_ids_and_names(&row.policy_grants_json) {
+                    known_active_policy_ids.insert(pid);
+                }
+            }
+        }
+        let had_prior_policies = !known_active_policy_ids.is_empty();
+        let mut newly_seen_policy_ids: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+
+        let mut discovered_set: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for (raw_email, grants_json) in discovered {
+            let email = raw_email.trim().to_ascii_lowercase();
+            if email.is_empty() {
+                continue;
+            }
+            discovered_set.insert(email.clone());
+
+            if had_prior_policies {
+                for (pid, pname) in Self::extract_policy_ids_and_names(grants_json) {
+                    if !known_active_policy_ids.contains(&pid) && newly_seen_policy_ids.insert(pid) {
+                        outcome.newly_attached_policy_names.push(pname);
+                    }
+                }
+            }
+
+            match existing_map.get(&email) {
+                None => {
+                    let already_allowed = existing_allowlist_emails.contains(&email);
+                    let status = if already_allowed { "APPROVED" } else { "PENDING" };
+                    let reviewed_at = if already_allowed { Some(now_iso.to_string()) } else { None };
+                    let note = if already_allowed {
+                        Some("Matched existing Zero Trust Email allowlist entry".to_string())
+                    } else {
+                        None
+                    };
+                    self.conn.execute(
+                        "INSERT INTO quarantined_access_emails
+                         (email, status, policy_grants_json, first_seen_at, last_seen_at, reviewed_at, removed_at, review_note)
+                         VALUES (?1, ?2, ?3, ?4, ?4, ?5, NULL, ?6)",
+                        params![email, status, grants_json, now_iso, reviewed_at, note],
+                    )?;
+                    if !already_allowed {
+                        outcome.newly_quarantined.push(QuarantinedAccessEmailRow {
+                            email: email.clone(),
+                            status: "PENDING".to_string(),
+                            policy_grants_json: grants_json.clone(),
+                            first_seen_at: now_iso.to_string(),
+                            last_seen_at: now_iso.to_string(),
+                            reviewed_at: None,
+                            removed_at: None,
+                            review_note: None,
+                        });
+                    }
+                }
+                Some(prev) => {
+                    if prev.status == "REMOVED" {
+                        self.conn.execute(
+                            "UPDATE quarantined_access_emails
+                             SET status = 'PENDING',
+                                 policy_grants_json = ?2,
+                                 last_seen_at = ?3,
+                                 reviewed_at = NULL,
+                                 removed_at = NULL,
+                                 review_note = 'Re-added to Cloudflare wsh Access policies'
+                             WHERE email = ?1",
+                            params![email, grants_json, now_iso],
+                        )?;
+                        outcome.newly_quarantined.push(QuarantinedAccessEmailRow {
+                            email: email.clone(),
+                            status: "PENDING".to_string(),
+                            policy_grants_json: grants_json.clone(),
+                            first_seen_at: prev.first_seen_at.clone(),
+                            last_seen_at: now_iso.to_string(),
+                            reviewed_at: None,
+                            removed_at: None,
+                            review_note: Some("Re-added to Cloudflare wsh Access policies".to_string()),
+                        });
+                    } else if prev.status == "APPROVED" && !existing_allowlist_emails.contains(&email) {
+                        // Operator manually removed from threat_allowlist -> place back into PENDING quarantine
+                        self.conn.execute(
+                            "UPDATE quarantined_access_emails
+                             SET status = 'PENDING',
+                                 policy_grants_json = ?2,
+                                 last_seen_at = ?3,
+                                 reviewed_at = NULL,
+                                 review_note = 'Re-queued after allowlist removal'
+                             WHERE email = ?1",
+                            params![email, grants_json, now_iso],
+                        )?;
+                        outcome.newly_quarantined.push(QuarantinedAccessEmailRow {
+                            email: email.clone(),
+                            status: "PENDING".to_string(),
+                            policy_grants_json: grants_json.clone(),
+                            first_seen_at: prev.first_seen_at.clone(),
+                            last_seen_at: now_iso.to_string(),
+                            reviewed_at: None,
+                            removed_at: None,
+                            review_note: Some("Re-queued after allowlist removal".to_string()),
+                        });
+                    } else {
+                        self.conn.execute(
+                            "UPDATE quarantined_access_emails
+                             SET policy_grants_json = ?2,
+                                 last_seen_at = ?3
+                             WHERE email = ?1",
+                            params![email, grants_json, now_iso],
+                        )?;
+                    }
+                }
+            }
+            existing_map.remove(&email);
+        }
+
+        // Removal lifecycle: strictly gated on sync_ok == true so API outages never revoke access
+        if sync_ok {
+            for (_key, stale) in existing_map {
+                if stale.status == "REMOVED" {
+                    continue;
+                }
+                if stale.status == "APPROVED" {
+                    self.conn.execute(
+                        "DELETE FROM threat_allowlist
+                         WHERE UPPER(entry_type) = 'EMAIL' AND LOWER(value) = LOWER(?1)",
+                        params![stale.email],
+                    )?;
+                    self.conn.execute(
+                        "UPDATE quarantined_access_emails
+                         SET status = 'REMOVED',
+                             removed_at = ?2,
+                             review_note = 'Auto-revoked: removed from Cloudflare wsh Access policies'
+                         WHERE email = ?1",
+                        params![stale.email, now_iso],
+                    )?;
+                    outcome.auto_revoked.push(QuarantinedAccessEmailRow {
+                        status: "REMOVED".to_string(),
+                        removed_at: Some(now_iso.to_string()),
+                        review_note: Some("Auto-revoked: removed from Cloudflare wsh Access policies".to_string()),
+                        ..stale
+                    });
+                } else {
+                    self.conn.execute(
+                        "UPDATE quarantined_access_emails
+                         SET status = 'REMOVED',
+                             removed_at = ?2,
+                             review_note = 'Cleared: removed from Cloudflare wsh Access policies'
+                         WHERE email = ?1",
+                        params![stale.email, now_iso],
+                    )?;
+                }
+            }
+        }
+
+        outcome.pending_all = self
+            .list_quarantined_access_emails()?
+            .into_iter()
+            .filter(|r| r.status == "PENDING")
+            .collect();
+        Ok(outcome)
+    }
+
+    pub fn approve_quarantined_access_email(
+        &self,
+        email: &str,
+        label: Option<&str>,
+        now_iso: &str,
+    ) -> Result<QuarantinedAccessEmailRow> {
+        let email_norm = email.trim().to_ascii_lowercase();
+        let clean_label = label
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("Approved Cloudflare wsh Access Email");
+
+        let updated = self.conn.execute(
+            "UPDATE quarantined_access_emails
+             SET status = 'APPROVED',
+                 reviewed_at = ?2,
+                 removed_at = NULL,
+                 review_note = ?3
+             WHERE LOWER(email) = LOWER(?1)",
+            params![email_norm, now_iso, clean_label],
+        )?;
+        if updated == 0 {
+            self.conn.execute(
+                "INSERT INTO quarantined_access_emails
+                 (email, status, policy_grants_json, first_seen_at, last_seen_at, reviewed_at, removed_at, review_note)
+                 VALUES (?1, 'APPROVED', '[]', ?2, ?2, ?2, NULL, ?3)",
+                params![email_norm, now_iso, clean_label],
+            )?;
+        }
+
+        self.upsert_threat_allowlist("EMAIL", &email_norm, clean_label)?;
+        let _ = self.resolve_findings_for_allowlist(
+            "EMAIL",
+            &email_norm,
+            "Approved via Zero Trust Quarantine",
+        );
+
+        let mut stmt = self.conn.prepare(
+            "SELECT email, status, policy_grants_json, first_seen_at, last_seen_at, reviewed_at, removed_at, review_note
+             FROM quarantined_access_emails WHERE LOWER(email) = LOWER(?1)",
+        )?;
+        stmt.query_row(params![email_norm], |row| {
+            Ok(QuarantinedAccessEmailRow {
+                email: row.get(0)?,
+                status: row.get(1)?,
+                policy_grants_json: row.get(2)?,
+                first_seen_at: row.get(3)?,
+                last_seen_at: row.get(4)?,
+                reviewed_at: row.get(5)?,
+                removed_at: row.get(6)?,
+                review_note: row.get(7)?,
+            })
+        })
+    }
+
+    pub fn reject_quarantined_access_email(
+        &self,
+        email: &str,
+        note: Option<&str>,
+        now_iso: &str,
+    ) -> Result<QuarantinedAccessEmailRow> {
+        let email_norm = email.trim().to_ascii_lowercase();
+        let clean_note = note
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("Rejected by operator in Zero Trust Quarantine");
+
+        self.conn.execute(
+            "DELETE FROM threat_allowlist
+             WHERE UPPER(entry_type) = 'EMAIL' AND LOWER(value) = LOWER(?1)",
+            params![email_norm],
+        )?;
+        let updated = self.conn.execute(
+            "UPDATE quarantined_access_emails
+             SET status = 'REJECTED',
+                 reviewed_at = ?2,
+                 review_note = ?3
+             WHERE LOWER(email) = LOWER(?1)",
+            params![email_norm, now_iso, clean_note],
+        )?;
+        if updated == 0 {
+            self.conn.execute(
+                "INSERT INTO quarantined_access_emails
+                 (email, status, policy_grants_json, first_seen_at, last_seen_at, reviewed_at, removed_at, review_note)
+                 VALUES (?1, 'REJECTED', '[]', ?2, ?2, ?2, NULL, ?3)",
+                params![email_norm, now_iso, clean_note],
+            )?;
+        }
+
+        let mut stmt = self.conn.prepare(
+            "SELECT email, status, policy_grants_json, first_seen_at, last_seen_at, reviewed_at, removed_at, review_note
+             FROM quarantined_access_emails WHERE LOWER(email) = LOWER(?1)",
+        )?;
+        stmt.query_row(params![email_norm], |row| {
+            Ok(QuarantinedAccessEmailRow {
+                email: row.get(0)?,
+                status: row.get(1)?,
+                policy_grants_json: row.get(2)?,
+                first_seen_at: row.get(3)?,
+                last_seen_at: row.get(4)?,
+                reviewed_at: row.get(5)?,
+                removed_at: row.get(6)?,
+                review_note: row.get(7)?,
+            })
+        })
     }
 
     pub fn get_cached_cf_ip_intel(&self, ip: &str, max_age_hours: i64) -> Result<Option<String>> {

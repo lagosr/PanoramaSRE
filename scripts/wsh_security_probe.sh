@@ -70,9 +70,11 @@ try:
 
     if "audit_logs" in tables:
         rows = conn.execute(
-            "SELECT id, user_id, action, status, ip_address, substr(coalesce(user_agent,''),1,160) AS user_agent, "
-            "substr(coalesce(details,''),1,260) AS details, created_at "
-            "FROM audit_logs WHERE created_at >= datetime('now', ?) ORDER BY created_at DESC LIMIT 150",
+            "SELECT a.id, a.user_id, COALESCE(u.email, '') AS user_email, a.action, a.status, a.ip_address, "
+            "substr(coalesce(a.user_agent,''),1,160) AS user_agent, "
+            "substr(coalesce(a.details,''),1,260) AS details, a.created_at "
+            "FROM audit_logs a LEFT JOIN users u ON a.user_id = u.id "
+            "WHERE a.created_at >= datetime('now', ?) ORDER BY a.created_at DESC LIMIT 150",
             (modifier,)
         ).fetchall()
         out["audit_logs"] = [dict(r) for r in rows]

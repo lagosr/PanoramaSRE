@@ -76,6 +76,9 @@ import {
   type WafActionEvaluation,
 } from '../../lib/waf-coverage';
 import type {
+  CfAccessPolicyGrantDto,
+  CfAttachedAccessPolicyDto,
+  CfAccessPolicySyncResultDto,
   CfWafRuleDto,
   CfZoneSummary,
   CloudflareWafSnapshotDto,
@@ -84,6 +87,7 @@ import type {
   GeminiBriefDto,
   InternalNetworkSummary,
   LanClientBaselineRow,
+  QuarantinedAccessEmailRow,
   TerminalTab,
   ThreatActorRow,
   ThreatAllowlistRow,
@@ -97,6 +101,43 @@ import type {
 
 export type ThreatSubViewTab = 'overview' | 'external' | 'internal' | 'allowlist';
 type SubViewTab = ThreatSubViewTab;
+
+function parsePolicyGrants(grantsJson: string): CfAccessPolicyGrantDto[] {
+  const parsed = safeParseJson<CfAccessPolicyGrantDto[]>(grantsJson, []);
+  return Array.isArray(parsed) ? parsed : [];
+}
+
+function PolicyGrantProvenanceChips({ grants }: { grants: CfAccessPolicyGrantDto[] }) {
+  if (grants.length === 0) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-mono">
+      {grants.map((g, idx) => (
+        <span
+          key={`${g.policyId || idx}-${g.viaGroupId || 'direct'}`}
+          className="inline-flex flex-wrap items-center gap-1.5 px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300"
+        >
+          <span className="font-semibold text-slate-900 dark:text-slate-100">
+            {g.policyName || 'Unnamed Policy'}
+          </span>
+          <span className="text-slate-500">#{g.precedence}</span>
+          <span className="px-1 py-0.2 rounded bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+            {g.reusable ? 'Reusable' : 'App-Local'}
+          </span>
+          {g.sessionDuration && <span>{g.sessionDuration}</span>}
+          {g.viaGroupName && (
+            <span className="text-amber-700 dark:text-amber-300">Group: {g.viaGroupName}</span>
+          )}
+          {g.policyCreatedAt && (
+            <span className="text-slate-500">Created {g.policyCreatedAt.slice(0, 10)}</span>
+          )}
+          {g.policyUpdatedAt && (
+            <span className="text-slate-500">Updated {g.policyUpdatedAt.slice(0, 10)}</span>
+          )}
+        </span>
+      ))}
+    </div>
+  );
+}
 
 function formatRunDuration(startedAt: string, completedAt?: string | null): string | null {
   const s = parseUtcDate(startedAt);
@@ -143,6 +184,8 @@ interface ThreatIntelViewProps {
   initialSubView?: ThreatSubViewTab;
   initialFocusId?: string;
   initialNavNonce?: number;
+  quarantinedAccessEmails?: QuarantinedAccessEmailRow[];
+  onQuarantineChanged?: () => void;
 }
 
 const EMPTY_ZT_SUMMARY: ZeroTrustSummary = {
@@ -212,6 +255,8 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   initialSubView,
   initialFocusId,
   initialNavNonce = 0,
+  quarantinedAccessEmails,
+  onQuarantineChanged,
 }) => {
   const [subView, setSubView] = useState<SubViewTab>(() => initialSubView || 'overview');
   const [focusedItemId, setFocusedItemId] = useState<string | null>(() => initialFocusId || null);
@@ -249,13 +294,27 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   const [manualWafExpr, setManualWafExpr] = useState<string>('');
   const [isSavingWafOverride, setIsSavingWafOverride] = useState<boolean>(false);
 
-  // Internal LAN Baseline & Allowlist state (promoted UniFi ZBF UI lives in UnifiNetworkZbfView)
+  // Internal LAN Baseline, Quarantine & Allowlist state (promoted UniFi ZBF UI lives in UnifiNetworkZbfView)
   const [lanClients, setLanClients] = useState<LanClientBaselineRow[]>([]);
   const [allowlist, setAllowlist] = useState<ThreatAllowlistRow[]>([]);
+  const [localQuarantinedEmails, setLocalQuarantinedEmails] = useState<QuarantinedAccessEmailRow[] | null>(
+    null
+  );
+  const [syncedAttachedPolicies, setSyncedAttachedPolicies] = useState<CfAttachedAccessPolicyDto[] | null>(
+    null
+  );
+  const [syncPermissionHint, setSyncPermissionHint] = useState<string | null>(null);
+  const [isSyncingQuarantine, setIsSyncingQuarantine] = useState<boolean>(false);
   const [newRuleType, setNewRuleType] = useState<string>('IP');
   const [newRuleValue, setNewRuleValue] = useState<string>('');
   const [newRuleLabel, setNewRuleLabel] = useState<string>('');
   const [sourceFeedback, setSourceFeedback] = useState<{ text: string; tone: 'ok' | 'err' } | null>(null);
+
+  useEffect(() => {
+    if (quarantinedAccessEmails !== undefined) {
+      setLocalQuarantinedEmails(quarantinedAccessEmails);
+    }
+  }, [quarantinedAccessEmails]);
 
   // Clipboard copy feedback key
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -344,12 +403,16 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
 
   const loadSourcesAndAllowlist = useCallback(async () => {
     try {
-      const [lan, rules] = await Promise.all([
+      const [lan, rules, quarantined] = await Promise.all([
         invoke<LanClientBaselineRow[]>('get_lan_clients_baseline'),
         invoke<ThreatAllowlistRow[]>('get_threat_allowlist'),
+        invoke<QuarantinedAccessEmailRow[]>('get_quarantined_access_emails').catch(() => null),
       ]);
       setLanClients(Array.isArray(lan) ? lan : []);
       setAllowlist(Array.isArray(rules) ? rules : []);
+      if (Array.isArray(quarantined)) {
+        setLocalQuarantinedEmails(quarantined);
+      }
     } catch (err) {
       console.warn('[PanoramaSRE] Failed loading LAN baseline & allowlist:', err);
     }
@@ -414,6 +477,21 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
     () => safeParseJson<ZeroTrustSummary>(activeRun?.zeroTrustSummaryJson, EMPTY_ZT_SUMMARY),
     [activeRun?.zeroTrustSummaryJson]
   );
+
+  const effectiveQuarantinedEmails = useMemo(
+    () => localQuarantinedEmails ?? quarantinedAccessEmails ?? [],
+    [localQuarantinedEmails, quarantinedAccessEmails]
+  );
+  const pendingQuarantined = useMemo(
+    () => effectiveQuarantinedEmails.filter((q) => q.status === 'PENDING'),
+    [effectiveQuarantinedEmails]
+  );
+  const effectiveAttachedPolicies = useMemo(
+    () => syncedAttachedPolicies ?? zeroTrustSummary.attachedAccessPolicies ?? [],
+    [syncedAttachedPolicies, zeroTrustSummary.attachedAccessPolicies]
+  );
+  const effectivePolicyPermissionHint =
+    syncPermissionHint ?? zeroTrustSummary.accessPoliciesPermissionHint ?? null;
 
   const internalSummary = useMemo(
     () => safeParseJson<InternalNetworkSummary>(activeRun?.internalSummaryJson, EMPTY_INTERNAL_SUMMARY),
@@ -931,8 +1009,68 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
     try {
       await invoke('delete_threat_allowlist', { id });
       await Promise.all([loadSourcesAndAllowlist(), onRefreshAllRef.current()]);
+      onQuarantineChanged?.();
     } catch (err) {
       setSourceFeedback({ text: `Failed removing rule: ${String(err)}`, tone: 'err' });
+    }
+  };
+
+  const handleSyncAccessEmailsNow = async () => {
+    setIsSyncingQuarantine(true);
+    try {
+      const res = await invoke<CfAccessPolicySyncResultDto>('sync_cloudflare_access_emails_now');
+      setLocalQuarantinedEmails(Array.isArray(res?.quarantinedEmails) ? res.quarantinedEmails : []);
+      setSyncedAttachedPolicies(Array.isArray(res?.attachedPolicies) ? res.attachedPolicies : []);
+      setSyncPermissionHint(res?.permissionHint ?? null);
+      setSourceFeedback({
+        text: res?.syncOk
+          ? `Synced ${res.attachedPolicies.length} wsh.panoramadr.com policy(ies): ${res.pendingCount} pending quarantine, ${res.newlyQuarantinedCount} newly quarantined, ${res.autoRevokedCount} auto-revoked.`
+          : res?.permissionHint || 'Cloudflare Access policy sync degraded; preserved prior state safely.',
+        tone: res?.syncOk ? 'ok' : 'err',
+      });
+      setTimeout(() => setSourceFeedback(null), 5000);
+      await Promise.all([loadSourcesAndAllowlist(), onRefreshAllRef.current()]);
+      onQuarantineChanged?.();
+    } catch (err) {
+      setSourceFeedback({ text: `Cloudflare Access sync failed: ${String(err)}`, tone: 'err' });
+    } finally {
+      setIsSyncingQuarantine(false);
+    }
+  };
+
+  const handleApproveQuarantinedEmail = async (email: string, defaultLabel?: string) => {
+    try {
+      await invoke<QuarantinedAccessEmailRow>('approve_quarantined_access_email', {
+        email,
+        label: defaultLabel || 'Approved Cloudflare wsh Access Email',
+      });
+      setSourceFeedback({
+        text: `Approved ${email} and added to Zero Trust Email Allowlist.`,
+        tone: 'ok',
+      });
+      setTimeout(() => setSourceFeedback(null), 4000);
+      await Promise.all([loadSourcesAndAllowlist(), loadActors(), onRefreshAllRef.current()]);
+      onQuarantineChanged?.();
+    } catch (err) {
+      setSourceFeedback({ text: `Failed approving ${email}: ${String(err)}`, tone: 'err' });
+    }
+  };
+
+  const handleRejectQuarantinedEmail = async (email: string) => {
+    try {
+      await invoke<QuarantinedAccessEmailRow>('reject_quarantined_access_email', {
+        email,
+        note: 'Rejected by operator in Zero Trust Quarantine',
+      });
+      setSourceFeedback({
+        text: `Rejected ${email}. Future wsh.panoramadr.com Access logins by this email will trigger HIGH alerts.`,
+        tone: 'ok',
+      });
+      setTimeout(() => setSourceFeedback(null), 5000);
+      await Promise.all([loadSourcesAndAllowlist(), loadActors(), onRefreshAllRef.current()]);
+      onQuarantineChanged?.();
+    } catch (err) {
+      setSourceFeedback({ text: `Failed rejecting ${email}: ${String(err)}`, tone: 'err' });
     }
   };
 
@@ -1987,6 +2125,80 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
           </div>
         )}
 
+        {/* Above-the-Fold Amber Quarantine Spotlight — Visible Across All Sub-Views Until Reviewed */}
+        {pendingQuarantined.length > 0 && (
+          <div
+            data-testid="threat-quarantine-spotlight"
+            className="bg-white dark:bg-slate-900 border-2 border-amber-500/60 rounded-2xl p-4 sm:p-5 shadow-md space-y-3"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0" />
+                <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 tabular-nums">
+                  Quarantined Zero Trust Access Emails Pending Approval ({pendingQuarantined.length})
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSubView('allowlist')}
+                className="btn-tonal text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+              >
+                <span>Open Quarantine Queue</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="space-y-2 text-xs">
+              {pendingQuarantined.map((q) => {
+                const grants = parsePolicyGrants(q.policyGrantsJson);
+                const firstPolicyName = grants[0]?.policyName;
+                return (
+                  <div
+                    key={`spotlight-quar-${q.email}`}
+                    className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-amber-500/40 flex flex-col lg:flex-row lg:items-center justify-between gap-2.5"
+                  >
+                    <div className="space-y-1.5 min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <StatusBadge label="PENDING QUARANTINE" variant="warning" />
+                        <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">
+                          <CopyableValue value={q.email} label="quarantined email" />
+                        </span>
+                        <span className="text-[11px] font-mono text-slate-500">
+                          First seen {formatLocalDateTime(q.firstSeenAt)}
+                        </span>
+                      </div>
+                      <PolicyGrantProvenanceChips grants={grants} />
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void handleApproveQuarantinedEmail(
+                            q.email,
+                            firstPolicyName ? `${firstPolicyName} (wsh Access)` : undefined
+                          )
+                        }
+                        className="btn-primary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>Approve &amp; Allow</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleRejectQuarantinedEmail(q.email)}
+                        className="btn-danger text-xs whitespace-nowrap flex-shrink-0"
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Persistent Single-Row 4-Card Telemetry Context Ribbon (Eliminates Per-Tab Duplication) */}
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 pt-1 tabular-nums">
           {/* Card 1: Cloudflare Edge */}
@@ -2181,7 +2393,11 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                 value: 'allowlist',
                 label: 'Allowlist',
                 badge:
-                  allowlist.length > 0 ? (
+                  pendingQuarantined.length > 0 ? (
+                    <span className="tabular-nums font-mono text-amber-600 dark:text-amber-300 font-bold">
+                      {pendingQuarantined.length}Q
+                    </span>
+                  ) : allowlist.length > 0 ? (
                     <span className="tabular-nums font-mono">{allowlist.length}</span>
                   ) : undefined,
               },
@@ -3655,6 +3871,172 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
               {sourceFeedback.text}
             </div>
           )}
+
+          {/* Card 1: Cloudflare Access Quarantine Queue (wsh.panoramadr.com) */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 tabular-nums">
+                  Cloudflare Access Quarantine Queue ({effectiveQuarantinedEmails.length})
+                </h3>
+                <p className="text-xs text-slate-600 dark:text-slate-400">
+                  Emails discovered inside attached <code className="font-mono">wsh.panoramadr.com</code> Cloudflare Access policies. New or re-added addresses stay untrusted until approved; removed addresses are auto-revoked.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleSyncAccessEmailsNow()}
+                disabled={isSyncingQuarantine}
+                className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncingQuarantine ? 'animate-spin' : ''}`} />
+                <span>{isSyncingQuarantine ? 'Syncing Access...' : 'Sync Access Emails Now'}</span>
+              </button>
+            </div>
+
+            {effectivePolicyPermissionHint && (
+              <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-800 dark:text-amber-300 flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>{effectivePolicyPermissionHint}</span>
+              </div>
+            )}
+
+            {effectiveQuarantinedEmails.length === 0 ? (
+              <div className="p-5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-center text-xs text-slate-500">
+                No synced Cloudflare Access emails recorded yet. Click &quot;Sync Access Emails Now&quot; or run a 360° Threat Audit.
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                {effectiveQuarantinedEmails.map((q) => {
+                  const grants = parsePolicyGrants(q.policyGrantsJson);
+                  const badgeVariant =
+                    q.status === 'APPROVED'
+                      ? 'success'
+                      : q.status === 'PENDING'
+                      ? 'warning'
+                      : q.status === 'REJECTED'
+                      ? 'danger'
+                      : 'neutral';
+                  const firstPolicyName = grants[0]?.policyName;
+                  return (
+                    <div
+                      key={`quar-row-${q.email}`}
+                      className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between gap-3 text-xs"
+                    >
+                      <div className="space-y-1.5 min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <StatusBadge label={q.status} variant={badgeVariant} />
+                          <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">
+                            <CopyableValue value={q.email} label="quarantined email" />
+                          </span>
+                          <span className="text-[11px] font-mono text-slate-500 tabular-nums">
+                            First: {formatLocalDateTime(q.firstSeenAt)} • Last: {formatLocalDateTime(q.lastSeenAt)}
+                          </span>
+                        </div>
+                        <PolicyGrantProvenanceChips grants={grants} />
+                        {q.reviewNote && (
+                          <div className="text-[11px] text-slate-600 dark:text-slate-400">
+                            Note: {q.reviewNote}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2 shrink-0">
+                        {q.status !== 'APPROVED' && q.status !== 'REMOVED' && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleApproveQuarantinedEmail(
+                                q.email,
+                                firstPolicyName ? `${firstPolicyName} (wsh Access)` : undefined
+                              )
+                            }
+                            className="btn-primary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>Approve &amp; Allow</span>
+                          </button>
+                        )}
+                        {q.status !== 'REJECTED' && q.status !== 'REMOVED' && (
+                          <button
+                            type="button"
+                            onClick={() => void handleRejectQuarantinedEmail(q.email)}
+                            className="btn-danger text-xs whitespace-nowrap flex-shrink-0"
+                          >
+                            {q.status === 'APPROVED' ? 'Revoke / Reject' : 'Reject'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Card 2: Attached wsh.panoramadr.com Cloudflare Access Policies */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-3">
+            <div>
+              <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 tabular-nums">
+                Attached wsh.panoramadr.com Cloudflare Access Policies ({effectiveAttachedPolicies.length})
+              </h3>
+              <p className="text-xs text-slate-600 dark:text-slate-400">
+                Policy provenance attached directly to <code className="font-mono">wsh.panoramadr.com</code> (unattached library policies and non-WSH LAN subdomains are excluded).
+              </p>
+            </div>
+
+            {effectiveAttachedPolicies.length === 0 ? (
+              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs text-slate-500">
+                No attached policy snapshot recorded yet. Click &quot;Sync Access Emails Now&quot; to inspect live policies.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                {effectiveAttachedPolicies.map((pol) => (
+                  <div
+                    key={`${pol.appUid}-${pol.policyId}`}
+                    className={`p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border space-y-2 text-xs ${
+                      pol.broadRules.length > 0
+                        ? 'border-rose-500/60'
+                        : 'border-slate-200 dark:border-slate-800'
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="font-bold text-slate-900 dark:text-slate-100">
+                          {pol.policyName}
+                        </span>
+                        <StatusBadge label={`#${pol.precedence}`} variant="neutral" />
+                        <StatusBadge
+                          label={pol.decision.toUpperCase()}
+                          variant={pol.decision === 'allow' ? 'info' : 'warning'}
+                        />
+                        <StatusBadge
+                          label={pol.reusable ? 'Reusable' : 'App-Local'}
+                          variant="accent"
+                        />
+                        {pol.broadRules.length > 0 && (
+                          <StatusBadge
+                            label={`BROAD RULE: ${pol.broadRules.join(', ')}`}
+                            variant="danger"
+                          />
+                        )}
+                      </div>
+                      <span className="font-mono text-[11px] text-slate-600 dark:text-slate-400 tabular-nums">
+                        {pol.emailCount} email{pol.emailCount === 1 ? '' : 's'}
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-mono text-slate-600 dark:text-slate-400">
+                      <span>App: {pol.appDomain}</span>
+                      {pol.sessionDuration && <span>Session: {pol.sessionDuration}</span>}
+                      {pol.policyCreatedAt && <span>Created: {pol.policyCreatedAt.slice(0, 10)}</span>}
+                      {pol.policyUpdatedAt && <span>Updated: {pol.policyUpdatedAt.slice(0, 10)}</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
 
           {/* Cross-Surface Allowlist Rules Manager */}
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">

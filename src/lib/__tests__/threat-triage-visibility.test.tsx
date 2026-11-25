@@ -2,7 +2,12 @@ import { describe, it, expect, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ThreatIntelView } from '../../components/security/ThreatIntelView';
 import { buildHudIncidentQueue, type HudSynthesisInput } from '../hud-synthesis';
-import type { ThreatAuditRunRow, ThreatFindingRow, ThreatRunDetailDto } from '../types';
+import type {
+  QuarantinedAccessEmailRow,
+  ThreatAuditRunRow,
+  ThreatFindingRow,
+  ThreatRunDetailDto,
+} from '../types';
 
 function makeBaseHudInput(overrides: Partial<HudSynthesisInput> = {}): HudSynthesisInput {
   return {
@@ -184,5 +189,140 @@ describe('High-threat triage visibility and direct HUD drill-down', () => {
     expect(actorsIdx).toBeLessThan(wafIdx);
     expect(html).toContain('id="threat-finding-f1"');
     expect(html).toContain('ring-rose-500');
+  });
+
+  it('surfaces Amber Quarantine HUD incident targeting allowlist tab when PENDING emails exist', () => {
+    const sampleGrant = JSON.stringify([
+      {
+        appUid: 'app-wsh',
+        appName: 'WSH',
+        appDomain: 'wsh.panoramadr.com',
+        policyId: 'pol-fam',
+        policyName: 'Family Access',
+        decision: 'allow',
+        precedence: 1,
+        reusable: true,
+        sessionDuration: '730h',
+        policyCreatedAt: '2026-10-01T00:00:00Z',
+        policyUpdatedAt: '2026-11-01T00:00:00Z',
+      },
+    ]);
+    const pendingRow: QuarantinedAccessEmailRow = {
+      email: 'newguest@gmail.com',
+      status: 'PENDING',
+      policyGrantsJson: sampleGrant,
+      firstSeenAt: '2026-11-25T00:00:00Z',
+      lastSeenAt: '2026-11-25T00:00:00Z',
+    };
+
+    const incidents = buildHudIncidentQueue(
+      makeBaseHudInput({
+        pendingQuarantinedEmails: [pendingRow],
+      })
+    );
+    const quarInc = incidents.find((i) => i.id === 'inc-quarantine-emails');
+    expect(quarInc).toBeDefined();
+    expect(quarInc?.severity).toBe('warning');
+    expect(quarInc?.title).toContain('1 Zero Trust Access Email Pending Quarantine Approval');
+    expect(quarInc?.detail).toContain('newguest@gmail.com');
+    expect(quarInc?.primaryAction.threatTab).toBe('allowlist');
+
+    const clearedIncidents = buildHudIncidentQueue(
+      makeBaseHudInput({
+        pendingQuarantinedEmails: [{ ...pendingRow, status: 'APPROVED' }],
+      })
+    );
+    expect(clearedIncidents.find((i) => i.id === 'inc-quarantine-emails')).toBeUndefined();
+  });
+
+  it('renders Amber Quarantine Spotlight and Allowlist wsh.panoramadr.com Policy Provenance', () => {
+    const sampleGrant = JSON.stringify([
+      {
+        appUid: 'app-wsh',
+        appName: 'WSH',
+        appDomain: 'wsh.panoramadr.com',
+        policyId: 'pol-fam',
+        policyName: 'Family Access',
+        decision: 'allow',
+        precedence: 1,
+        reusable: true,
+        sessionDuration: '730h',
+        policyCreatedAt: '2026-10-01T00:00:00Z',
+        policyUpdatedAt: '2026-11-01T00:00:00Z',
+        viaGroupName: 'Family Group',
+      },
+    ]);
+    const pendingRow: QuarantinedAccessEmailRow = {
+      email: 'newguest@gmail.com',
+      status: 'PENDING',
+      policyGrantsJson: sampleGrant,
+      firstSeenAt: '2026-11-25T00:00:00Z',
+      lastSeenAt: '2026-11-25T00:00:00Z',
+    };
+    const runWithPolicies = makeRun();
+    const parsedZt = JSON.parse(runWithPolicies.zeroTrustSummaryJson || '{}');
+    parsedZt.attachedAccessPolicies = [
+      {
+        appUid: 'app-wsh',
+        appName: 'WSH',
+        appDomain: 'wsh.panoramadr.com',
+        policyId: 'pol-fam',
+        policyName: 'Family Access',
+        decision: 'allow',
+        precedence: 1,
+        reusable: true,
+        sessionDuration: '730h',
+        policyCreatedAt: '2026-10-01T00:00:00Z',
+        policyUpdatedAt: '2026-11-01T00:00:00Z',
+        emailCount: 1,
+        emails: ['newguest@gmail.com'],
+        broadRules: [],
+      },
+    ];
+    runWithPolicies.zeroTrustSummaryJson = JSON.stringify(parsedZt);
+
+    const spotlightHtml = renderToStaticMarkup(
+      <ThreatIntelView
+        latestDetail={{ run: runWithPolicies, findings: [] }}
+        runs={[runWithPolicies]}
+        settings={null}
+        isRunningAudit={false}
+        onRunAuditNow={vi.fn()}
+        onEscalateRunToCarbon={vi.fn()}
+        onSelectRunId={vi.fn()}
+        onRefreshAll={vi.fn()}
+        onNavigateToSettings={vi.fn()}
+        quarantinedAccessEmails={[pendingRow]}
+      />
+    );
+    expect(spotlightHtml).toContain('data-testid="threat-quarantine-spotlight"');
+    expect(spotlightHtml).toContain('newguest@gmail.com');
+    expect(spotlightHtml).toContain('Family Access');
+    expect(spotlightHtml).toContain('#1');
+    expect(spotlightHtml).toContain('Reusable');
+    expect(spotlightHtml).toContain('730h');
+    expect(spotlightHtml).toContain('Group: Family Group');
+    expect(spotlightHtml).toContain('Approve &amp; Allow');
+    expect(spotlightHtml).toContain('Reject');
+
+    const allowlistHtml = renderToStaticMarkup(
+      <ThreatIntelView
+        latestDetail={{ run: runWithPolicies, findings: [] }}
+        runs={[runWithPolicies]}
+        settings={null}
+        isRunningAudit={false}
+        onRunAuditNow={vi.fn()}
+        onEscalateRunToCarbon={vi.fn()}
+        onSelectRunId={vi.fn()}
+        onRefreshAll={vi.fn()}
+        onNavigateToSettings={vi.fn()}
+        initialSubView="allowlist"
+        quarantinedAccessEmails={[pendingRow]}
+      />
+    );
+    expect(allowlistHtml).toContain('Attached wsh.panoramadr.com Cloudflare Access Policies');
+    expect(allowlistHtml).toContain('Cloudflare Access Quarantine Queue');
+    expect(allowlistHtml).toContain('Sync Access Emails Now');
+    expect(allowlistHtml).toContain('Family Access');
   });
 });

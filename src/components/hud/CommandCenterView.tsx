@@ -11,6 +11,7 @@ import {
   NavSectionId,
   NetworkPosture,
   OptInComplianceSnapshot,
+  QuarantinedAccessEmailRow,
   SecurityPostureInvariant,
   SmokeTestRun,
   SslFleetSummary,
@@ -48,8 +49,9 @@ interface CommandCenterViewProps {
   threatAlertSeverity?: 'error' | 'warning' | null;
   topThreatTitle?: string | null;
   topThreatDetail?: string | null;
-  topThreatTargetTab?: 'overview' | 'external' | 'internal';
+  topThreatTargetTab?: 'overview' | 'external' | 'internal' | 'allowlist';
   topThreatFocusId?: string | null;
+  pendingQuarantinedEmails?: QuarantinedAccessEmailRow[];
   terminalTabs?: TerminalTab[];
   isLoading: boolean;
   isInitialSyncComplete?: boolean;
@@ -69,7 +71,7 @@ interface CommandCenterViewProps {
   onNavigateToTopology?: () => void;
   onNavigateToHardening?: () => void;
   onNavigateToThreat?: (opts?: {
-    tab?: 'overview' | 'external' | 'internal';
+    tab?: 'overview' | 'external' | 'internal' | 'allowlist';
     focusId?: string;
   }) => void;
   onNavigateToSmoke?: () => void;
@@ -106,6 +108,7 @@ export function CommandCenterView({
   topThreatDetail = null,
   topThreatTargetTab,
   topThreatFocusId = null,
+  pendingQuarantinedEmails = [],
   isLoading,
   isInitialSyncComplete = true,
   networkPosture = 'LAN_DIRECT',
@@ -185,6 +188,7 @@ export function CommandCenterView({
       topThreatDetail,
       topThreatTargetTab,
       topThreatFocusId,
+      pendingQuarantinedEmails,
       securityViolationCount,
       failingInvariants,
       hardeningPassingCount,
@@ -210,6 +214,7 @@ export function CommandCenterView({
       topThreatDetail,
       topThreatTargetTab,
       topThreatFocusId,
+      pendingQuarantinedEmails,
       securityViolationCount,
       failingInvariants,
       hardeningPassingCount,
@@ -291,6 +296,8 @@ export function CommandCenterView({
             tab: topThreatTargetTab,
             focusId: topThreatFocusId ?? undefined,
           });
+        } else if (pendingQuarantinedEmails.some((q) => q.status === 'PENDING')) {
+          onNavigateToThreat?.({ tab: 'allowlist' });
         } else {
           onNavigateToThreat?.();
         }
