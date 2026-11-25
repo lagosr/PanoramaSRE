@@ -76,7 +76,7 @@ export function TopLiveSyncBar({
       : null);
 
   return (
-    <header className="h-14 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 sm:px-4 lg:px-6 flex items-center justify-between gap-3 z-10 select-none shrink-0">
+    <header className="h-14 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 sm:px-4 md:pl-6 lg:px-6 flex items-center justify-between gap-3 z-10 select-none shrink-0">
       {/* Left: Network Posture, MCP Bridge, Prod Health */}
       <div className="flex items-center gap-2 shrink-0 min-w-0">
         {!hasResolvedPosture ? (

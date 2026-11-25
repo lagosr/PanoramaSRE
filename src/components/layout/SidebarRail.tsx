@@ -15,7 +15,8 @@ import {
   Settings as SettingsIcon,
   Waypoints,
   Bot,
-  PanelLeftClose,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { APP_VERSION_INFO } from '../../lib/version';
 import { NavSectionId } from '../../lib/types';
@@ -315,50 +316,45 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
     <aside
       className={`${
         isCollapsed ? 'w-16' : 'w-16 md:w-64'
-      } bg-white dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 flex flex-col min-h-0 overflow-hidden select-none shrink-0 transition-all duration-150`}
+      } relative z-30 bg-white dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 flex flex-col min-h-0 select-none shrink-0 transition-all duration-150`}
     >
+      {onToggleCollapse && (
+        <button
+          type="button"
+          onClick={onToggleCollapse}
+          className="hidden md:flex absolute -right-3.5 top-3.5 z-40 h-7 w-7 items-center justify-center rounded-full border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-600 dark:text-slate-400 hover:text-[var(--color-brand-text)] hover:bg-white hover:dark:bg-slate-900 hover:border-[var(--color-brand)]/50 shadow-md transition-all cursor-pointer"
+          title={isCollapsed ? 'Expand Sidebar' : 'Collapse Sidebar'}
+          aria-label={isCollapsed ? 'Expand Sidebar' : 'Collapse Sidebar'}
+        >
+          {isCollapsed ? (
+            <ChevronRight className="w-3.5 h-3.5" />
+          ) : (
+            <ChevronLeft className="w-3.5 h-3.5" />
+          )}
+        </button>
+      )}
+
       <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
         {/* App Title / Header (h-14 matches TopLiveSyncBar) */}
         <div
           className={`h-14 flex items-center border-b border-slate-200 dark:border-slate-800 shrink-0 ${
-            isCollapsed ? 'justify-center px-2' : 'justify-between px-2.5 md:px-3.5 gap-2'
+            isCollapsed ? 'justify-center px-2' : 'justify-start px-2.5 md:px-3.5 gap-2'
           }`}
         >
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="relative shrink-0">
-              {isCollapsed && onToggleCollapse ? (
-                <button
-                  type="button"
-                  onClick={onToggleCollapse}
-                  title="Expand Sidebar Rail"
-                  aria-label="Expand Sidebar Rail"
-                  className="w-9 h-9 rounded-xl bg-white dark:bg-slate-900 border border-amber-500/40 dark:border-amber-400/40 hover:border-[var(--color-brand)] flex items-center justify-center shadow-sm overflow-hidden cursor-pointer transition-colors"
-                >
-                  <img
-                    src="/logo-dark.png"
-                    alt="PanoramaSRE"
-                    className="w-full h-full object-cover hidden dark:block"
-                  />
-                  <img
-                    src="/logo-light.png"
-                    alt="PanoramaSRE"
-                    className="w-full h-full object-cover block dark:hidden"
-                  />
-                </button>
-              ) : (
-                <div className="w-9 h-9 rounded-xl bg-white dark:bg-slate-900 border border-amber-500/40 dark:border-amber-400/40 flex items-center justify-center shadow-sm overflow-hidden">
-                  <img
-                    src="/logo-dark.png"
-                    alt="PanoramaSRE"
-                    className="w-full h-full object-cover hidden dark:block"
-                  />
-                  <img
-                    src="/logo-light.png"
-                    alt="PanoramaSRE"
-                    className="w-full h-full object-cover block dark:hidden"
-                  />
-                </div>
-              )}
+              <div className="w-9 h-9 rounded-xl bg-white dark:bg-slate-900 border border-amber-500/40 dark:border-amber-400/40 flex items-center justify-center shadow-sm overflow-hidden">
+                <img
+                  src="/logo-dark.png"
+                  alt="PanoramaSRE"
+                  className="w-full h-full object-cover hidden dark:block"
+                />
+                <img
+                  src="/logo-light.png"
+                  alt="PanoramaSRE"
+                  className="w-full h-full object-cover block dark:hidden"
+                />
+              </div>
               <span
                 className={`w-2.5 h-2.5 rounded-full absolute -top-0.5 -right-0.5 ring-2 ring-white dark:ring-slate-950 pointer-events-none ${
                   !isInitialSyncComplete
@@ -382,18 +378,6 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
               </div>
             )}
           </div>
-
-          {!isCollapsed && onToggleCollapse && (
-            <button
-              type="button"
-              onClick={onToggleCollapse}
-              className="hidden md:flex w-7 h-7 items-center justify-center rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 hover:border-[var(--color-brand)] text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 transition-colors shrink-0 cursor-pointer"
-              title="Collapse Sidebar to Icons"
-              aria-label="Collapse Sidebar to Icons"
-            >
-              <PanelLeftClose className="w-3.5 h-3.5" />
-            </button>
-          )}
         </div>
 
         {/* 5-Group Navigation */}
