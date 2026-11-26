@@ -16,6 +16,7 @@ import {
 import { formatLocalDateTime } from '../../lib/formatters';
 import type { OttoTraceDebugBundleDto, OttoTraceDetailDto } from '../../lib/types';
 import { OttoIcon } from './OttoAvatar';
+import { OttoMarkdownRenderer } from './OttoMarkdownRenderer';
 
 interface OttoTraceInspectorDrawerProps {
   traceRunId: string | null;
@@ -275,8 +276,11 @@ export const OttoTraceInspectorDrawer: React.FC<OttoTraceInspectorDrawerProps> =
                           <BrainCircuit className="w-3.5 h-3.5" />
                           <span>Native Gemini Deep-Thinking Rundown (Scrubbed)</span>
                         </div>
-                        <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-[#050b14] border border-slate-200/90 dark:border-slate-800 text-emerald-900 dark:text-emerald-400 font-mono text-xs whitespace-pre-wrap leading-relaxed max-h-80 overflow-y-auto">
-                          {step.thinkingSummaryMd}
+                        <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-[#050b14] border border-slate-200/90 dark:border-slate-800 text-emerald-900 dark:text-emerald-400 font-mono max-h-80 overflow-y-auto">
+                          <OttoMarkdownRenderer
+                            markdown={step.thinkingSummaryMd}
+                            variant="thinking"
+                          />
                         </div>
                       </div>
                     )}

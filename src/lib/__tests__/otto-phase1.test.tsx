@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { OttoIcon } from '../../components/agent/OttoAvatar';
+import { OttoMarkdownRenderer } from '../../components/agent/OttoMarkdownRenderer';
 import { TopLiveSyncBar } from '../../components/layout/TopLiveSyncBar';
 import { SidebarRail } from '../../components/layout/SidebarRail';
 import { OttoAgentView } from '../../components/agent/OttoAgentView';
@@ -329,5 +330,45 @@ describe('Otto AI SRE — Phase 1 UI, Avatar, Global Pill & Console Isolation', 
         mode: 'smart',
       })
     ).toBe(false);
+  });
+
+  it('OttoMarkdownRenderer renders headings, bold+code, italics, lists, code blocks, tables, blockquotes, and strips unsafe links', () => {
+    const sampleMd = [
+      '### 1. Threat & False-Positive Triage',
+      '- **Contextualize Threat SOC Findings:** Evaluates *actual* exposure on `parakith.com` (`NOISE_SAFE_DROP`).',
+      '- **`L2_AUTO` (Autonomous):** `create_bug_handoff` without mutating prod.',
+      '',
+      '*(Note: Your circuit breaker is `CLOSED` and `sre-agent-wsh` is standby.)*',
+      '',
+      '> **Policy Kernel Hard-Block (L4-06):** Never blocks protected IPs.',
+      '',
+      '```json',
+      '{"verdict": "NOISE_SAFE_DROP"}',
+      '```',
+      '',
+      '| Domain | Status |',
+      '| --- | --- |',
+      '| Auth | `HEALTHY` |',
+      '',
+      'Safe [Docs](https://wsh.panoramadr.com) and unsafe [XSS](javascript:alert(1)).',
+    ].join('\n');
+
+    const html = renderToStaticMarkup(<OttoMarkdownRenderer markdown={sampleMd} />);
+
+    expect(html).toContain('<h4');
+    expect(html).toContain('1. Threat &amp; False-Positive Triage');
+    expect(html).toContain('<ul');
+    expect(html).toContain('<strong');
+    expect(html).toContain('<em');
+    expect(html).toContain('<code');
+    expect(html).toContain('NOISE_SAFE_DROP');
+    expect(html).toContain('L2_AUTO');
+    expect(html).toContain('<blockquote');
+    expect(html).toContain('<pre');
+    expect(html).toContain('<table');
+    expect(html).toContain('href="https://wsh.panoramadr.com"');
+    expect(html).not.toContain('javascript:alert');
+    expect(html).not.toContain('### 1.');
+    expect(html).not.toContain('**Contextualize');
   });
 });

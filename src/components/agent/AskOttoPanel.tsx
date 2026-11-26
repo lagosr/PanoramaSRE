@@ -31,6 +31,7 @@ import type {
   SendOttoChatMessageResult,
 } from '../../lib/types';
 import { OttoIcon } from './OttoAvatar';
+import { OttoMarkdownRenderer } from './OttoMarkdownRenderer';
 
 interface AskOttoPanelProps {
   apps: DiscoveredApp[];
@@ -473,7 +474,7 @@ export const AskOttoPanel: React.FC<AskOttoPanelProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2 shrink-0">
-            <div className="w-44">
+            <div className="w-56">
               <CustomSelect
                 value={modelChoice}
                 onChange={setModelChoice}
@@ -485,7 +486,7 @@ export const AskOttoPanel: React.FC<AskOttoPanelProps> = ({
                 ]}
               />
             </div>
-            <div className="w-36">
+            <div className="w-40">
               <CustomSelect
                 value={thinkingLevel}
                 onChange={setThinkingLevel}
@@ -598,7 +599,7 @@ export const AskOttoPanel: React.FC<AskOttoPanelProps> = ({
                 >
                   {!isUser && <OttoIcon className="w-7 h-7 mt-1" />}
                   <div
-                    className={`max-w-[88%] rounded-2xl p-3.5 space-y-2.5 border ${
+                    className={`min-w-0 max-w-[90%] rounded-2xl p-4 space-y-2.5 border ${
                       isUser
                         ? 'bg-[var(--color-brand-subtle)] border-[var(--color-brand-ring)] text-slate-900 dark:text-slate-100'
                         : 'bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100'
@@ -653,17 +654,24 @@ export const AskOttoPanel: React.FC<AskOttoPanelProps> = ({
                           </span>
                         </button>
                         {isThinkingExpanded && (
-                          <div className="px-3 py-2.5 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#050b14] text-emerald-900 dark:text-emerald-400 font-mono text-xs whitespace-pre-wrap leading-relaxed max-h-64 overflow-y-auto">
-                            {msg.thinkingSummaryMd}
+                          <div className="px-3 py-2.5 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#050b14] text-emerald-900 dark:text-emerald-400 font-mono max-h-64 overflow-y-auto">
+                            <OttoMarkdownRenderer
+                              markdown={msg.thinkingSummaryMd}
+                              variant="thinking"
+                            />
                           </div>
                         )}
                       </div>
                     )}
 
                     {/* Message Body */}
-                    <div className="text-xs sm:text-[13px] leading-relaxed whitespace-pre-wrap break-words">
-                      {msg.contentMd}
-                    </div>
+                    {isUser ? (
+                      <div className="text-xs sm:text-[13px] leading-relaxed whitespace-pre-wrap break-words">
+                        {msg.contentMd}
+                      </div>
+                    ) : (
+                      <OttoMarkdownRenderer markdown={msg.contentMd} variant="chat" />
+                    )}
 
                     {/* Inline Policy-Validated Proposal Card */}
                     {linkedProposal && (
@@ -846,7 +854,7 @@ export const AskOttoPanel: React.FC<AskOttoPanelProps> = ({
             </div>
           )}
 
-          <div className="flex items-end gap-2">
+          <div className="flex items-end gap-2 min-w-0">
             <textarea
               ref={textareaRef}
               rows={2}
@@ -859,7 +867,7 @@ export const AskOttoPanel: React.FC<AskOttoPanelProps> = ({
                 }
               }}
               placeholder="Ask Otto about Threat SOC false positives, @app:auth, @host:wsh, @inv:SEC-09, or fleet health... (Enter to send, Shift+Enter for newline)"
-              className="flex-1 resize-none rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs sm:text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)]"
+              className="flex-1 min-w-0 resize-none rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs sm:text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)]"
             />
             <div className="flex flex-col sm:flex-row items-center gap-1.5 shrink-0">
               {draft.trim().length > 0 && (
