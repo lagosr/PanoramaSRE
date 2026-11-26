@@ -1245,7 +1245,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       360° Threat Intelligence &amp; AI (Cloudflare + Gemini 4 + UniFi)
                     </h3>
                     <StatusBadge
-                      label={`Carbon (24h): ${threatDto?.carbonUsedLast24h ?? 0} / ${
+                      label={`Deep AI (${threatPrefs.tier2Model === 'gemini-4-carbon' ? 'Carbon' : 'Neon'} 24h): ${threatDto?.carbonUsedLast24h ?? 0} / ${
                         threatPrefs.dailyCarbonCap === 0 ? '∞' : threatPrefs.dailyCarbonCap
                       }`}
                       variant="info"
@@ -1314,7 +1314,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
                 <div>
                   <label className="block text-[11px] font-mono text-slate-600 dark:text-slate-400 mb-1">
-                    Tier 1 Triage Model
+                    Base Triage Model (Tier 1)
                   </label>
                   <CustomSelect
                     value={threatPrefs.tier1Model}
@@ -1322,7 +1322,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       setThreatPrefs((prev) => ({ ...prev, tier1Model: val }))
                     }
                     options={[
-                      { value: 'gemini-4-hydrogen', label: 'Gemini 4 Hydrogen (Fast Default)' },
+                      { value: 'gemini-4-hydrogen', label: 'Gemini 4 Hydrogen (Default)' },
                       { value: 'gemini-4-neon', label: 'Gemini 4 Neon (Balanced)' },
                       { value: 'gemini-4-argon', label: 'Gemini 4 Argon (Legacy Alias)' },
                     ]}
@@ -1331,7 +1331,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
                 <div>
                   <label className="block text-[11px] font-mono text-slate-600 dark:text-slate-400 mb-1">
-                    Tier 2 Forensic Model
+                    Deep Analysis Model (Tier 2)
                   </label>
                   <CustomSelect
                     value={threatPrefs.tier2Model}
@@ -1339,7 +1339,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       setThreatPrefs((prev) => ({ ...prev, tier2Model: val }))
                     }
                     options={[
-                      { value: 'gemini-4-neon', label: 'Gemini 4 Neon (Recommended)' },
+                      { value: 'gemini-4-neon', label: 'Gemini 4 Neon (Default)' },
                       { value: 'gemini-4-carbon', label: 'Gemini 4 Carbon (Heavy Deep)' },
                     ]}
                   />

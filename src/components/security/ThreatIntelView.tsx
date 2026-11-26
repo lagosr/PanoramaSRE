@@ -238,9 +238,16 @@ const EMPTY_INTERNAL_SUMMARY: InternalNetworkSummary = {
 const AUDIT_PIPELINE_STEPS = [
   { key: 'collect', label: '1. Collect (CF / UniFi / WSH)' },
   { key: 'stage0', label: '2. Stage 0 Triage' },
-  { key: 'stage1', label: '3. Gemini Stage 1' },
-  { key: 'stage2', label: '4. Carbon & Save' },
+  { key: 'stage1', label: '3. Gemini Base (Hydrogen)' },
+  { key: 'stage2', label: '4. Deep AI & Save' },
 ];
+
+function tier2ModelShortLabel(model?: string | null): string {
+  const m = (model || '').trim().toLowerCase();
+  if (m === 'gemini-4-carbon') return 'Carbon';
+  if (m === 'gemini-4-hydrogen') return 'Hydrogen';
+  return 'Neon';
+}
 
 function stageToStepIndex(stage: string | undefined): number {
   switch ((stage || '').toLowerCase()) {
@@ -1843,7 +1850,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                   />
                   {activeRun.escalatedToTier2 && (
                     <StatusBadge
-                      label={`Tier 2: ${activeRun.tier2Model || 'gemini-4-carbon'}`}
+                      label={`Tier 2: ${activeRun.tier2Model || 'gemini-4-neon'}`}
                       variant="accent"
                       icon={BrainCircuit}
                     />
@@ -1871,7 +1878,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                 icon={Server}
               />
               <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 tabular-nums">
-                Carbon Escalations (24h): {carbonUsed24h} / {dailyCarbonCap === 0 ? '∞' : dailyCarbonCap}
+                Deep Escalations (24h): {carbonUsed24h} / {dailyCarbonCap === 0 ? '∞' : dailyCarbonCap}
               </span>
             </div>
           </div>
@@ -1909,10 +1916,10 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
               }
               disabled={isRunningAudit}
               className="btn-accent text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
-              title="Run full 72h forensic fetch and escalate directly to Gemini 4 Carbon (bypasses daily auto cap)"
+              title={`Run full 72h forensic fetch and escalate directly to Gemini 4 ${tier2ModelShortLabel(settings?.preferences.tier2Model)} (bypasses daily auto cap)`}
             >
               <BrainCircuit className="w-3.5 h-3.5" />
-              <span>Deep Investigate (Carbon)</span>
+              <span>Deep Investigate ({tier2ModelShortLabel(settings?.preferences.tier2Model)})</span>
             </button>
 
             <button
@@ -1975,7 +1982,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                     )}
                     {activeRun.escalatedToTier2 && (
                       <span className="px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-[var(--color-accent-text)]">
-                        Tier 2: {activeRun.tier2Model || 'gemini-4-carbon'}
+                        Tier 2: {activeRun.tier2Model || 'gemini-4-neon'}
                       </span>
                     )}
                   </div>
@@ -1991,7 +1998,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                     }}
                     options={runs.map((r) => ({
                       value: r.id,
-                      label: `${formatLocalDateTime(r.completedAt || r.startedAt)} • ${r.overallSeverity}${r.escalatedToTier2 ? ' (Carbon)' : ''}`,
+                      label: `${formatLocalDateTime(r.completedAt || r.startedAt)} • ${r.overallSeverity}${r.escalatedToTier2 ? ` (${tier2ModelShortLabel(r.tier2Model)})` : ''}`,
                       description: `${r.triggerSource} (${r.windowHours}h) • ${r.status} — ${r.intrusionVerdict}`,
                     }))}
                   />
@@ -2077,7 +2084,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                 className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isRunningAudit ? 'animate-spin' : ''}`} />
-                <span>Retry Carbon</span>
+                <span>Retry {tier2ModelShortLabel(settings?.preferences.tier2Model)}</span>
               </button>
             )}
           </div>
@@ -3030,7 +3037,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                   <span className="font-mono text-[var(--color-brand-text)]">→</span>
                 </div>
                 <p className="text-[11px] text-slate-600 dark:text-slate-400">
-                  Gemini 4 Hydrogen/Carbon caps, connector verification, and autonomous audit cadence.
+                  Gemini 4 Hydrogen/Neon caps, connector verification, and autonomous audit cadence.
                 </p>
               </button>
             </div>

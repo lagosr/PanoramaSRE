@@ -1490,13 +1490,40 @@ mod tests {
         // Cap exhausted blocks non-CRITICAL HIGH auto-escalation
         let (esc3, reasons3) = should_escalate_to_tier2(false, true, "HIGH", 6, 6, false);
         assert!(!esc3);
-        assert!(reasons3.iter().any(|r| r.contains("daily Carbon cap reached")));
+        assert!(reasons3.iter().any(|r| r.contains("daily Tier 2 escalation cap reached")));
 
         // CRITICAL or manual force_carbon bypasses daily cap
         let (esc4, _) = should_escalate_to_tier2(true, true, "CRITICAL", 6, 6, false);
         assert!(esc4);
         let (esc5, _) = should_escalate_to_tier2(false, false, "LOW", 6, 6, true);
         assert!(esc5);
+    }
+
+    #[test]
+    fn test_threat_prefs_one_time_migration_to_hydrogen_and_neon() {
+        use panorama_sre_lib::commands::threat_intel_ops::load_threat_preferences;
+
+        let db = SreDatabase::new(":memory:").expect("init in-memory sqlite");
+        // Seed legacy persisted prefs (Argon + Carbon)
+        db.set_setting(
+            "threat_intel_prefs_v1",
+            r#"{"enabled":true,"cadenceHours":6,"tier1Model":"gemini-4-argon","tier2Model":"gemini-4-carbon","dailyCarbonCap":6,"pushoverThreshold":"HIGH","unifiBaseUrl":"https://ui.panoramadr.com"}"#,
+        )
+        .expect("seed legacy prefs");
+
+        let migrated = load_threat_preferences(&db);
+        assert_eq!(migrated.tier1_model, "gemini-4-hydrogen");
+        assert_eq!(migrated.tier2_model, "gemini-4-neon");
+
+        // Subsequent explicit override to Carbon must NOT be overwritten
+        db.set_setting(
+            "threat_intel_prefs_v1",
+            r#"{"enabled":true,"cadenceHours":6,"tier1Model":"gemini-4-hydrogen","tier2Model":"gemini-4-carbon","dailyCarbonCap":6,"pushoverThreshold":"HIGH","unifiBaseUrl":"https://ui.panoramadr.com"}"#,
+        )
+        .expect("save explicit override");
+        let preserved = load_threat_preferences(&db);
+        assert_eq!(preserved.tier1_model, "gemini-4-hydrogen");
+        assert_eq!(preserved.tier2_model, "gemini-4-carbon");
     }
 
     #[test]

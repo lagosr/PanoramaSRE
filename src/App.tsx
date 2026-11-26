@@ -3238,8 +3238,10 @@ export const App: React.FC = () => {
       if (isRunningThreatAudit) return;
       const tabId = `threat-audit-${Date.now()}`;
       const startMs = Date.now();
+      const tier2Short =
+        threatSettings?.preferences.tier2Model === 'gemini-4-carbon' ? 'Carbon' : 'Neon';
       const title = forceCarbon
-        ? `360° Deep Investigate (Gemini 4 Carbon • ${windowHours}h)`
+        ? `360° Deep Investigate (Gemini 4 ${tier2Short} • ${windowHours}h)`
         : `360° Threat & Zero Trust Audit (${windowHours}h)`;
       const newTab: TerminalTab = {
         id: tabId,
@@ -3269,7 +3271,7 @@ export const App: React.FC = () => {
       });
       showActionFeedback(
         forceCarbon
-          ? `Running 72h Deep Carbon threat audit (${windowHours}h window)...`
+          ? `Running 72h Deep ${tier2Short} threat audit (${windowHours}h window)...`
           : `Running 360° Threat & Zero Trust audit (${windowHours}h window)...`,
         'pending'
       );
@@ -3311,21 +3313,24 @@ export const App: React.FC = () => {
       refreshThreatIntelState,
       saveTabToDb,
       showActionFeedback,
+      threatSettings?.preferences.tier2Model,
     ]
   );
 
   const handleEscalateThreatRunToCarbon = useCallback(
     async (runId: string) => {
       if (isRunningThreatAudit) return;
-      const tabId = `threat-carbon-${Date.now()}`;
+      const tabId = `threat-deep-${Date.now()}`;
       const startMs = Date.now();
-      const title = '360° Deep Investigate (Gemini 4 Carbon)';
+      const tier2Short =
+        threatSettings?.preferences.tier2Model === 'gemini-4-carbon' ? 'Carbon' : 'Neon';
+      const title = `360° Deep Investigate (Gemini 4 ${tier2Short})`;
       const newTab: TerminalTab = {
         id: tabId,
         title,
         lines: [
           `[PanoramaSRE] Starting ${title} for run ${runId}...`,
-          `[${new Date().toLocaleTimeString()}] [INFO] [INIT] Fetching 72h forensic timeline & invoking Gemini 4 Carbon...`,
+          `[${new Date().toLocaleTimeString()}] [INFO] [INIT] Fetching 72h forensic timeline & invoking Gemini 4 ${tier2Short}...`,
         ],
         isRunning: true,
         createdAt: new Date().toISOString(),
@@ -3341,12 +3346,12 @@ export const App: React.FC = () => {
       setThreatAuditProgress({
         runId: tabId,
         stage: 'init',
-        label: 'Deep Carbon Investigation',
-        message: 'Preparing 72h forensic fetch & Gemini 4 Carbon deep escalation...',
+        label: `Deep ${tier2Short} Investigation`,
+        message: `Preparing 72h forensic fetch & Gemini 4 ${tier2Short} deep escalation...`,
         level: 'INFO',
         startedAtMs: startMs,
       });
-      showActionFeedback('Escalating to 72h Deep Gemini 4 Carbon investigation...', 'pending');
+      showActionFeedback(`Escalating to 72h Deep Gemini 4 ${tier2Short} investigation...`, 'pending');
       try {
         const detail = await invoke<ThreatRunDetailDto>('escalate_threat_run_to_carbon', {
           runId,
@@ -3359,15 +3364,15 @@ export const App: React.FC = () => {
         setSelectedThreatDetail(detail);
         await refreshThreatIntelState(detail.run.id);
         showActionFeedback(
-          `Carbon Deep Investigation complete: ${detail.run.overallSeverity} (${detail.run.intrusionVerdict})`,
+          `${tier2Short} Deep Investigation complete: ${detail.run.overallSeverity} (${detail.run.intrusionVerdict})`,
           detail.run.overallSeverity === 'HIGH' || detail.run.overallSeverity === 'CRITICAL'
             ? 'error'
             : 'success',
           6000
         );
       } catch (err) {
-        failTerminalJob(tabId, `Carbon escalation failed: ${String(err)}`);
-        showActionFeedback(`Carbon escalation failed: ${String(err)}`, 'error', 7000);
+        failTerminalJob(tabId, `${tier2Short} escalation failed: ${String(err)}`);
+        showActionFeedback(`${tier2Short} escalation failed: ${String(err)}`, 'error', 7000);
       } finally {
         if (activeThreatAuditTabIdRef.current === tabId) {
           activeThreatAuditTabIdRef.current = null;
@@ -3384,6 +3389,7 @@ export const App: React.FC = () => {
       refreshThreatIntelState,
       saveTabToDb,
       showActionFeedback,
+      threatSettings?.preferences.tier2Model,
     ]
   );
 

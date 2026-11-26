@@ -238,6 +238,7 @@ export function computeActionableSecuritySummary(input: {
     (latestRun?.status || '').trim().toUpperCase() === 'DEGRADED' &&
     collectorOutages.length === 0 &&
     (errLow.includes('carbon') ||
+      errLow.includes('neon') ||
       errLow.includes('gemini') ||
       errLow.includes('stage 1') ||
       errLow.includes('stage 2'));
