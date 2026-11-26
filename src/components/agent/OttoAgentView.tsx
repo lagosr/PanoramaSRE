@@ -156,6 +156,7 @@ export const OttoAgentView: React.FC<OttoAgentViewProps> = ({
   const [probeFeedback, setProbeFeedback] = useState<{ ok: boolean; text: string } | null>(null);
   const [isProbing, setIsProbing] = useState(false);
   const [isEvaluatingSteady, setIsEvaluatingSteady] = useState(false);
+  const [isStagingPrune, setIsStagingPrune] = useState(false);
   const [elapsedSecs, setElapsedSecs] = useState<number>(0);
   const [approvalDomainFilter, setApprovalDomainFilter] = useState<string>('ALL');
   const [approvalStatusFilter, setApprovalStatusFilter] = useState<'active' | 'shadow' | 'history'>('active');
@@ -247,6 +248,25 @@ export const OttoAgentView: React.FC<OttoAgentViewProps> = ({
       setProbeFeedback({ ok: false, text: String(err) });
     } finally {
       setIsEvaluatingSteady(false);
+    }
+  };
+
+  const handleStageBuildKitPrune = async () => {
+    if (!onQueueBuildKitPruneProposal || isStagingPrune) return;
+    setIsStagingPrune(true);
+    setProbeFeedback(null);
+    try {
+      await onQueueBuildKitPruneProposal();
+      setApprovalStatusFilter('active');
+      setApprovalDomainFilter('ALL');
+      setProbeFeedback({
+        ok: true,
+        text: 'Staged Local BuildKit Cache Prune (>72h) into Pending L3 Approvals.',
+      });
+    } catch (err) {
+      setProbeFeedback({ ok: false, text: `Could not stage proposal: ${String(err)}` });
+    } finally {
+      setIsStagingPrune(false);
     }
   };
 
@@ -765,12 +785,13 @@ export const OttoAgentView: React.FC<OttoAgentViewProps> = ({
               {onQueueBuildKitPruneProposal && (
                 <button
                   type="button"
-                  onClick={() => void onQueueBuildKitPruneProposal()}
-                  className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                  disabled={isStagingPrune}
+                  onClick={() => void handleStageBuildKitPrune()}
+                  className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 disabled:opacity-50"
                   title="Stage a safe, non-destructive local BuildKit cache prune (>72h layers) into the L3 Approval Queue"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
-                  <span>Stage Local BuildKit Prune (L3)</span>
+                  <span>{isStagingPrune ? 'Staging...' : 'Stage Local BuildKit Prune (L3)'}</span>
                 </button>
               )}
             </div>

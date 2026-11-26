@@ -1693,21 +1693,27 @@ export const App: React.FC = () => {
   }, [refreshOttoState, showActionFeedback]);
 
   const handleQueueBuildKitPruneProposal = useCallback(async () => {
-    await invoke<OttoProposalRow>('queue_otto_manual_proposal', {
-      input: {
-        actionId: 'prune_buildkit_cache',
-        assetSlug: 'buildkit',
-        title: 'Prune Stale Local BuildKit Cache (>72h)',
-        rcaSummary:
-          'Runs compiled `docker buildx prune --all --filter until=72h -f` locally on the workstation (zero SSH/WSH production mutation).',
-        paramsJson: JSON.stringify({ filter: 'until=72h', scope: 'local-workstation' }),
-        severity: 'LOW',
-        domain: 'HEAL',
-        hasDbMigration: false,
-      },
-    });
-    showActionFeedback('Staged Local BuildKit Prune in Otto Approval Queue.', 'success', 4000);
-    await refreshOttoState();
+    try {
+      await invoke<OttoProposalRow>('queue_otto_manual_proposal', {
+        input: {
+          actionId: 'prune_buildkit_cache',
+          assetSlug: 'buildkit',
+          title: 'Prune Stale Local BuildKit Cache (>72h)',
+          rcaSummary:
+            'Runs compiled docker buildx prune --all --filter until=72h -f locally on the workstation (zero SSH/WSH production mutation).',
+          paramsJson: JSON.stringify({ filter: 'until=72h', scope: 'local-workstation' }),
+          severity: 'LOW',
+          domain: 'HEAL',
+          hasDbMigration: false,
+        },
+      });
+      showActionFeedback('Staged Local BuildKit Prune in Otto Approval Queue.', 'success', 4000);
+      await refreshOttoState();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showActionFeedback(`Could not stage BuildKit prune: ${msg}`, 'error', 6000);
+      throw err;
+    }
   }, [refreshOttoState, showActionFeedback]);
 
   // Background 15-minute D1 SMS Opt-In sync with new-record desktop notification

@@ -3893,5 +3893,74 @@ mod tests {
         assert!(validate_execution_time_guards(false, &l2_verdict, false, 2).is_ok());
         assert!(validate_execution_time_guards(false, &l2_verdict, true, 0).is_err());
         assert!(validate_execution_time_guards(false, &l2_verdict, false, 3).is_err());
+
+        // 11. Policy scan payload allows Markdown inline-code backticks in prose but still blocks backticks in params & dangerous commands in prose
+        use panorama_sre_lib::commands::otto_ops::build_policy_scan_payload;
+        use panorama_sre_lib::otto_policy::{evaluate_policy_decision, PolicyEvalRequest};
+        let safe_prose = build_policy_scan_payload(
+            "Prune Stale Local BuildKit Cache (>72h)",
+            "Runs compiled `docker buildx prune --all --filter until=72h -f` locally.",
+            "{\"filter\":\"until=72h\"}",
+        );
+        let d_safe = evaluate_policy_decision(&PolicyEvalRequest {
+            action_id: "prune_buildkit_cache".into(),
+            asset_slug: "buildkit".into(),
+            asset_tier: AssetTier::Tier1ChildApp,
+            configured_mode: AutonomyMode::L3Approval,
+            kill_switch_active: false,
+            circuit_breaker_tripped: false,
+            has_db_migration: false,
+            classification: Some("RELIABILITY".into()),
+            raw_payload_text: safe_prose,
+            target_ips: vec![],
+            target_paths: vec![],
+            protected_ips: vec![],
+            proposed_semver_bump: None,
+        });
+        assert_eq!(d_safe.verdict, PolicyVerdict::RequireL3Approval);
+
+        let injected_params = build_policy_scan_payload(
+            "Prune Cache",
+            "Safe summary",
+            "{\"filter\":\"`whoami`\"}",
+        );
+        let d_params = evaluate_policy_decision(&PolicyEvalRequest {
+            action_id: "prune_buildkit_cache".into(),
+            asset_slug: "buildkit".into(),
+            asset_tier: AssetTier::Tier1ChildApp,
+            configured_mode: AutonomyMode::L3Approval,
+            kill_switch_active: false,
+            circuit_breaker_tripped: false,
+            has_db_migration: false,
+            classification: Some("RELIABILITY".into()),
+            raw_payload_text: injected_params,
+            target_ips: vec![],
+            target_paths: vec![],
+            protected_ips: vec![],
+            proposed_semver_bump: None,
+        });
+        assert_eq!(d_params.verdict, PolicyVerdict::DenyL4HardBlocked);
+
+        let dangerous_prose = build_policy_scan_payload(
+            "Clean host",
+            "Runs `rm -rf /` on host",
+            "{}",
+        );
+        let d_danger = evaluate_policy_decision(&PolicyEvalRequest {
+            action_id: "prune_buildkit_cache".into(),
+            asset_slug: "buildkit".into(),
+            asset_tier: AssetTier::Tier1ChildApp,
+            configured_mode: AutonomyMode::L3Approval,
+            kill_switch_active: false,
+            circuit_breaker_tripped: false,
+            has_db_migration: false,
+            classification: Some("RELIABILITY".into()),
+            raw_payload_text: dangerous_prose,
+            target_ips: vec![],
+            target_paths: vec![],
+            protected_ips: vec![],
+            proposed_semver_bump: None,
+        });
+        assert_eq!(d_danger.verdict, PolicyVerdict::DenyL4HardBlocked);
     }
 }

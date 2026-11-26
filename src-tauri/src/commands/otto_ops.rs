@@ -1565,11 +1565,10 @@ pub async fn send_otto_chat_message(
                 circuit_breaker_tripped: agent_state_snapshot.circuit_breaker_state == "TRIPPED",
                 has_db_migration: draft.has_db_migration,
                 classification: Some(draft.classification.clone()),
-                raw_payload_text: format!(
-                    "{} {} {}",
-                    draft.title,
-                    draft.rca_summary,
-                    draft.params
+                raw_payload_text: build_policy_scan_payload(
+                    &draft.title,
+                    &draft.rca_summary,
+                    &draft.params.to_string(),
                 ),
                 target_ips: draft.target_ips.clone(),
                 target_paths: draft.target_paths.clone(),
@@ -2965,6 +2964,15 @@ pub async fn evaluate_otto_steady_state(
     })
 }
 
+/// Builds the Policy Kernel L4 scan payload by replacing harmless Markdown inline-code
+/// backticks ONLY in human/LLM descriptive prose (`title` / `rca_summary`), while keeping
+/// executable `params_str` completely unstripped so backtick command substitution in params
+/// still hard-blocks under L4-01.
+pub fn build_policy_scan_payload(title: &str, rca_summary: &str, params_str: &str) -> String {
+    let prose = format!("{} {}", title, rca_summary).replace('`', "'");
+    format!("{} {}", prose, params_str)
+}
+
 #[tauri::command]
 pub fn queue_otto_manual_proposal(
     app: AppHandle,
@@ -2989,7 +2997,7 @@ pub fn queue_otto_manual_proposal(
         circuit_breaker_tripped: false,
         has_db_migration: has_db_mig,
         classification: Some("RELIABILITY".to_string()),
-        raw_payload_text: format!("{} {} {}", input.title, input.rca_summary, params_str),
+        raw_payload_text: build_policy_scan_payload(&input.title, &input.rca_summary, &params_str),
         target_ips: vec![],
         target_paths: vec![],
         protected_ips: vec![],
