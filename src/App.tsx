@@ -16,6 +16,7 @@ import {
   SystemEventItem,
 } from './components/layout/SreEventsConsolePanel';
 import { CommandCenterView } from './components/hud/CommandCenterView';
+import { OttoAgentView, type OttoSubView } from './components/agent/OttoAgentView';
 import { LocalDevView } from './components/local-dev/LocalDevView';
 import { SettingsView, type SettingsTab } from './components/settings/SettingsView';
 import { TopologyStacksView, type TopologyIngressTab } from './components/topology/TopologyStacksView';
@@ -81,6 +82,13 @@ import {
   CfWafRuleDto,
   CloudflareWafSnapshotDto,
   QuarantinedAccessEmailRow,
+  OttoContextSeed,
+  OttoL4Invariant,
+  OttoLifecycleSnapshot,
+  OttoPolicyRow,
+  OttoProposalRow,
+  OttoStatusDto,
+  OttoTraceRunRow,
 } from './lib/types';
 import { computeActionableSecuritySummary } from './lib/threat-actionability';
 import { inferPageScopeFromJob } from './lib/stream-utils';
@@ -271,6 +279,24 @@ export const App: React.FC = () => {
   const [activeThreatActors, setActiveThreatActors] = useState<ThreatActorRow[]>([]);
   const [threatWafRules, setThreatWafRules] = useState<CfWafRuleDto[]>([]);
   const [quarantinedAccessEmails, setQuarantinedAccessEmails] = useState<QuarantinedAccessEmailRow[]>([]);
+  // Otto — Autonomous AI Agent SRE state
+  const [ottoStatus, setOttoStatus] = useState<OttoStatusDto | null>(null);
+  const [ottoPolicies, setOttoPolicies] = useState<OttoPolicyRow[]>([]);
+  const [ottoL4Invariants, setOttoL4Invariants] = useState<OttoL4Invariant[]>([]);
+  const [ottoTraces, setOttoTraces] = useState<OttoTraceRunRow[]>([]);
+  const [ottoProposals, setOttoProposals] = useState<OttoProposalRow[]>([]);
+  const [ottoNav, setOttoNav] = useState<{ tab: OttoSubView; nonce: number }>({
+    tab: 'ask',
+    nonce: 0,
+  });
+  const [ottoPendingSeed, setOttoPendingSeed] = useState<{
+    seed: OttoContextSeed | null;
+    nonce: number;
+  }>({ seed: null, nonce: 0 });
+  const [ottoInspectTrace, setOttoInspectTrace] = useState<{
+    id: string | null;
+    nonce: number;
+  }>({ id: null, nonce: 0 });
   const [isRunningThreatAudit, setIsRunningThreatAudit] = useState<boolean>(false);
   const [threatAuditProgress, setThreatAuditProgress] = useState<{
     runId: string;
@@ -548,7 +574,7 @@ export const App: React.FC = () => {
     (view: NavItem, ctx?: NavigateContext) => {
       const labels: Record<NavItem, string> = {
         hud: 'Command HUD',
-        agent: 'AI Agent SRE',
+        agent: 'Otto AI SRE',
         releases: 'Releases & Drift',
         telemetry: 'Build Telemetry',
         smoke: 'Smoke Tests',
@@ -602,6 +628,19 @@ export const App: React.FC = () => {
               ? ctx.tab
               : prev.tab,
           search: ctx?.highlightId ?? '',
+          nonce: prev.nonce + 1,
+        }));
+      }
+      if (
+        ctx?.tab !== undefined &&
+        view === 'agent' &&
+        (ctx.tab === 'ask' ||
+          ctx.tab === 'traces' ||
+          ctx.tab === 'approvals' ||
+          ctx.tab === 'policies')
+      ) {
+        setOttoNav((prev) => ({
+          tab: ctx.tab as OttoSubView,
           nonce: prev.nonce + 1,
         }));
       }
@@ -1413,11 +1452,115 @@ export const App: React.FC = () => {
     }).then((unsub) => {
       unlistenQuarantine = unsub;
     });
+    let unlistenOtto: (() => void) | undefined;
+    listen<OttoLifecycleSnapshot>('sre://agent-lifecycle', (event) => {
+      if (event.payload) {
+        setOttoStatus((prev) =>
+          prev
+            ? { ...prev, lifecycle: event.payload }
+            : prev
+        );
+      }
+    }).then((unsub) => {
+      unlistenOtto = unsub;
+    });
     return () => {
       if (unlistenThreat) unlistenThreat();
       if (unlistenQuarantine) unlistenQuarantine();
+      if (unlistenOtto) unlistenOtto();
     };
   }, [refreshThreatIntelState]);
+
+  const refreshOttoState = useCallback(async () => {
+    try {
+      const [statusDto, policiesList, invariantsList, tracesList, proposalsList] =
+        await Promise.all([
+          invoke<OttoStatusDto>('get_otto_status'),
+          invoke<OttoPolicyRow[]>('get_otto_policies'),
+          invoke<OttoL4Invariant[]>('get_otto_l4_invariants'),
+          invoke<OttoTraceRunRow[]>('get_otto_trace_runs', { limit: 60 }),
+          invoke<OttoProposalRow[]>('get_otto_proposals', { limit: 80 }),
+        ]);
+      setOttoStatus(statusDto);
+      setOttoPolicies(Array.isArray(policiesList) ? policiesList : []);
+      setOttoL4Invariants(Array.isArray(invariantsList) ? invariantsList : []);
+      setOttoTraces(Array.isArray(tracesList) ? tracesList : []);
+      setOttoProposals(Array.isArray(proposalsList) ? proposalsList : []);
+    } catch (err) {
+      console.warn('[PanoramaSRE] Failed to hydrate Otto state:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshOttoState();
+  }, [refreshOttoState]);
+
+  const openOttoWithContext = useCallback(
+    (seed: OttoContextSeed) => {
+      setOttoPendingSeed((prev) => ({ seed, nonce: prev.nonce + 1 }));
+      navigateTo('agent', { tab: 'ask', returnFromCurrent: true });
+    },
+    [navigateTo]
+  );
+
+  const handleToggleOttoKillSwitch = useCallback(
+    async (active: boolean) => {
+      try {
+        const next = await invoke<OttoStatusDto>('set_otto_kill_switch', {
+          active,
+          reason: active
+            ? 'Operator engaged Global Emergency Kill-Switch from PanoramaSRE UI'
+            : 'Operator released Global Emergency Kill-Switch from PanoramaSRE UI',
+        });
+        setOttoStatus(next);
+      } catch (err) {
+        console.warn('[PanoramaSRE] Failed to toggle Otto kill-switch:', err);
+      }
+    },
+    []
+  );
+
+  const handleAbortOttoStep = useCallback(async () => {
+    try {
+      const snap = await invoke<OttoLifecycleSnapshot>('abort_otto_active_step');
+      setOttoStatus((prev) => (prev ? { ...prev, lifecycle: snap } : prev));
+      await refreshOttoState();
+    } catch (err) {
+      console.warn('[PanoramaSRE] Failed to abort Otto active step:', err);
+    }
+  }, [refreshOttoState]);
+
+  const handleResetOttoCircuitBreaker = useCallback(async () => {
+    try {
+      const next = await invoke<OttoStatusDto>('reset_otto_circuit_breaker');
+      setOttoStatus(next);
+    } catch (err) {
+      console.warn('[PanoramaSRE] Failed to reset Otto circuit breaker:', err);
+    }
+  }, []);
+
+  const handleUpdateOttoPolicyMode = useCallback(
+    async (actionId: string, mode: string) => {
+      const updated = await invoke<OttoPolicyRow>('update_otto_policy_mode', {
+        actionId,
+        mode,
+      });
+      setOttoPolicies((prev) =>
+        prev.map((p) => (p.actionId === updated.actionId ? updated : p))
+      );
+    },
+    []
+  );
+
+  const handleDecideOttoProposal = useCallback(
+    async (proposalId: string, decision: string) => {
+      await invoke<OttoProposalRow>('decide_otto_proposal', {
+        input: { proposalId, decision, note: null },
+      });
+      await refreshOttoState();
+    },
+    [refreshOttoState]
+  );
 
   // Background 15-minute D1 SMS Opt-In sync with new-record desktop notification
   useEffect(() => {
@@ -3982,7 +4125,7 @@ export const App: React.FC = () => {
 
   const navLabelMap: Record<NavItem, string> = {
     hud: 'Command HUD',
-    agent: 'AI Agent SRE',
+    agent: 'Otto AI SRE',
     releases: 'Releases & Drift',
     telemetry: 'Build Telemetry',
     smoke: 'Smoke Tests',
@@ -4149,6 +4292,7 @@ export const App: React.FC = () => {
     ...(
       [
         ['hud', 'Command HUD', 'Executive fleet overview health telemetry'],
+        ['agent', 'Otto AI SRE', 'Otto AI SRE Ask agent traces policy matrix kill switch'],
         ['releases', 'Releases & Drift', 'Deploy rollback buildx edge cloudflare'],
         ['telemetry', 'Build Telemetry', 'Docker BuildKit cache budget metrics'],
         ['smoke', 'Smoke Tests', 'Production verification assertions suite'],
@@ -4266,6 +4410,28 @@ export const App: React.FC = () => {
         }),
     },
     {
+      id: 'act-otto-kill-switch',
+      kind: 'Safety',
+      label: ottoStatus?.lifecycle.killSwitchActive
+        ? 'Resume Otto AI SRE (Release Kill-Switch)'
+        : 'Pause Otto AI SRE (Global Emergency Kill-Switch)',
+      hint: 'Otto AI SRE',
+      keywords: 'otto agent kill switch pause emergency stop',
+      category: 'action',
+      onExecute: () =>
+        void handleToggleOttoKillSwitch(!ottoStatus?.lifecycle.killSwitchActive),
+    },
+    {
+      id: 'act-otto-policies',
+      kind: 'Governance',
+      label: 'Open Otto Policy Matrix & L4 Guardrails',
+      hint: 'Otto AI SRE > Policy Matrix',
+      keywords: 'otto policy l0 l1 l2 l3 l4 guardrails circuit breaker',
+      category: 'view',
+      onExecute: () =>
+        navigateTo('agent', { tab: 'policies', returnFromCurrent: true }),
+    },
+    {
       id: 'act-open-db-storage',
       kind: 'Storage',
       label: 'Local SQLite Storage & VACUUM (Settings)',
@@ -4320,7 +4486,17 @@ export const App: React.FC = () => {
             setSidebarAutoCollapsed(false);
             setSidebarCollapsed((c) => !c);
           }}
-          showAgentNav={false}
+          showAgentNav={true}
+          ottoPhase={ottoStatus?.lifecycle.state ?? 'IDLE'}
+          ottoBadgeCount={ottoStatus?.lifecycle.pendingApprovalsCount ?? 0}
+          ottoBadgeSeverity={
+            ottoStatus?.lifecycle.killSwitchActive ||
+            ottoStatus?.lifecycle.circuitBreakerState === 'TRIPPED'
+              ? 'error'
+              : (ottoStatus?.lifecycle.pendingApprovalsCount ?? 0) > 0
+              ? 'warning'
+              : 'info'
+          }
           isInitialSyncComplete={hasCompletedInitialSync}
         />
 
@@ -4349,6 +4525,16 @@ export const App: React.FC = () => {
             totalAttentionSeverity={totalAttentionSeverity}
             onOpenCommandPalette={() => setIsPaletteOpen(true)}
             onOpenAlertsDrawer={() => setIsAlertsDrawerOpen(true)}
+            ottoLifecycle={ottoStatus?.lifecycle ?? null}
+            onOpenOtto={(sub) =>
+              navigateTo('agent', { tab: sub || 'ask', returnFromCurrent: true })
+            }
+            onInspectOttoTrace={(traceId) => {
+              setOttoInspectTrace((prev) => ({ id: traceId, nonce: prev.nonce + 1 }));
+              navigateTo('agent', { tab: 'traces', returnFromCurrent: true });
+            }}
+            onToggleOttoKillSwitch={(active) => void handleToggleOttoKillSwitch(active)}
+            onAbortOttoStep={() => void handleAbortOttoStep()}
           />
 
           <div
@@ -4429,6 +4615,38 @@ export const App: React.FC = () => {
               onOpenInBottomConsole={handleOpenInBottomConsole}
               onAbortJob={handleAbortJob}
               onClearTab={handleClearTab}
+              ottoLifecycle={ottoStatus?.lifecycle ?? null}
+              onOpenOtto={() => navigateTo('agent', { tab: 'ask', returnFromCurrent: true })}
+              onAskOtto={openOttoWithContext}
+            />
+          )}
+
+          {activeTab === 'agent' && (
+            <OttoAgentView
+              apps={apps}
+              status={ottoStatus}
+              policies={ottoPolicies}
+              l4Invariants={ottoL4Invariants}
+              traces={ottoTraces}
+              proposals={ottoProposals}
+              initialSubView={ottoNav.tab}
+              initialSubViewNonce={ottoNav.nonce}
+              pendingContextSeed={ottoPendingSeed.seed}
+              pendingContextNonce={ottoPendingSeed.nonce}
+              onConsumeContextSeed={() =>
+                setOttoPendingSeed((prev) => ({ seed: null, nonce: prev.nonce }))
+              }
+              initialInspectTraceId={ottoInspectTrace.id}
+              initialInspectTraceNonce={ottoInspectTrace.nonce}
+              onRefreshOtto={refreshOttoState}
+              onToggleKillSwitch={handleToggleOttoKillSwitch}
+              onAbortStep={handleAbortOttoStep}
+              onResetCircuitBreaker={handleResetOttoCircuitBreaker}
+              onUpdatePolicyMode={handleUpdateOttoPolicyMode}
+              onDecideProposal={handleDecideOttoProposal}
+              onNavigateToSettings={() =>
+                navigateTo('settings', { tab: 'security', returnFromCurrent: true })
+              }
             />
           )}
 
@@ -4553,6 +4771,7 @@ export const App: React.FC = () => {
                 navigateTo('hardening', { returnFromCurrent: true })
               }
               isRebooting={isHostRebooting}
+              suricataStatus={ottoStatus?.suricata ?? null}
               onOpenInBottomConsole={handleOpenInBottomConsole}
               onAbortJob={handleAbortJob}
               onClearTab={handleClearTab}
@@ -4793,6 +5012,7 @@ export const App: React.FC = () => {
               onQuarantineChanged={() => {
                 void refreshThreatIntelState(selectedThreatDetail?.run?.id);
               }}
+              onAskOtto={openOttoWithContext}
             />
           )}
 
@@ -4837,6 +5057,11 @@ export const App: React.FC = () => {
                 setSidebarAutoCollapsed(false);
                 setSidebarCollapsed(val);
               }}
+              suricataStatus={ottoStatus?.suricata ?? null}
+              onRefreshSuricata={() => void refreshOttoState()}
+              onNavigateToAgentPolicies={() =>
+                navigateTo('agent', { tab: 'policies', returnFromCurrent: true })
+              }
             />
           )}
 
@@ -4863,6 +5088,7 @@ export const App: React.FC = () => {
           })()}
 
           {activeTab !== 'hud' &&
+            activeTab !== 'agent' &&
             activeTab !== 'local-dev' &&
             activeTab !== 'releases' &&
             activeTab !== 'telemetry' &&

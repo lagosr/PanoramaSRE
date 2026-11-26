@@ -11,6 +11,8 @@ import {
   NavSectionId,
   NetworkPosture,
   OptInComplianceSnapshot,
+  OttoContextSeed,
+  OttoLifecycleSnapshot,
   QuarantinedAccessEmailRow,
   SecurityPostureInvariant,
   SmokeTestRun,
@@ -86,6 +88,9 @@ interface CommandCenterViewProps {
   onOpenInBottomConsole?: (tabId?: string) => void;
   onAbortJob?: (id: string) => void;
   onClearTab?: (id: string) => void;
+  ottoLifecycle?: OttoLifecycleSnapshot | null;
+  onOpenOtto?: () => void;
+  onAskOtto?: (seed: OttoContextSeed) => void;
 }
 
 const HUD_VIEW_STORAGE_KEY = 'panoramasre_hud_fleet_view';
@@ -131,6 +136,9 @@ export function CommandCenterView({
   onNavigateToPki,
   isDeployingAll = false,
   onTriggerDeployAll,
+  ottoLifecycle = null,
+  onOpenOtto,
+  onAskOtto,
 }: CommandCenterViewProps) {
   const [selectedApp, setSelectedApp] = useState<DiscoveredApp | null>(null);
   const [showBatchDeployModal, setShowBatchDeployModal] = useState<boolean>(false);
@@ -358,12 +366,26 @@ export function CommandCenterView({
       <PriorityAttentionQueue
         incidents={incidentQueue}
         isInitialSyncComplete={isInitialSyncComplete}
+        pendingAgentApprovalsCount={ottoLifecycle?.pendingApprovalsCount ?? 0}
         onAction={handleIncidentAction}
         onRunPenetrationAudit={onRunPenetrationAudit}
+        onAskOtto={onAskOtto}
       />
 
       {/* Zone 2: Symmetric 6-Domain Executive System Posture Scorecard */}
-      <ExecutiveScorecardStrip cards={scorecardCards} onNavigate={handleScorecardNavigate} />
+      <ExecutiveScorecardStrip
+        cards={scorecardCards}
+        onNavigate={handleScorecardNavigate}
+        agentRibbon={
+          ottoLifecycle && onOpenOtto
+            ? {
+                modeLabel: ottoLifecycle.phaseLabel,
+                detail: ottoLifecycle.summary,
+                onOpenAgent: onOpenOtto,
+              }
+            : null
+        }
+      />
 
       {/* Zone 3: Panorama Suite Fleet Matrix (Cards | Compact Table Toggle + Batch Deploy) */}
       <section aria-label="Panorama Suite Applications" className="space-y-4">

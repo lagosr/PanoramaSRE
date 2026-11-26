@@ -7,6 +7,7 @@ pub mod commands {
     pub mod log_ops;
     pub mod monitor;
     pub mod optin_ops;
+    pub mod otto_ops;
     pub mod runner;
     pub mod smoke_ops;
     pub mod ssl_ops;
@@ -21,6 +22,9 @@ pub mod dev_supervisor;
 pub mod ipc_security;
 pub mod job_manager;
 pub mod notifications;
+pub mod otto_db;
+pub mod otto_policy;
+pub mod otto_runtime;
 pub mod pushover;
 pub mod scheduler;
 pub mod scrubber;
@@ -34,6 +38,7 @@ use commands::local_backups::*;
 use commands::log_ops::*;
 use commands::monitor::*;
 use commands::optin_ops::*;
+use commands::otto_ops::*;
 use commands::runner::*;
 use commands::smoke_ops::*;
 use commands::ssl_ops::*;
@@ -43,6 +48,7 @@ use commands::workspace::*;
 use db::SreDatabase;
 use dev_supervisor::{get_dev_servers_status, start_dev_server, stop_dev_server, DevSupervisor};
 use job_manager::JobManager;
+use otto_runtime::OttoRuntimeController;
 use pushover::{
     dismiss_backup_incident, evaluate_and_notify_sync, get_dismissed_backup_incidents,
     get_pushover_settings, reset_pushover_alert_baseline, save_pushover_settings,
@@ -85,6 +91,7 @@ pub fn run() {
     let dev_supervisor_clone = Arc::clone(&dev_supervisor);
     let scheduler = Arc::new(TelemetryScheduler::new());
     let scheduler_clone = Arc::clone(&scheduler);
+    let otto_runtime = Arc::new(OttoRuntimeController::new());
 
     // Initialize SQLite DB in resolved persistent path
     let db_path = resolve_sre_db_path();
@@ -101,6 +108,18 @@ pub fn run() {
     {
         if let Ok(guard) = sre_db.lock() {
             let _ = guard.log_action("SYSTEM", "INFO", "PanoramaSRE Control Plane Initialized", None);
+            if let Ok(otto_state) = guard.get_otto_state() {
+                let pending = guard.count_pending_otto_approvals().unwrap_or(0);
+                otto_runtime.sync_from_db_state(
+                    None,
+                    otto_state.kill_switch_active,
+                    &otto_state.circuit_breaker_state,
+                    pending,
+                    otto_state.daily_t1_calls,
+                    otto_state.daily_t2_calls,
+                    otto_state.dropped_noise_24h_count,
+                );
+            }
         }
     }
 
@@ -114,6 +133,7 @@ pub fn run() {
         .manage(job_manager)
         .manage(dev_supervisor)
         .manage(scheduler)
+        .manage(otto_runtime)
         .manage(sre_db)
         .invoke_handler(tauri::generate_handler![
             discover_suite_apps,
@@ -197,7 +217,30 @@ pub fn run() {
             delete_waf_rule_override,
             get_unifi_siem_env_config,
             get_windows_autostart_status,
-            set_windows_autostart
+            set_windows_autostart,
+            get_otto_status,
+            set_otto_kill_switch,
+            abort_otto_active_step,
+            reset_otto_circuit_breaker,
+            get_otto_policies,
+            update_otto_policy_mode,
+            get_otto_l4_invariants,
+            get_otto_trace_runs,
+            get_otto_trace_detail,
+            export_otto_trace_bundle,
+            get_otto_proposals,
+            decide_otto_proposal,
+            get_otto_chat_threads,
+            create_otto_chat_thread,
+            delete_otto_chat_thread,
+            get_otto_chat_messages,
+            send_otto_chat_message,
+            get_otto_saved_prompts,
+            save_otto_prompt,
+            delete_otto_prompt,
+            get_suricata_gatekeeper_status,
+            test_sre_agent_gatekeeper_connection,
+            run_otto_log_delta_probe
         ])
         .setup(move |app| {
             // Setup System Tray

@@ -14,12 +14,12 @@ import {
   FlaskConical,
   Settings as SettingsIcon,
   Waypoints,
-  Bot,
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
 import { APP_VERSION_INFO } from '../../lib/version';
-import { NavSectionId } from '../../lib/types';
+import { NavSectionId, OttoRuntimePhase } from '../../lib/types';
+import { OttoIcon } from '../agent/OttoAvatar';
 
 export type NavItem = NavSectionId;
 
@@ -53,6 +53,9 @@ interface SidebarRailProps {
   isCollapsed?: boolean;
   onToggleCollapse?: () => void;
   showAgentNav?: boolean;
+  ottoBadgeCount?: number;
+  ottoBadgeSeverity?: 'error' | 'warning' | 'success' | 'info' | null;
+  ottoPhase?: OttoRuntimePhase;
   isInitialSyncComplete?: boolean;
 }
 
@@ -100,6 +103,9 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
   isCollapsed = false,
   onToggleCollapse,
   showAgentNav = false,
+  ottoBadgeCount = 0,
+  ottoBadgeSeverity = null,
+  ottoPhase = 'IDLE',
   isInitialSyncComplete = true,
 }) => {
   const effectiveTopologyBadge =
@@ -157,11 +163,17 @@ export const SidebarRail: React.FC<SidebarRailProps> = ({
       severity: effectiveHudSeverity,
     },
   ];
+  const OttoNavIcon: React.FC<{ className?: string }> = ({ className }) => (
+    <OttoIcon className={className || 'w-4 h-4'} state={ottoPhase} />
+  );
+
   if (showAgentNav) {
     missionItems.push({
       id: 'agent',
-      label: 'AI Agent SRE',
-      icon: Bot,
+      label: 'Otto AI SRE',
+      icon: OttoNavIcon,
+      badge: ottoBadgeCount > 0 ? ottoBadgeCount : undefined,
+      severity: ottoBadgeSeverity || 'info',
     });
   }
 

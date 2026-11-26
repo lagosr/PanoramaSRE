@@ -3365,4 +3365,280 @@ mod tests {
             .iter()
             .any(|f| f.rule_id == "ORIGIN_BREACH_THROUGH"));
     }
+
+    // ========================================================================
+    // Otto Autonomous AI SRE — Phase 1 Policy, DB, Suricata & Gemini 4 Tests
+    // ========================================================================
+
+    #[test]
+    fn test_otto_policy_kernel_l4_hard_blocks_and_guards() {
+        use panorama_sre_lib::otto_policy::{
+            evaluate_policy_decision, l4_hard_blocked_invariants, AssetTier, AutonomyMode,
+            PolicyEvalRequest, PolicyVerdict,
+        };
+
+        assert_eq!(l4_hard_blocked_invariants().len(), 6);
+
+        let base = |action_id: &str| PolicyEvalRequest {
+            action_id: action_id.to_string(),
+            asset_slug: "spendy".to_string(),
+            asset_tier: AssetTier::Tier1ChildApp,
+            configured_mode: AutonomyMode::L2Auto,
+            kill_switch_active: false,
+            circuit_breaker_tripped: false,
+            has_db_migration: false,
+            classification: None,
+            raw_payload_text: "{}".to_string(),
+            target_ips: vec![],
+            target_paths: vec![],
+            protected_ips: vec!["198.51.100.10".to_string()],
+            proposed_semver_bump: None,
+        };
+
+        // L4-01..05 hard blocks
+        for (payload, expected_inv) in [
+            ("pwsh -Command Get-Process", "L4-01"),
+            ("cat C:\\Users\\rodrigo\\.ssh\\rsa-key-deployment", "L4-02"),
+            ("read .env.local.keys", "L4-02"),
+            ("git push --force origin main", "L4-03"),
+            ("DROP TABLE users;", "L4-04"),
+            ("iptables -F DOCKER-USER", "L4-05"),
+        ] {
+            let mut req = base("restart_container");
+            req.raw_payload_text = payload.to_string();
+            let res = evaluate_policy_decision(&req);
+            assert_eq!(res.verdict, PolicyVerdict::DenyL4HardBlocked);
+            assert_eq!(res.invariant_id.as_deref(), Some(expected_inv));
+        }
+
+        // Unknown action hard-blocked (L4-01)
+        let unknown = base("exec_arbitrary_bash");
+        assert_eq!(
+            evaluate_policy_decision(&unknown).verdict,
+            PolicyVerdict::DenyL4HardBlocked
+        );
+
+        // SemVer Major/Minor lock (L4-03) vs Patch allowed
+        let mut minor = base("stage_worktree_patch");
+        minor.proposed_semver_bump = Some(("1.10.11".into(), "1.11.0".into()));
+        assert_eq!(
+            evaluate_policy_decision(&minor).verdict,
+            PolicyVerdict::DenyL4HardBlocked
+        );
+        let mut patch = base("stage_worktree_patch");
+        patch.proposed_semver_bump = Some(("1.10.11".into(), "1.10.12".into()));
+        assert_eq!(
+            evaluate_policy_decision(&patch).verdict,
+            PolicyVerdict::AllowL2Auto
+        );
+
+        // L4-06 Protected IP, JWKS route, and detection-defect immunity
+        let mut ip_req = base("apply_cf_temp_challenge");
+        ip_req.target_ips = vec!["192.168.1.50".into()];
+        assert_eq!(
+            evaluate_policy_decision(&ip_req).verdict,
+            PolicyVerdict::DenyL4HardBlocked
+        );
+
+        let mut jwks_req = base("apply_cf_permanent_waf");
+        jwks_req.target_paths = vec!["/auth/api/auth/jwks".into()];
+        assert_eq!(
+            evaluate_policy_decision(&jwks_req).verdict,
+            PolicyVerdict::DenyL4HardBlocked
+        );
+
+        let mut defect_req = base("apply_cf_temp_challenge");
+        defect_req.target_ips = vec!["203.0.113.42".into()];
+        defect_req.classification = Some("DETECTION_DEFECT_SUSPECTED".into());
+        assert_eq!(
+            evaluate_policy_decision(&defect_req).verdict,
+            PolicyVerdict::DenyL4HardBlocked
+        );
+
+        // DB_MIGRATION & Tier-0 rollback guards + Kill-Switch + Circuit Breaker + Deploy Ceiling
+        let mut db_mig = base("rollback_n3_db_safe");
+        db_mig.has_db_migration = true;
+        assert_eq!(
+            evaluate_policy_decision(&db_mig).verdict,
+            PolicyVerdict::RequireL3Approval
+        );
+
+        let mut ks = base("restart_container");
+        ks.kill_switch_active = true;
+        assert_eq!(
+            evaluate_policy_decision(&ks).verdict,
+            PolicyVerdict::DenyKillSwitch
+        );
+
+        let mut cb = base("restart_container");
+        cb.circuit_breaker_tripped = true;
+        assert_eq!(
+            evaluate_policy_decision(&cb).verdict,
+            PolicyVerdict::DenyCircuitBreaker
+        );
+
+        let deploy = base("deploy_verified_patch");
+        assert_eq!(
+            evaluate_policy_decision(&deploy).verdict,
+            PolicyVerdict::RequireL3Approval
+        );
+    }
+
+    #[test]
+    fn test_otto_sqlite_schema_scrubbing_ceilings_and_circuit_breaker() {
+        let db = SreDatabase::new(":memory:").expect("init in-memory sqlite");
+        let policies = db.list_otto_policies().expect("list policies");
+        assert!(policies.len() >= 10);
+
+        // Reject elevating deploy_verified_patch above compile-time L3 ceiling
+        assert!(db
+            .update_otto_policy_mode("deploy_verified_patch", "L2_AUTO")
+            .is_err());
+
+        // Allow promoting restart_container within ceiling
+        let promoted = db
+            .update_otto_policy_mode("restart_container", "L2_AUTO")
+            .expect("promote restart_container");
+        assert_eq!(promoted.mode, "L2_AUTO");
+
+        // Secret scrubbing on traces & chat messages
+        let run_id = db
+            .create_otto_trace_run(
+                "CHAT",
+                "SECURITY",
+                Some("auth"),
+                Some("gemini-4-neon"),
+                Some("high"),
+            )
+            .expect("create trace");
+        db.append_otto_trace_step(
+            &run_id,
+            0,
+            "LLM_THINKING",
+            "Check GEMINI_API_KEY=AIzaSyDummySecretValue12345678901234567",
+            "OK",
+            120,
+            Some("Verified X-Panorama-Service-Key: supersecret999 safely"),
+            Some("{\"token\":\"cfat_1234567890abcdefghijklmno\"}"),
+        )
+        .expect("append step");
+        let detail = db.get_otto_trace_detail(&run_id).unwrap().unwrap();
+        assert!(!detail.steps[0].title.contains("AIzaSy"));
+        assert!(!detail.steps[0]
+            .thinking_summary_md
+            .as_deref()
+            .unwrap()
+            .contains("supersecret999"));
+        assert!(!detail.steps[0]
+            .structured_payload_json
+            .as_deref()
+            .unwrap()
+            .contains("cfat_"));
+
+        // Circuit breaker trips on 2nd consecutive failure & resets
+        assert_eq!(
+            db.record_otto_circuit_failure("f1").unwrap().circuit_breaker_state,
+            "CLOSED"
+        );
+        assert_eq!(
+            db.record_otto_circuit_failure("f2").unwrap().circuit_breaker_state,
+            "TRIPPED"
+        );
+        assert_eq!(
+            db.reset_otto_circuit_breaker().unwrap().circuit_breaker_state,
+            "CLOSED"
+        );
+    }
+
+    #[test]
+    fn test_otto_suricata_budget_and_gemini_deep_thinking_extraction() {
+        use panorama_sre_lib::commands::otto_ops::{
+            build_trace_debug_bundle_markdown, extract_gemini_parts_with_thoughts,
+            resolve_otto_model_and_thinking,
+        };
+        use panorama_sre_lib::otto_runtime::{
+            OttoRuntimeController, OttoRuntimePhase, SuricataSshBudget,
+        };
+        use std::time::{Duration, Instant};
+
+        // Sliding window strictly enforces <= 2 SSH SYNs / 120s
+        let budget = SuricataSshBudget::new(2, 120);
+        let t0 = Instant::now();
+        assert!(budget.try_acquire_at(t0).is_ok());
+        assert!(budget.try_acquire_at(t0 + Duration::from_secs(15)).is_ok());
+        assert!(budget.try_acquire_at(t0 + Duration::from_secs(30)).is_err());
+        assert!(budget.try_acquire_at(t0 + Duration::from_secs(121)).is_ok());
+
+        // Lifecycle FSM & kill-switch override
+        let ctrl = OttoRuntimeController::new();
+        let snap = ctrl.set_phase(
+            None,
+            OttoRuntimePhase::Thinking,
+            "Otto: Thinking (Neon · high)",
+            Some("gemini-4-neon".into()),
+            Some("high".into()),
+            Some("auth".into()),
+            "Evaluating false-positive hypothesis",
+            Some("trace-1".into()),
+            true,
+        );
+        assert_eq!(snap.state, OttoRuntimePhase::Thinking);
+        let paused = ctrl.sync_from_db_state(None, true, "CLOSED", 0, 1, 1, 0);
+        assert_eq!(paused.state, OttoRuntimePhase::Paused);
+
+        // Gemini 4 includeThoughts part separation & Carbon xhigh clamp
+        let envelope = serde_json::json!({
+            "candidates": [{
+                "content": {
+                    "parts": [
+                        { "thought": true, "text": "Checking SessionAuthIndex for roaming IP." },
+                        { "text": "Verdict: CONFIRMED_BENIGN_FALSE_POSITIVE." }
+                    ]
+                }
+            }],
+            "usageMetadata": {
+                "promptTokenCount": 510,
+                "candidatesTokenCount": 42,
+                "thoughtsTokenCount": 180
+            }
+        });
+        let (ans, thoughts, i, o, t) = extract_gemini_parts_with_thoughts(&envelope).unwrap();
+        assert!(ans.contains("CONFIRMED_BENIGN_FALSE_POSITIVE"));
+        assert!(!ans.contains("SessionAuthIndex"));
+        assert!(thoughts.unwrap().contains("SessionAuthIndex"));
+        assert_eq!((i, o, t), (510, 42, 180));
+
+        let (m, lvl, is_t2) = resolve_otto_model_and_thinking(
+            Some("gemini-4-carbon"),
+            Some("xhigh"),
+            "gemini-4-hydrogen",
+            "gemini-4-neon",
+            "deep audit",
+            false,
+        );
+        assert_eq!(m, "gemini-4-carbon");
+        assert_eq!(lvl, "high");
+        assert!(is_t2);
+
+        // Debug bundle scrubbing
+        let db = SreDatabase::new(":memory:").unwrap();
+        let rid = db
+            .create_otto_trace_run("CHAT", "SECURITY", Some("auth"), Some("gemini-4-neon"), Some("high"))
+            .unwrap();
+        db.append_otto_trace_step(
+            &rid,
+            0,
+            "LLM_THINKING",
+            "Deep thinking check",
+            "OK",
+            220,
+            Some("Confirmed zero PHP exposure"),
+            None,
+        )
+        .unwrap();
+        let det = db.get_otto_trace_detail(&rid).unwrap().unwrap();
+        let md = build_trace_debug_bundle_markdown(&det);
+        assert!(md.contains("Deep-Thinking Rundown"));
+        assert!(md.contains("Confirmed zero PHP exposure"));
+    }
 }

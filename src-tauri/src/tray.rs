@@ -1,3 +1,6 @@
+use crate::db::SreDatabase;
+use crate::otto_runtime::OttoRuntimeController;
+use std::sync::{Arc, Mutex};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -7,9 +10,16 @@ use tauri::{
 pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let show_item = MenuItem::with_id(app, "show", "Show PanoramaSRE", true, None::<&str>)?;
     let hide_item = MenuItem::with_id(app, "hide", "Hide to Tray", true, None::<&str>)?;
+    let otto_kill_item = MenuItem::with_id(
+        app,
+        "toggle_otto_kill_switch",
+        "Pause / Resume Otto (Kill-Switch)",
+        true,
+        None::<&str>,
+    )?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit PanoramaSRE Completely", true, None::<&str>)?;
 
-    let menu = Menu::with_items(app, &[&show_item, &hide_item, &quit_item])?;
+    let menu = Menu::with_items(app, &[&show_item, &hide_item, &otto_kill_item, &quit_item])?;
 
     let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/128x128@2x.png"))
         .ok()
@@ -38,6 +48,44 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
             "hide" => {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.hide();
+                }
+            }
+            "toggle_otto_kill_switch" => {
+                if let (Some(db_state), Some(runtime_state)) = (
+                    app.try_state::<Arc<Mutex<SreDatabase>>>(),
+                    app.try_state::<Arc<OttoRuntimeController>>(),
+                ) {
+                    if let Ok(guard) = db_state.lock() {
+                        let currently_active = guard
+                            .get_otto_state()
+                            .map(|s| s.kill_switch_active)
+                            .unwrap_or(false);
+                        let next_active = !currently_active;
+                        if next_active {
+                            runtime_state.request_abort();
+                        } else {
+                            runtime_state.clear_abort();
+                        }
+                        if let Ok(next_state) = guard.set_otto_kill_switch(
+                            next_active,
+                            if next_active {
+                                "System tray Global Emergency Kill-Switch engaged"
+                            } else {
+                                "System tray Global Emergency Kill-Switch released"
+                            },
+                        ) {
+                            let pending = guard.count_pending_otto_approvals().unwrap_or(0);
+                            runtime_state.sync_from_db_state(
+                                Some(app),
+                                next_state.kill_switch_active,
+                                &next_state.circuit_breaker_state,
+                                pending,
+                                next_state.daily_t1_calls,
+                                next_state.daily_t2_calls,
+                                next_state.dropped_noise_24h_count,
+                            );
+                        }
+                    }
                 }
             }
             "quit" => {

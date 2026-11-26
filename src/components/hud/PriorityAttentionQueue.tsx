@@ -13,6 +13,8 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { HudIncidentAction, HudIncidentDomain, HudIncidentItem } from '../../lib/hud-synthesis';
+import type { OttoContextSeed } from '../../lib/types';
+import { OttoIcon } from '../agent/OttoAvatar';
 
 interface PriorityAttentionQueueProps {
   incidents: HudIncidentItem[];
@@ -20,6 +22,7 @@ interface PriorityAttentionQueueProps {
   pendingAgentApprovalsCount?: number;
   onAction: (action: HudIncidentAction) => void;
   onRunPenetrationAudit?: () => void;
+  onAskOtto?: (seed: OttoContextSeed) => void;
 }
 
 const DOMAIN_ICONS: Record<HudIncidentDomain, React.ComponentType<{ className?: string }>> = {
@@ -38,6 +41,7 @@ export const PriorityAttentionQueue: React.FC<PriorityAttentionQueueProps> = ({
   pendingAgentApprovalsCount = 0,
   onAction,
   onRunPenetrationAudit,
+  onAskOtto,
 }) => {
   const [isCollapsed, setIsCollapsed] = useState(false);
 
@@ -203,6 +207,32 @@ export const PriorityAttentionQueue: React.FC<PriorityAttentionQueueProps> = ({
                       className="btn-secondary text-xs py-1.5 px-3 whitespace-nowrap flex-shrink-0"
                     >
                       <span>{item.secondaryAction.label}</span>
+                    </button>
+                  )}
+
+                  {onAskOtto && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onAskOtto({
+                          kind: 'hud_incident',
+                          entityId: item.id,
+                          originView: 'hud',
+                          title: item.title,
+                          severity: item.severity.toUpperCase(),
+                          summary: `${item.domainLabel}: ${item.detail}`,
+                          metadata: { domain: item.domain, meta: item.meta },
+                          starterPrompts: [
+                            `Diagnose "${item.title}" — is this a genuine issue or a false positive / telemetry artifact?`,
+                            `What is the safest reversible step to resolve "${item.title}" without risking production data?`,
+                          ],
+                        })
+                      }
+                      className="btn-tonal text-xs py-1.5 px-2.5 flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                      title="Open Ask Otto with this incident pinned as context"
+                    >
+                      <OttoIcon className="w-3.5 h-3.5" />
+                      <span>Ask Otto</span>
                     </button>
                   )}
                 </div>

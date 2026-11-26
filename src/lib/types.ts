@@ -57,7 +57,7 @@ export interface ServiceAppConfig {
   requiresWshFirewall?: boolean;
 }
 
-export type WorkStreamSource = 'ui' | 'mcp' | 'scheduled' | 'supervisor';
+export type WorkStreamSource = 'ui' | 'mcp' | 'scheduled' | 'supervisor' | 'agent';
 
 export interface TerminalTab {
   id: string;
@@ -1554,5 +1554,242 @@ export interface SreDbStats {
   threatRunCount: number;
   journalMode: string;
 }
+
+// ============================================================================
+// Otto — Autonomous AI Agent SRE (Phase 1+ Contracts)
+// ============================================================================
+
+export type OttoRuntimePhase =
+  | 'IDLE'
+  | 'SENSING'
+  | 'STAGE0_EVAL'
+  | 'THINKING'
+  | 'STAGING'
+  | 'ACTING'
+  | 'VERIFYING'
+  | 'AWAITING_APPROVAL'
+  | 'TRIPPED'
+  | 'PAUSED';
+
+export interface OttoLifecycleSnapshot {
+  state: OttoRuntimePhase;
+  phaseLabel: string;
+  activeModel?: string | null;
+  thinkingLevel?: string | null;
+  currentTarget?: string | null;
+  summary: string;
+  startedAt?: string | null;
+  traceRunId?: string | null;
+  canAbort: boolean;
+  killSwitchActive: boolean;
+  circuitBreakerState: string;
+  pendingApprovalsCount: number;
+  activeSoaksCount: number;
+  dailyT1Calls: number;
+  dailyT2Calls: number;
+  droppedNoise24hCount: number;
+}
+
+export interface OttoAgentStateRow {
+  killSwitchActive: boolean;
+  circuitBreakerState: string;
+  trippedReason?: string | null;
+  trippedAt?: string | null;
+  consecutiveFailures: number;
+  dailyT1Calls: number;
+  dailyT2Calls: number;
+  budgetDateUtc: string;
+  droppedNoise24hCount: number;
+  updatedAt: string;
+}
+
+export interface SuricataGatekeeperStatusDto {
+  usedLast120s: number;
+  maxPer120s: number;
+  windowSecs: number;
+  remaining: number;
+  nextSlotInSecs: number;
+  gatekeeperKeyPath: string;
+  gatekeeperKeyExists: boolean;
+  gatekeeperVerified: boolean;
+  lastProbeAt?: string | null;
+  lastProbeDetail: string;
+}
+
+export interface OttoStatusDto {
+  lifecycle: OttoLifecycleSnapshot;
+  agentState: OttoAgentStateRow;
+  suricata: SuricataGatekeeperStatusDto;
+  geminiConfigured: boolean;
+  defaultTier1Model: string;
+  defaultTier2Model: string;
+  dailyT2Cap: number;
+}
+
+export interface OttoPolicyRow {
+  actionId: string;
+  domain: string;
+  label: string;
+  description: string;
+  assetTier: string;
+  mode: string;
+  maxAllowedMode: string;
+  cooldownSecs: number;
+  shadowRunsCount: number;
+  shadowAgreedCount: number;
+  promotedAt?: string | null;
+  updatedAt: string;
+}
+
+export interface OttoL4Invariant {
+  id: string;
+  category: string;
+  title: string;
+  detail: string;
+}
+
+export interface OttoTraceRunRow {
+  id: string;
+  triggerKind: string;
+  domain: string;
+  assetSlug?: string | null;
+  finalState: string;
+  modelUsed?: string | null;
+  thinkingLevel?: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  thoughtTokens: number;
+  durationMs: number;
+  outcomeSummary: string;
+  errorText?: string | null;
+  startedAt: string;
+  completedAt?: string | null;
+}
+
+export interface OttoTraceStepRow {
+  id: string;
+  traceRunId: string;
+  stepIndex: number;
+  stepType: string;
+  title: string;
+  status: string;
+  durationMs: number;
+  thinkingSummaryMd?: string | null;
+  structuredPayloadJson?: string | null;
+  createdAt: string;
+}
+
+export interface OttoTraceDetailDto {
+  run: OttoTraceRunRow;
+  steps: OttoTraceStepRow[];
+}
+
+export interface OttoTraceDebugBundleDto {
+  traceRunId: string;
+  markdown: string;
+  json: string;
+}
+
+export interface OttoProposalRow {
+  id: string;
+  traceRunId?: string | null;
+  domain: string;
+  classification: string;
+  assetSlug: string;
+  assetTier: string;
+  actionId: string;
+  paramsJson: string;
+  title: string;
+  severity: string;
+  confidence: number;
+  rcaSummary: string;
+  evidenceJson: string;
+  diffPreview?: string | null;
+  rollbackPlanJson?: string | null;
+  blastRadiusFlagsJson: string;
+  status: string;
+  snoozedUntil?: string | null;
+  createdAt: string;
+  decidedAt?: string | null;
+  executedAt?: string | null;
+  verificationResultJson?: string | null;
+}
+
+export interface OttoChatThreadRow {
+  id: string;
+  title: string;
+  contextSeedJson?: string | null;
+  originView?: string | null;
+  originEntityId?: string | null;
+  messageCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OttoToolUsePill {
+  tool: string;
+  summary: string;
+  itemsCount: number;
+  durationMs: number;
+}
+
+export interface OttoChatMessageRow {
+  id: string;
+  threadId: string;
+  role: 'user' | 'assistant' | string;
+  contentMd: string;
+  modelUsed?: string | null;
+  thinkingLevel?: string | null;
+  thinkingSummaryMd?: string | null;
+  toolsUsedJson?: string | null;
+  inlineProposalId?: string | null;
+  traceRunId?: string | null;
+  tokenUsageJson?: string | null;
+  createdAt: string;
+}
+
+export interface OttoSavedPromptRow {
+  id: string;
+  title: string;
+  promptText: string;
+  category: string;
+  createdAt: string;
+}
+
+export interface OttoContextSeed {
+  kind:
+    | 'threat_finding'
+    | 'threat_actor'
+    | 'quarantined_email'
+    | 'hud_incident'
+    | 'wsh_invariant'
+    | 'app_release'
+    | 'general';
+  entityId: string;
+  originView: NavSectionId;
+  title: string;
+  severity?: string;
+  summary: string;
+  metadata?: Record<string, unknown>;
+  starterPrompts: string[];
+}
+
+export interface SendOttoChatMessageResult {
+  userMessage: OttoChatMessageRow;
+  assistantMessage: OttoChatMessageRow;
+  traceRunId: string;
+  inlineProposal?: OttoProposalRow | null;
+  lifecycle: OttoLifecycleSnapshot;
+}
+
+export interface OttoLogDeltaProbeResult {
+  ok: boolean;
+  verb: string;
+  detail: string;
+  lineCount: number;
+  preview: string;
+  suricata: SuricataGatekeeperStatusDto;
+}
+
 
 

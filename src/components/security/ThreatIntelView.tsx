@@ -37,6 +37,7 @@ import {
 import { CustomSelect } from '../ui/CustomSelect';
 import { CopyableAddressText, CopyableValue } from '../ui/CopyableValue';
 import { SnoozeSplitButton } from './SnoozeSplitButton';
+import { OttoIcon } from '../agent/OttoAvatar';
 import type { UnifiZbfPanelTab } from './UnifiVlanZbfPanel';
 import { formatLocalDateTime, formatRelativeTime, parseUtcDate } from '../../lib/formatters';
 import {
@@ -96,6 +97,7 @@ import type {
   GeminiBriefDto,
   InternalNetworkSummary,
   LanClientBaselineRow,
+  OttoContextSeed,
   QuarantinedAccessEmailRow,
   TerminalTab,
   ThreatActorRow,
@@ -209,6 +211,7 @@ interface ThreatIntelViewProps {
   initialNavNonce?: number;
   quarantinedAccessEmails?: QuarantinedAccessEmailRow[];
   onQuarantineChanged?: () => void;
+  onAskOtto?: (seed: OttoContextSeed) => void;
 }
 
 const EMPTY_ZT_SUMMARY: ZeroTrustSummary = {
@@ -280,6 +283,7 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   initialNavNonce = 0,
   quarantinedAccessEmails,
   onQuarantineChanged,
+  onAskOtto,
 }) => {
   const [subView, setSubView] = useState<SubViewTab>(() => initialSubView || 'overview');
   const [focusedItemId, setFocusedItemId] = useState<string | null>(() => initialFocusId || null);
@@ -1537,6 +1541,44 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                 Reopen
               </button>
             )}
+            {onAskOtto && (
+              <button
+                type="button"
+                onClick={() => {
+                  const isInternal = classifyFindingSurface(f.sourceLayer) === 'internal';
+                  onAskOtto({
+                    kind: 'threat_finding',
+                    entityId: f.id,
+                    originView: 'security',
+                    title: `${f.severity} Finding: ${f.title}`,
+                    severity: f.severity,
+                    summary: f.summary,
+                    metadata: {
+                      ruleId: f.ruleId,
+                      sourceLayer: f.sourceLayer,
+                      host: f.host,
+                      actorIp: f.actorIp,
+                      actorAsn: f.actorAsn,
+                      category: f.category,
+                    },
+                    starterPrompts: isInternal
+                      ? [
+                          `Audit inside-perimeter finding "${f.title}" (${f.ruleId}): is this a detection/correlation code defect or false positive, or a genuine anomaly?`,
+                          `Check if actor ${f.actorIp || 'involved'} matches our allowlist or roaming family Access sessions.`,
+                        ]
+                      : [
+                          `Evaluate "${f.title}" (${f.ruleId}) against our actual Next.js/SQLite/CF-Pages stack: is this a MATERIAL_THREAT or NOISE_SAFE_DROP?`,
+                          `If this finding is a material threat, what is the safest policy-compliant defensive step?`,
+                        ],
+                  });
+                }}
+                className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                title="Open Ask Otto with this threat finding pinned as context"
+              >
+                <OttoIcon className="w-3.5 h-3.5" />
+                <span>Ask Otto</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -2201,6 +2243,35 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                           <span>Jump to Details</span>
                           <ArrowRight className="w-3.5 h-3.5" />
                         </button>
+                        {onAskOtto && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onAskOtto({
+                                kind: 'threat_finding',
+                                entityId: f.id,
+                                originView: 'security',
+                                title: `${f.severity} Spotlight: ${f.title}`,
+                                severity: f.severity,
+                                summary: f.summary,
+                                metadata: {
+                                  ruleId: f.ruleId,
+                                  sourceLayer: f.sourceLayer,
+                                  host: f.host,
+                                  actorIp: f.actorIp,
+                                },
+                                starterPrompts: [
+                                  `Audit spotlight finding "${f.title}" (${f.ruleId}): is it a detection defect / false positive, safe-to-drop noise, or a material threat?`,
+                                  `Recommend the safest next step for "${f.title}" under PanoramaSRE policy guardrails.`,
+                                ],
+                              })
+                            }
+                            className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                          >
+                            <OttoIcon className="w-3.5 h-3.5" />
+                            <span>Ask Otto</span>
+                          </button>
+                        )}
                       </div>
                     </div>
 
@@ -2306,6 +2377,37 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                         <span>Jump to Actor</span>
                         <ArrowRight className="w-3.5 h-3.5" />
                       </button>
+                      {onAskOtto && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onAskOtto({
+                              kind: 'threat_actor',
+                              entityId: a.id,
+                              originView: 'security',
+                              title: `Threat Actor ${a.ipAddress || a.id} (${a.highestSeverity})`,
+                              severity: a.highestSeverity,
+                              summary: `${a.totalRequests} requests, ${a.totalOrigin200s} origin 200s (${a.asOrg || a.asn || 'unknown ASN'}, ${a.country || 'unknown country'})`,
+                              metadata: {
+                                ip: a.ipAddress,
+                                asn: a.asn,
+                                asOrg: a.asOrg,
+                                country: a.country,
+                                origin200s: a.totalOrigin200s,
+                                requests: a.totalRequests,
+                              },
+                              starterPrompts: [
+                                `Is actor ${a.ipAddress || a.id} a MATERIAL_THREAT against our Next.js/SQLite/CF-Pages stack or NOISE_SAFE_DROP?`,
+                                `Check whether ${a.ipAddress || a.id} could be a roaming family user or protected IP before proposing any Cloudflare action.`,
+                              ],
+                            })
+                          }
+                          className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                        >
+                          <OttoIcon className="w-3.5 h-3.5" />
+                          <span>Ask Otto</span>
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
@@ -2380,6 +2482,30 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                       >
                         Reject
                       </button>
+                      {onAskOtto && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onAskOtto({
+                              kind: 'quarantined_email',
+                              entityId: q.email,
+                              originView: 'security',
+                              title: `Quarantined Zero Trust Email: ${q.email}`,
+                              severity: 'MEDIUM',
+                              summary: `Discovered in wsh.panoramadr.com Cloudflare Access policies (status: ${q.status}, first seen ${q.firstSeenAt}).`,
+                              metadata: { email: q.email, status: q.status, grants },
+                              starterPrompts: [
+                                `Audit quarantined email ${q.email}: which Cloudflare Access policies granted it access and is there any anomalous login activity?`,
+                                `Should ${q.email} be approved into the Zero Trust allowlist or rejected?`,
+                              ],
+                            })
+                          }
+                          className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                        >
+                          <OttoIcon className="w-3.5 h-3.5" />
+                          <span>Ask Otto</span>
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
@@ -3409,6 +3535,37 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                               onSnooze={(days) => void handleSnoozeActor(actor.id, days)}
                             />
                           )}
+                          {onAskOtto && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onAskOtto({
+                                  kind: 'threat_actor',
+                                  entityId: actor.id,
+                                  originView: 'security',
+                                  title: `External Actor ${actor.ipAddress || actor.id}`,
+                                  severity: actor.highestSeverity,
+                                  summary: `${actor.totalRequests} requests (${actor.totalOrigin200s} origin 200s) targeting ${hosts.join(', ') || 'suite edge'}`,
+                                  metadata: {
+                                    ip: actor.ipAddress,
+                                    asn: actor.asn,
+                                    asOrg: actor.asOrg,
+                                    country: actor.country,
+                                    hosts,
+                                    paths: paths.slice(0, 8),
+                                  },
+                                  starterPrompts: [
+                                    `Evaluate actor ${actor.ipAddress || actor.id} against our Next.js/SQLite/CF-Pages stack: MATERIAL_THREAT or NOISE_SAFE_DROP?`,
+                                    `Are the probed paths (${paths.slice(0, 4).join(', ') || 'recent paths'}) actually exposed on our stack?`,
+                                  ],
+                                })
+                              }
+                              className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                            >
+                              <OttoIcon className="w-3.5 h-3.5" />
+                              <span>Ask Otto</span>
+                            </button>
+                          )}
                         </div>
                       </div>
 
@@ -4268,6 +4425,29 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                             className="btn-danger text-xs whitespace-nowrap flex-shrink-0"
                           >
                             {q.status === 'APPROVED' ? 'Revoke / Reject' : 'Reject'}
+                          </button>
+                        )}
+                        {onAskOtto && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onAskOtto({
+                                kind: 'quarantined_email',
+                                entityId: q.email,
+                                originView: 'security',
+                                title: `Quarantined Zero Trust Email: ${q.email}`,
+                                severity: 'MEDIUM',
+                                summary: `Cloudflare Access policy grant status=${q.status}, first seen ${q.firstSeenAt}.`,
+                                metadata: { email: q.email, status: q.status, grants },
+                                starterPrompts: [
+                                  `Audit Zero Trust email ${q.email} and explain its policy provenance and risk posture.`,
+                                ],
+                              })
+                            }
+                            className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                          >
+                            <OttoIcon className="w-3.5 h-3.5" />
+                            <span>Ask Otto</span>
                           </button>
                         )}
                       </div>

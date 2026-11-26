@@ -280,6 +280,10 @@ impl SreDatabase {
         Ok(db)
     }
 
+    pub(crate) fn conn(&self) -> &Connection {
+        &self.conn
+    }
+
     fn init_tables(&self) -> Result<()> {
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS system_logs (
@@ -559,6 +563,9 @@ impl SreDatabase {
         self.purge_old_threat_runs(90).ok();
         // Run startup threat hygiene (clean benign crawlers, expire 7d stale noise, align isolated LAN severity)
         self.run_threat_hygiene_pass(&chrono::Utc::now().to_rfc3339()).ok();
+
+        // Initialize additive Otto AI Agent SRE tables (100% backward-compatible with v1.10.11)
+        self.init_otto_tables()?;
 
         Ok(())
     }

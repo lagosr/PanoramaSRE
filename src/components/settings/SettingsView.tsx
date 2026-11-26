@@ -38,11 +38,13 @@ import { APP_VERSION_INFO } from '../../lib/version';
 import {
   ConsoleAutoOpenMode,
   ConsoleDockSide,
+  OttoLogDeltaProbeResult,
   PushoverPreferences,
   PushoverSendReceipt,
   PushoverSettingsViewDto,
   SaveThreatIntelSettingsInput,
   SreDbStats,
+  SuricataGatekeeperStatusDto,
   TerminalTab,
   ThreatIntelPreferences,
   ThreatIntelSettingsViewDto,
@@ -130,6 +132,9 @@ interface SettingsViewProps {
   onChangeDockSide?: (side: ConsoleDockSide) => void;
   sidebarCollapsed?: boolean;
   onChangeSidebarCollapsed?: (collapsed: boolean) => void;
+  suricataStatus?: SuricataGatekeeperStatusDto | null;
+  onRefreshSuricata?: () => void;
+  onNavigateToAgentPolicies?: () => void;
 }
 
 interface SystemLogEntry {
@@ -165,6 +170,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onChangeDockSide,
   sidebarCollapsed: propSidebarCollapsed,
   onChangeSidebarCollapsed,
+  suricataStatus = null,
+  onRefreshSuricata,
+  onNavigateToAgentPolicies,
 }) => {
   const { theme, resolvedTheme, setTheme } = useTheme();
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab ?? 'general');
@@ -286,7 +294,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     enabled: true,
     cadenceHours: 6,
     tier1Model: 'gemini-4-hydrogen',
-    tier2Model: 'gemini-4-carbon',
+    tier2Model: 'gemini-4-neon',
     dailyCarbonCap: 6,
     pushoverThreshold: 'HIGH',
     unifiBaseUrl: 'https://ui.panoramadr.com',
@@ -294,6 +302,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [windowsAutostart, setWindowsAutostart] = useState<boolean>(false);
   const [isSavingThreat, setIsSavingThreat] = useState<boolean>(false);
   const [isTestingAllConnectors, setIsTestingAllConnectors] = useState<boolean>(false);
+  const [isTestingGatekeeper, setIsTestingGatekeeper] = useState<boolean>(false);
+  const [gatekeeperTestFeedback, setGatekeeperTestFeedback] = useState<{
+    ok: boolean;
+    text: string;
+  } | null>(null);
   const [connectorResults, setConnectorResults] = useState<ConnectorDiagnosticRow[]>(
     INITIAL_CONNECTOR_DIAGNOSTICS
   );
@@ -958,15 +971,24 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </nav>
 
           {/* Clean Governance Boundary Callout */}
-          <div className="hidden md:block m-2.5 p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-[11px] space-y-1">
+          <div className="hidden md:block m-2.5 p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-[11px] space-y-1.5">
             <div className="font-mono font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
               <Bot className="w-3.5 h-3.5 text-[var(--color-accent-text)] shrink-0" />
               <span>AI Agent SRE Policy</span>
             </div>
             <p className="text-slate-500 dark:text-slate-400 leading-snug">
               Settings owns credentials, budgets, and alerts. Autonomy tiers L0–L4 &amp; kill-switches live in{' '}
-              <span className="font-mono text-slate-700 dark:text-slate-300">AI Agent SRE</span>.
+              <span className="font-mono text-slate-700 dark:text-slate-300">Otto AI SRE</span>.
             </p>
+            {onNavigateToAgentPolicies && (
+              <button
+                type="button"
+                onClick={onNavigateToAgentPolicies}
+                className="text-[11px] font-mono font-semibold text-[var(--color-brand-text)] hover:underline cursor-pointer"
+              >
+                Open Otto Policy Matrix →
+              </button>
+            )}
           </div>
         </aside>
 
@@ -1317,8 +1339,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       setThreatPrefs((prev) => ({ ...prev, tier2Model: val }))
                     }
                     options={[
-                      { value: 'gemini-4-carbon', label: 'Gemini 4 Carbon (Recommended)' },
-                      { value: 'gemini-4-neon', label: 'Gemini 4 Neon' },
+                      { value: 'gemini-4-neon', label: 'Gemini 4 Neon (Recommended)' },
+                      { value: 'gemini-4-carbon', label: 'Gemini 4 Carbon (Heavy Deep)' },
                     ]}
                   />
                 </div>
@@ -1502,20 +1524,75 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       })}
                     </div>
 
-                    {/* Reserved 5th Connector Seam: AI Agent Forced-Command Gatekeeper Key */}
-                    <div className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-dashed border-slate-300 dark:border-slate-700 flex flex-wrap items-center justify-between gap-2 text-xs">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <KeyRound className="w-4 h-4 text-[var(--color-accent-text)] shrink-0" />
-                        <div className="min-w-0">
-                          <div className="font-semibold text-slate-900 dark:text-slate-100 truncate">
-                            sre-agent-wsh Ed25519 Forced-Command Gatekeeper Key
-                          </div>
-                          <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
-                            Dedicated allowlisted SSH identity reserved for AI Agent SRE (never shares interactive root deployment key)
+                    {/* 5th Connector: AI Agent Forced-Command Gatekeeper Key */}
+                    <div className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 space-y-2 text-xs">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <KeyRound className="w-4 h-4 text-[var(--color-accent-text)] shrink-0" />
+                          <div className="min-w-0">
+                            <div className="font-semibold text-slate-900 dark:text-slate-100 truncate">
+                              sre-agent-wsh Ed25519 Forced-Command Gatekeeper Key
+                            </div>
+                            <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                              Dedicated allowlisted SSH identity for Otto AI SRE (never shares interactive root deployment key)
+                              {suricataStatus
+                                ? ` · Budget: ${suricataStatus.usedLast120s}/${suricataStatus.maxPer120s} SYNs (${suricataStatus.windowSecs}s)`
+                                : ''}
+                            </div>
                           </div>
                         </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <StatusBadge
+                            label={
+                              suricataStatus?.gatekeeperVerified
+                                ? 'Verified'
+                                : suricataStatus?.gatekeeperKeyExists
+                                ? 'Key Ready'
+                                : 'Standby'
+                            }
+                            variant={
+                              suricataStatus?.gatekeeperVerified
+                                ? 'success'
+                                : suricataStatus?.gatekeeperKeyExists
+                                ? 'warning'
+                                : 'neutral'
+                            }
+                          />
+                          <button
+                            type="button"
+                            disabled={isTestingGatekeeper}
+                            onClick={async () => {
+                              setIsTestingGatekeeper(true);
+                              setGatekeeperTestFeedback(null);
+                              try {
+                                const res = await invoke<OttoLogDeltaProbeResult>(
+                                  'test_sre_agent_gatekeeper_connection'
+                                );
+                                setGatekeeperTestFeedback({ ok: res.ok, text: res.detail });
+                                onRefreshSuricata?.();
+                              } catch (err) {
+                                setGatekeeperTestFeedback({ ok: false, text: String(err) });
+                              } finally {
+                                setIsTestingGatekeeper(false);
+                              }
+                            }}
+                            className="btn-secondary text-xs py-1 px-2.5 whitespace-nowrap flex-shrink-0"
+                          >
+                            {isTestingGatekeeper ? 'Testing...' : 'Test Gatekeeper'}
+                          </button>
+                        </div>
                       </div>
-                      <StatusBadge label="Standby" variant="neutral" />
+                      {gatekeeperTestFeedback && (
+                        <div
+                          className={`px-2.5 py-1.5 rounded-lg font-mono text-[11px] border ${
+                            gatekeeperTestFeedback.ok
+                              ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
+                              : 'bg-amber-500/10 text-amber-800 dark:text-amber-300 border-amber-500/30'
+                          }`}
+                        >
+                          {gatekeeperTestFeedback.text}
+                        </div>
+                      )}
                     </div>
                   </div>
                 );

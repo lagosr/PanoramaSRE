@@ -10,15 +10,18 @@ import {
   Shield,
 } from 'lucide-react';
 import { SynthesizedTopology } from '../../lib/topology-synthesizer';
+import type { SuricataGatekeeperStatusDto } from '../../lib/types';
 
 interface DietPiHardwareNetworkCardProps {
   topology: SynthesizedTopology;
+  suricataStatus?: SuricataGatekeeperStatusDto | null;
   onRefresh?: () => void;
   onNavigateToHardening?: () => void;
 }
 
 export const DietPiHardwareNetworkCard: React.FC<DietPiHardwareNetworkCardProps> = ({
   topology,
+  suricataStatus = null,
   onNavigateToHardening,
 }) => {
   const { host, securityAudit } = topology;
@@ -183,12 +186,25 @@ export const DietPiHardwareNetworkCard: React.FC<DietPiHardwareNetworkCardProps>
                 <KeyRound className="w-3.5 h-3.5 text-[var(--color-brand-text)]" />
                 sre-agent-wsh Forced-Command Gatekeeper
               </span>
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-slate-200/80 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-300 dark:border-slate-700">
-                Standby (Manual SSH)
+              <span
+                className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold border ${
+                  suricataStatus?.gatekeeperVerified
+                    ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
+                    : suricataStatus?.gatekeeperKeyExists
+                    ? 'bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-500/30'
+                    : 'bg-slate-200/80 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700'
+                }`}
+              >
+                {suricataStatus?.gatekeeperVerified
+                  ? 'Verified · Ed25519'
+                  : suricataStatus?.gatekeeperKeyExists
+                  ? 'Key Provisioned (Unverified)'
+                  : 'Standby (Manual SSH)'}
               </span>
             </div>
             <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed">
-              Dedicated Ed25519 restricted-shell seam reserved for Autonomous AI Agent SRE allowlisted verbs (zero root interactive shell access).
+              {suricataStatus?.lastProbeDetail ||
+                'Dedicated Ed25519 restricted-shell seam reserved for Autonomous AI Agent SRE allowlisted verbs (zero root interactive shell access).'}
             </p>
           </div>
 
@@ -198,8 +214,16 @@ export const DietPiHardwareNetworkCard: React.FC<DietPiHardwareNetworkCardProps>
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
                 Suricata SSH SYN Budget
               </span>
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold tabular-nums bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30">
-                Nominal · 0 / 2 SYNs per 120s
+              <span
+                className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold tabular-nums border ${
+                  suricataStatus && suricataStatus.remaining === 0
+                    ? 'bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-500/30'
+                    : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
+                }`}
+              >
+                {suricataStatus
+                  ? `${suricataStatus.remaining === 0 ? 'Cooling' : 'Nominal'} · ${suricataStatus.usedLast120s} / ${suricataStatus.maxPer120s} SYNs per ${suricataStatus.windowSecs}s`
+                  : 'Nominal · 0 / 2 SYNs per 120s'}
               </span>
             </div>
             <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed">

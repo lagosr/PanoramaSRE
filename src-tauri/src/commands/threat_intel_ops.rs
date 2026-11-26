@@ -75,7 +75,7 @@ fn default_tier1_model() -> String {
     "gemini-4-hydrogen".to_string()
 }
 fn default_tier2_model() -> String {
-    "gemini-4-carbon".to_string()
+    "gemini-4-neon".to_string()
 }
 fn default_daily_carbon_cap() -> u32 {
     6
@@ -223,6 +223,10 @@ fn resolve_dpapi_or_env_secret(
     }
 
     None
+}
+
+pub fn resolve_gemini_api_key(db: &SreDatabase) -> Option<ResolvedSecret> {
+    resolve_dpapi_or_env_secret(db, SETTING_GEMINI_KEY_DPAPI, "GEMINI_API_KEY")
 }
 
 // ============================================================================
@@ -4797,8 +4801,22 @@ async fn call_gemini_structured(
                     let parsed_val: Value = serde_json::from_str(&raw_text)
                         .map_err(|e| format!("Invalid Gemini HTTP envelope: {}", e))?;
                     let content_text = parsed_val
-                        .pointer("/candidates/0/content/parts/0/text")
-                        .and_then(|v| v.as_str())
+                        .pointer("/candidates/0/content/parts")
+                        .and_then(|v| v.as_array())
+                        .and_then(|parts| {
+                            parts
+                                .iter()
+                                .find(|p| {
+                                    p.get("thought").and_then(|b| b.as_bool()) != Some(true)
+                                        && p.get("text").and_then(|t| t.as_str()).is_some()
+                                })
+                                .and_then(|p| p.get("text").and_then(|t| t.as_str()))
+                        })
+                        .or_else(|| {
+                            parsed_val
+                                .pointer("/candidates/0/content/parts/0/text")
+                                .and_then(|v| v.as_str())
+                        })
                         .ok_or_else(|| "Gemini response contained no candidate text".to_string())?;
                     let brief = parse_gemini_threat_brief(content_text)?;
                     let usage = parsed_val.get("usageMetadata").cloned().unwrap_or(json!({}));

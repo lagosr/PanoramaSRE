@@ -1,5 +1,11 @@
 import { useMemo } from 'react';
-import { WshSnapshot, TerminalTab, DiscoveredApp, FleetCronAuditSummary } from '../../lib/types';
+import {
+  WshSnapshot,
+  TerminalTab,
+  DiscoveredApp,
+  FleetCronAuditSummary,
+  SuricataGatekeeperStatusDto,
+} from '../../lib/types';
 import { RefreshCw, Server, Terminal, ShieldAlert, Cpu, Clock, Network } from 'lucide-react';
 import { SegmentedControl } from '@lagosr/panorama-ui-kit';
 import { buildRemoteSshCommand } from '../../lib/script-adapters';
@@ -29,6 +35,7 @@ interface DietPiHostViewProps {
   onAbortJob?: (id: string) => void;
   onClearTab?: (id: string) => void;
   isRebooting?: boolean;
+  suricataStatus?: SuricataGatekeeperStatusDto | null;
 }
 
 export function DietPiHostView({
@@ -46,6 +53,7 @@ export function DietPiHostView({
   onNavigateToTopology,
   onNavigateToHardening,
   isRebooting = false,
+  suricataStatus = null,
 }: DietPiHostViewProps) {
   const effectiveCronSummary = cronSummary ?? auditFleetCrons(apps, snapshot);
   const dietpiBadges = computeDietPiBadges(snapshot, effectiveCronSummary);
@@ -269,6 +277,7 @@ export function DietPiHostView({
       ) : subTab === 'interfaces' ? (
         <DietPiHardwareNetworkCard
           topology={topology}
+          suricataStatus={suricataStatus}
           onRefresh={onRefresh}
           onNavigateToHardening={onNavigateToHardening}
         />
