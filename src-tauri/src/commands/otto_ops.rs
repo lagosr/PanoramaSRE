@@ -1,24 +1,31 @@
 use crate::commands::threat_intel_ops::{load_threat_preferences, resolve_gemini_api_key};
 use crate::db::SreDatabase;
+use crate::job_manager::JobManager;
 use crate::otto_db::{
     OttoAgentStateRow, OttoChatMessageRow, OttoChatThreadRow, OttoPolicyRow, OttoProposalRow,
-    OttoSavedPromptRow, OttoTraceDetailDto, OttoTraceRunRow,
+    OttoSavedPromptRow, OttoSoakSessionRow, OttoTraceDetailDto, OttoTraceRunRow,
 };
 use crate::otto_policy::{
     evaluate_policy_decision, l4_hard_blocked_invariants, AssetTier, AutonomyMode,
     L4HardBlockInvariant, PolicyEvalRequest, PolicyVerdict,
 };
 use crate::otto_runtime::{
-    run_gatekeeper_verb, OttoLifecycleSnapshot, OttoRuntimeController, OttoRuntimePhase,
-    SuricataGatekeeperStatusDto,
+    resolve_allowlisted_wsh_container, run_gatekeeper_verb, OttoLifecycleSnapshot,
+    OttoRuntimeController, OttoRuntimePhase, SuricataGatekeeperStatusDto,
 };
+use crate::otto_soak::{
+    evaluate_soak_decision, execute_compiled_otto_action, is_buildkit_cache_high,
+    is_cooldown_active, SoakDecision, SoakEvaluationInput, SoakSample, DEFAULT_SOAK_DURATION_SECS,
+    SSL_RENEW_THRESHOLD_DAYS,
+};
+use crate::pushover::{maybe_notify_otto_event, FormattedBulletItem, OttoPushoverCategory};
 use crate::scrubber::scrub_secrets;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
 // ============================================================================
@@ -567,15 +574,17 @@ fn gather_otto_readonly_context(
     let policies = db.list_otto_policies().unwrap_or_default();
     let state = db.get_otto_state().ok();
     let suricata = runtime.ssh_budget.snapshot();
+    let soak_sessions = db.list_otto_soak_sessions(10).unwrap_or_default();
     tools_used.push(OttoToolUsePill {
         tool: "inspect_otto_policy_and_suricata".to_string(),
         summary: format!(
-            "{} policies, SSH SYN budget {}/{}",
+            "{} policies, {} soak sessions, SSH SYN budget {}/{}",
             policies.len(),
+            soak_sessions.len(),
             suricata.used_last_120s,
             suricata.max_per_120s
         ),
-        items_count: policies.len(),
+        items_count: policies.len() + soak_sessions.len(),
         duration_ms: t3.elapsed().as_millis() as i64,
     });
 
@@ -607,6 +616,17 @@ fn gather_otto_readonly_context(
         "ottoGovernance": {
             "agentState": state,
             "suricataBudget": suricata,
+            "recentSoakSessions": soak_sessions.iter().take(6).map(|s| json!({
+                "id": s.id,
+                "appSlug": s.app_slug,
+                "hostingTarget": s.hosting_target,
+                "releaseId": s.release_id,
+                "previousImageTag": s.previous_image_tag,
+                "hasDbMigration": s.has_db_migration,
+                "status": s.status,
+                "startedAt": s.started_at,
+                "endsAt": s.ends_at
+            })).collect::<Vec<_>>(),
             "policies": policies.iter().map(|p| json!({
                 "actionId": p.action_id,
                 "domain": p.domain,
@@ -778,11 +798,13 @@ fn sync_runtime_snapshot(
         updated_at: Utc::now().to_rfc3339(),
     });
     let pending = db.count_pending_otto_approvals().unwrap_or(0);
+    let active_soaks = db.count_active_otto_soaks().unwrap_or(0);
     runtime.sync_from_db_state(
         app,
         state.kill_switch_active,
         &state.circuit_breaker_state,
         pending,
+        active_soaks,
         state.daily_t1_calls,
         state.daily_t2_calls,
         state.dropped_noise_24h_count,
@@ -1008,42 +1030,58 @@ pub fn get_otto_proposals(
 }
 
 #[tauri::command]
-pub fn decide_otto_proposal(
+pub async fn decide_otto_proposal(
     app: AppHandle,
     db: State<'_, Arc<Mutex<SreDatabase>>>,
     runtime: State<'_, Arc<OttoRuntimeController>>,
+    job_manager: State<'_, Arc<JobManager>>,
     input: DecideOttoProposalInput,
 ) -> Result<OttoProposalRow, String> {
-    let guard = db.lock().map_err(|_| "DB lock poisoned".to_string())?;
-    let proposals = guard
-        .list_otto_proposals(200)
-        .map_err(|e| format!("Failed to list proposals: {}", e))?;
-    let existing = proposals
-        .into_iter()
-        .find(|p| p.id == input.proposal_id)
-        .ok_or_else(|| format!("Proposal '{}' not found", input.proposal_id))?;
+    let existing = {
+        let guard = db.lock().map_err(|_| "DB lock poisoned".to_string())?;
+        guard
+            .get_otto_proposal_by_id(&input.proposal_id)
+            .map_err(|e| format!("Failed to read proposal: {}", e))?
+            .ok_or_else(|| format!("Proposal '{}' not found", input.proposal_id))?
+    };
 
     let norm_decision = input.decision.trim().to_ascii_uppercase();
-    let (new_status, snoozed_until, verification_json) = match norm_decision.as_str() {
-        "APPROVE" => {
-            let note = input
-                .note
-                .as_deref()
-                .unwrap_or("Approved in Phase 1 (dry-run audit recorded; remote executors unlock in Phase 2/3)");
-            (
-                "APPROVED_DRY_RUN".to_string(),
-                None,
-                Some(
-                    json!({
-                        "phase": "PHASE_1_DRY_RUN",
-                        "verified": true,
-                        "note": scrub_secrets(note),
-                        "decidedAt": Utc::now().to_rfc3339()
-                    })
-                    .to_string(),
-                ),
+    if norm_decision == "APPROVE" {
+        let db_arc = Arc::clone(db.inner());
+        let rt_arc = Arc::clone(runtime.inner());
+        let jm_arc = Arc::clone(job_manager.inner());
+        let outcome = execute_compiled_otto_action(
+            &app,
+            &db_arc,
+            &rt_arc,
+            &jm_arc,
+            &existing.action_id,
+            &existing.asset_slug,
+            &existing.params_json,
+            Some(&existing.classification),
+            Some(&existing.id),
+            existing.trace_run_id.as_deref(),
+            true,
+            input.note.as_deref(),
+        )
+        .await?;
+
+        let guard = db.lock().map_err(|_| "DB lock poisoned".to_string())?;
+        guard
+            .update_otto_proposal_execution(
+                &existing.id,
+                &outcome.final_status,
+                Some(&outcome.verification_json),
             )
-        }
+            .map_err(|e| format!("Failed updating approved proposal status: {}", e))?;
+        let _ = sync_runtime_snapshot(Some(&app), &guard, &runtime);
+        return guard
+            .get_otto_proposal_by_id(&existing.id)
+            .map_err(|e| format!("Failed to reload proposal: {}", e))?
+            .ok_or_else(|| "Proposal disappeared after execution".to_string());
+    }
+
+    let (new_status, snoozed_until, verification_json) = match norm_decision.as_str() {
         "REJECT" => (
             "REJECTED".to_string(),
             None,
@@ -1060,24 +1098,29 @@ pub fn decide_otto_proposal(
             ("SNOOZED".to_string(), Some(until), None)
         }
         "SHADOW_AGREE" => {
-            let _ = guard.record_shadow_feedback(&existing.action_id, true);
+            if let Ok(guard) = db.lock() {
+                let _ = guard.record_shadow_feedback(&existing.action_id, true);
+            }
             (
                 "SHADOW_AGREED".to_string(),
                 None,
-                Some(json!({ "shadowFeedback": "AGREED" }).to_string()),
+                Some(json!({ "shadowFeedback": "AGREED", "decidedAt": Utc::now().to_rfc3339() }).to_string()),
             )
         }
         "SHADOW_DISAGREE" => {
-            let _ = guard.record_shadow_feedback(&existing.action_id, false);
+            if let Ok(guard) = db.lock() {
+                let _ = guard.record_shadow_feedback(&existing.action_id, false);
+            }
             (
                 "SHADOW_DISAGREED".to_string(),
                 None,
-                Some(json!({ "shadowFeedback": "DISAGREED" }).to_string()),
+                Some(json!({ "shadowFeedback": "DISAGREED", "decidedAt": Utc::now().to_rfc3339() }).to_string()),
             )
         }
         _ => return Err(format!("Unsupported proposal decision '{}'", input.decision)),
     };
 
+    let guard = db.lock().map_err(|_| "DB lock poisoned".to_string())?;
     guard
         .update_otto_proposal_status(
             &existing.id,
@@ -1099,10 +1142,8 @@ pub fn decide_otto_proposal(
     let _ = sync_runtime_snapshot(Some(&app), &guard, &runtime);
 
     guard
-        .list_otto_proposals(200)
+        .get_otto_proposal_by_id(&existing.id)
         .map_err(|e| format!("Failed to reload proposal: {}", e))?
-        .into_iter()
-        .find(|p| p.id == existing.id)
         .ok_or_else(|| "Proposal disappeared after decision".to_string())
 }
 
@@ -1888,6 +1929,1147 @@ pub async fn run_otto_log_delta_probe(
             })
         }
     }
+}
+
+// ============================================================================
+// Phase 2 Tauri IPC Commands — Post-Deploy Soak Monitor & Steady-State Self-Heal
+// ============================================================================
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartOttoSoakInput {
+    pub app_slug: String,
+    pub hosting_target: Option<String>,
+    pub release_id: String,
+    pub previous_image_tag: Option<String>,
+    #[serde(default)]
+    pub has_db_migration: bool,
+    pub duration_secs: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SoakAppObservationInput {
+    pub app_slug: String,
+    pub hosting_target: Option<String>,
+    pub healthy: bool,
+    pub latency_ms: Option<u64>,
+    pub container_state: Option<String>,
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvaluateOttoSoakTickInput {
+    pub observations: Vec<SoakAppObservationInput>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvaluateSteadyStateInput {
+    pub unhealthy_apps: Vec<SoakAppObservationInput>,
+    pub buildkit_reclaimable_bytes: Option<u64>,
+    pub buildkit_total_bytes: Option<u64>,
+    pub ssl_min_days_remaining: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OttoSteadyStateResult {
+    pub trace_run_id: String,
+    pub evaluated_checks: usize,
+    pub proposals_created: Vec<String>,
+    pub actions_executed: Vec<String>,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueOttoManualProposalInput {
+    pub action_id: String,
+    pub asset_slug: String,
+    pub title: String,
+    pub rca_summary: String,
+    pub params_json: Option<String>,
+    pub severity: Option<String>,
+    pub domain: Option<String>,
+    pub has_db_migration: Option<bool>,
+}
+
+#[tauri::command]
+pub fn get_otto_soak_sessions(
+    db: State<'_, Arc<Mutex<SreDatabase>>>,
+    limit: Option<usize>,
+) -> Result<Vec<OttoSoakSessionRow>, String> {
+    let guard = db.lock().map_err(|_| "DB lock poisoned".to_string())?;
+    guard
+        .list_otto_soak_sessions(limit.unwrap_or(25))
+        .map_err(|e| format!("Failed listing Otto soak sessions: {}", e))
+}
+
+#[tauri::command]
+pub fn start_otto_soak_session(
+    app: AppHandle,
+    db: State<'_, Arc<Mutex<SreDatabase>>>,
+    runtime: State<'_, Arc<OttoRuntimeController>>,
+    input: StartOttoSoakInput,
+) -> Result<OttoSoakSessionRow, String> {
+    let slug = input.app_slug.trim().to_ascii_lowercase();
+    if slug.is_empty() {
+        return Err("appSlug cannot be empty".to_string());
+    }
+    let hosting_target = input
+        .hosting_target
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("wsh-docker")
+        .to_string();
+    let duration = input
+        .duration_secs
+        .unwrap_or(DEFAULT_SOAK_DURATION_SECS)
+        .clamp(60, 3600);
+    let now = Utc::now();
+    let ends_at = now + chrono::Duration::seconds(duration);
+    let soak_id = format!("soak-{}-{}", slug, Uuid::new_v4());
+
+    let guard = db.lock().map_err(|_| "DB lock poisoned".to_string())?;
+    let trace_id = guard
+        .create_otto_trace_run("SOAK", "HEAL", Some(&slug), None, None)
+        .map_err(|e| format!("Failed creating soak trace run: {}", e))?;
+
+    let _ = guard.append_otto_trace_step(
+        &trace_id,
+        0,
+        "SENSE",
+        &format!(
+            "Started {}m post-deploy soak monitor for '{}' (release {}, DB_MIGRATION={})",
+            duration / 60,
+            slug,
+            input.release_id,
+            input.has_db_migration
+        ),
+        "OK",
+        0,
+        None,
+        Some(
+            &json!({
+                "soakId": soak_id,
+                "appSlug": slug,
+                "hostingTarget": hosting_target,
+                "releaseId": input.release_id,
+                "previousImageTag": input.previous_image_tag,
+                "hasDbMigration": input.has_db_migration,
+                "endsAt": ends_at.to_rfc3339()
+            })
+            .to_string(),
+        ),
+    );
+
+    let row = OttoSoakSessionRow {
+        id: soak_id,
+        app_slug: slug.clone(),
+        hosting_target,
+        release_id: input.release_id,
+        previous_image_tag: input.previous_image_tag,
+        has_db_migration: input.has_db_migration,
+        started_at: now.to_rfc3339(),
+        ends_at: ends_at.to_rfc3339(),
+        status: "SOAKING".to_string(),
+        samples_json: "[]".to_string(),
+        trace_run_id: Some(trace_id.clone()),
+        updated_at: now.to_rfc3339(),
+    };
+
+    guard
+        .insert_otto_soak_session(&row)
+        .map_err(|e| format!("Failed inserting soak session: {}", e))?;
+    let _ = guard.append_otto_audit(
+        "SOAK_STARTED",
+        Some("rollback_n3_db_safe"),
+        Some(&slug),
+        "SOAKING",
+        &format!(
+            "Monitoring {}m soak window (prev_tag={:?}, db_migration={})",
+            duration / 60,
+            row.previous_image_tag,
+            row.has_db_migration
+        ),
+        Some(&trace_id),
+    );
+
+    let _ = sync_runtime_snapshot(Some(&app), &guard, &runtime);
+    let _ = app.emit("sre://agent-soaks-updated", &row);
+    Ok(row)
+}
+
+#[tauri::command]
+pub fn cancel_otto_soak_session(
+    app: AppHandle,
+    db: State<'_, Arc<Mutex<SreDatabase>>>,
+    runtime: State<'_, Arc<OttoRuntimeController>>,
+    soak_id: String,
+) -> Result<OttoSoakSessionRow, String> {
+    let guard = db.lock().map_err(|_| "DB lock poisoned".to_string())?;
+    let sessions = guard
+        .list_otto_soak_sessions(50)
+        .map_err(|e| format!("Failed listing soak sessions: {}", e))?;
+    let existing = sessions
+        .into_iter()
+        .find(|s| s.id == soak_id)
+        .ok_or_else(|| format!("Soak session '{}' not found", soak_id))?;
+
+    guard
+        .update_otto_soak_session(&existing.id, "CANCELLED", &existing.samples_json, None)
+        .map_err(|e| format!("Failed cancelling soak session: {}", e))?;
+    if let Some(ref tid) = existing.trace_run_id {
+        let _ = guard.complete_otto_trace_run(
+            tid,
+            "CANCELLED",
+            None,
+            None,
+            0,
+            0,
+            0,
+            0,
+            "Post-deploy soak monitor cancelled by operator",
+            None,
+        );
+    }
+    let _ = sync_runtime_snapshot(Some(&app), &guard, &runtime);
+
+    let mut updated = existing;
+    updated.status = "CANCELLED".to_string();
+    let _ = app.emit("sre://agent-soaks-updated", &updated);
+    Ok(updated)
+}
+
+#[tauri::command]
+pub async fn evaluate_otto_soak_tick(
+    app: AppHandle,
+    db: State<'_, Arc<Mutex<SreDatabase>>>,
+    runtime: State<'_, Arc<OttoRuntimeController>>,
+    job_manager: State<'_, Arc<JobManager>>,
+    input: EvaluateOttoSoakTickInput,
+) -> Result<Vec<OttoSoakSessionRow>, String> {
+    let now = Utc::now();
+    let degraded_apps: Vec<String> = input
+        .observations
+        .iter()
+        .filter(|o| !o.healthy)
+        .map(|o| o.app_slug.trim().to_ascii_lowercase())
+        .collect();
+
+    // Snapshot active soaks + policies + state under short DB lock
+    let (active_soaks, agent_state, policies, hourly_l2) = {
+        let guard = db.lock().map_err(|_| "DB lock poisoned".to_string())?;
+        let all = guard.list_otto_soak_sessions(40).unwrap_or_default();
+        let active: Vec<OttoSoakSessionRow> =
+            all.into_iter().filter(|s| s.status == "SOAKING").collect();
+        let st = guard
+            .get_otto_state()
+            .map_err(|e| format!("Failed reading Otto state: {}", e))?;
+        let pols = guard.list_otto_policies().unwrap_or_default();
+        let h_l2 = guard.count_recent_l2_executions(3600).unwrap_or(0);
+        (active, st, pols, h_l2)
+    };
+
+    if active_soaks.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let rollback_pol = policies
+        .iter()
+        .find(|p| p.action_id == "rollback_n3_db_safe");
+    let rollback_mode = rollback_pol
+        .and_then(|p| AutonomyMode::parse(&p.mode))
+        .unwrap_or(AutonomyMode::Shadow);
+    let rollback_cooldown_secs = rollback_pol.map(|p| p.cooldown_secs).unwrap_or(3600);
+
+    let mut pending_l2_execs: Vec<(String, String, String, String, Option<String>)> = Vec::new();
+    let mut notify_l3_items: Vec<FormattedBulletItem> = Vec::new();
+    let mut notify_cascade_items: Vec<FormattedBulletItem> = Vec::new();
+
+    for soak in active_soaks {
+        let Some(obs) = input
+            .observations
+            .iter()
+            .find(|o| o.app_slug.eq_ignore_ascii_case(&soak.app_slug))
+        else {
+            continue;
+        };
+
+        let mut samples: Vec<SoakSample> =
+            serde_json::from_str(&soak.samples_json).unwrap_or_default();
+        samples.push(SoakSample {
+            timestamp: now.to_rfc3339(),
+            healthy: obs.healthy,
+            latency_ms: obs.latency_ms,
+            container_state: obs.container_state.clone(),
+            detail: obs
+                .detail
+                .clone()
+                .unwrap_or_else(|| if obs.healthy { "healthy".into() } else { "unhealthy".into() }),
+        });
+        if samples.len() > 40 {
+            let excess = samples.len() - 40;
+            samples.drain(0..excess);
+        }
+
+        let consecutive_unhealthy = samples.iter().rev().take_while(|s| !s.healthy).count();
+        let window_elapsed = DateTime::parse_from_rfc3339(&soak.ends_at)
+            .map(|end| now >= end.with_timezone(&Utc))
+            .unwrap_or(false);
+
+        let asset_tier = AssetTier::from_slug(&soak.app_slug, Some(&soak.hosting_target));
+        let restart_action_id = if asset_tier == AssetTier::Tier0Critical {
+            "restart_tier0_hard_down"
+        } else {
+            "restart_container"
+        };
+        let restart_pol = policies.iter().find(|p| p.action_id == restart_action_id);
+        let restart_mode = restart_pol
+            .and_then(|p| AutonomyMode::parse(&p.mode))
+            .unwrap_or(AutonomyMode::Shadow);
+        let restart_cooldown_secs = restart_pol.map(|p| p.cooldown_secs).unwrap_or(900);
+
+        let (rb_cool, rs_cool) = {
+            let guard = db.lock().map_err(|_| "DB lock poisoned".to_string())?;
+            let last_rb = guard
+                .last_executed_action_at("rollback_n3_db_safe", &soak.app_slug)
+                .ok()
+                .flatten();
+            let last_rs = guard
+                .last_executed_action_at(restart_action_id, &soak.app_slug)
+                .ok()
+                .flatten();
+            (
+                is_cooldown_active(last_rb.as_deref(), rollback_cooldown_secs, now),
+                is_cooldown_active(last_rs.as_deref(), restart_cooldown_secs, now),
+            )
+        };
+
+        let decision = evaluate_soak_decision(&SoakEvaluationInput {
+            app_slug: soak.app_slug.clone(),
+            hosting_target: soak.hosting_target.clone(),
+            asset_tier,
+            release_id: soak.release_id.clone(),
+            previous_image_tag: soak.previous_image_tag.clone(),
+            has_db_migration: soak.has_db_migration,
+            window_elapsed,
+            consecutive_unhealthy,
+            degraded_apps_in_window: degraded_apps.clone(),
+            rollback_policy_mode: rollback_mode,
+            restart_policy_mode: restart_mode,
+            kill_switch_active: agent_state.kill_switch_active,
+            circuit_breaker_tripped: agent_state.circuit_breaker_state == "TRIPPED",
+            rollback_cooldown_active: rb_cool,
+            restart_cooldown_active: rs_cool,
+            hourly_l2_executions: hourly_l2,
+        });
+
+        let samples_str = serde_json::to_string(&samples).unwrap_or_else(|_| "[]".to_string());
+        let guard = db.lock().map_err(|_| "DB lock poisoned".to_string())?;
+        let step_idx = soak
+            .trace_run_id
+            .as_deref()
+            .and_then(|tid| guard.get_otto_trace_detail(tid).ok().flatten())
+            .map(|d| d.steps.len() as i64)
+            .unwrap_or(1);
+
+        match decision {
+            SoakDecision::ContinueSoaking => {
+                let _ = guard.update_otto_soak_session(&soak.id, "SOAKING", &samples_str, None);
+            }
+            SoakDecision::HealthyVerified => {
+                let _ = guard.update_otto_soak_session(
+                    &soak.id,
+                    "HEALTHY_VERIFIED",
+                    &samples_str,
+                    None,
+                );
+                if let Some(ref tid) = soak.trace_run_id {
+                    let _ = guard.append_otto_trace_step(
+                        tid,
+                        step_idx,
+                        "OUTCOME_VERIFY",
+                        &format!(
+                            "15m post-deploy soak completed cleanly for '{}' ({} healthy samples)",
+                            soak.app_slug,
+                            samples.len()
+                        ),
+                        "OK",
+                        0,
+                        None,
+                        Some(&json!({ "samplesCount": samples.len(), "releaseId": soak.release_id }).to_string()),
+                    );
+                    let _ = guard.complete_otto_trace_run(
+                        tid,
+                        "COMPLETED",
+                        None,
+                        None,
+                        0,
+                        0,
+                        0,
+                        0,
+                        &format!("Soak HEALTHY_VERIFIED for {} ({})", soak.app_slug, soak.release_id),
+                        None,
+                    );
+                }
+                let _ = guard.append_otto_audit(
+                    "SOAK_VERIFIED",
+                    Some("rollback_n3_db_safe"),
+                    Some(&soak.app_slug),
+                    "HEALTHY_VERIFIED",
+                    &format!("Release {} passed full post-deploy soak window", soak.release_id),
+                    soak.trace_run_id.as_deref(),
+                );
+            }
+            SoakDecision::CascadeEscalateL3 {
+                degraded_apps: ref apps_bad,
+                ref reason,
+            } => {
+                let _ = guard.update_otto_soak_session(&soak.id, "ESCALATED_L3", &samples_str, None);
+                let prop = OttoProposalRow {
+                    id: format!("prop-{}", Uuid::new_v4()),
+                    trace_run_id: soak.trace_run_id.clone(),
+                    domain: "HEAL".to_string(),
+                    classification: "RELIABILITY".to_string(),
+                    asset_slug: "wsh".to_string(),
+                    asset_tier: AssetTier::Tier0Critical.as_str().to_string(),
+                    action_id: "restart_tier0_hard_down".to_string(),
+                    params_json: json!({ "degradedApps": apps_bad }).to_string(),
+                    title: format!(
+                        "Shared Infrastructure Cascade Detected ({} Apps Degraded)",
+                        apps_bad.len()
+                    ),
+                    severity: "CRITICAL".to_string(),
+                    confidence: 0.95,
+                    rca_summary: reason.clone(),
+                    evidence_json: serde_json::to_string(apps_bad).unwrap_or_else(|_| "[]".into()),
+                    diff_preview: None,
+                    rollback_plan_json: Some(json!({ "guard": "CROSS_APP_CASCADE_GUARD" }).to_string()),
+                    blast_radius_flags_json: json!(["CASCADE_GUARD", "TIER0_CRITICAL"]).to_string(),
+                    status: "PENDING_APPROVAL".to_string(),
+                    snoozed_until: None,
+                    created_at: now.to_rfc3339(),
+                    decided_at: None,
+                    executed_at: None,
+                    verification_result_json: None,
+                };
+                let _ = guard.insert_otto_proposal(&prop);
+                notify_cascade_items.push(FormattedBulletItem {
+                    label: "Shared Infra Cascade".to_string(),
+                    detail: reason.clone(),
+                });
+            }
+            SoakDecision::ShadowRollback {
+                ref previous_tag,
+                ref reason,
+            } => {
+                let _ = guard.update_otto_soak_session(&soak.id, "DEGRADED_SHADOW", &samples_str, None);
+                let prop = OttoProposalRow {
+                    id: format!("prop-{}", Uuid::new_v4()),
+                    trace_run_id: soak.trace_run_id.clone(),
+                    domain: "HEAL".to_string(),
+                    classification: "RELIABILITY".to_string(),
+                    asset_slug: soak.app_slug.clone(),
+                    asset_tier: asset_tier.as_str().to_string(),
+                    action_id: "rollback_n3_db_safe".to_string(),
+                    params_json: json!({ "previousTag": previous_tag, "hasDbMigration": false }).to_string(),
+                    title: format!("[SHADOW] Roll back '{}' to {}", soak.app_slug, previous_tag),
+                    severity: "HIGH".to_string(),
+                    confidence: 0.9,
+                    rca_summary: reason.clone(),
+                    evidence_json: samples_str.clone(),
+                    diff_preview: None,
+                    rollback_plan_json: Some(json!({ "previousTag": previous_tag, "mode": "SHADOW" }).to_string()),
+                    blast_radius_flags_json: json!(["SHADOW_DRY_RUN"]).to_string(),
+                    status: "SHADOW_LOGGED".to_string(),
+                    snoozed_until: None,
+                    created_at: now.to_rfc3339(),
+                    decided_at: None,
+                    executed_at: None,
+                    verification_result_json: None,
+                };
+                let _ = guard.insert_otto_proposal(&prop);
+                if let Some(ref tid) = soak.trace_run_id {
+                    let _ = guard.append_otto_trace_step(
+                        tid,
+                        step_idx,
+                        "POLICY_KERNEL",
+                        reason,
+                        "SHADOW",
+                        0,
+                        None,
+                        Some(&json!({ "previousTag": previous_tag, "remoteCommandsExecuted": 0 }).to_string()),
+                    );
+                }
+            }
+            SoakDecision::EscalateL3Rollback {
+                ref previous_tag,
+                ref reason,
+                ref blast_radius_flags,
+            } => {
+                let _ = guard.update_otto_soak_session(&soak.id, "ESCALATED_L3", &samples_str, None);
+                let prop = OttoProposalRow {
+                    id: format!("prop-{}", Uuid::new_v4()),
+                    trace_run_id: soak.trace_run_id.clone(),
+                    domain: "HEAL".to_string(),
+                    classification: "RELIABILITY".to_string(),
+                    asset_slug: soak.app_slug.clone(),
+                    asset_tier: asset_tier.as_str().to_string(),
+                    action_id: "rollback_n3_db_safe".to_string(),
+                    params_json: json!({
+                        "previousTag": previous_tag,
+                        "hasDbMigration": soak.has_db_migration
+                    })
+                    .to_string(),
+                    title: format!("Soak Regression: Review Rollback for '{}'", soak.app_slug),
+                    severity: "HIGH".to_string(),
+                    confidence: 0.92,
+                    rca_summary: reason.clone(),
+                    evidence_json: samples_str.clone(),
+                    diff_preview: None,
+                    rollback_plan_json: Some(json!({ "previousTag": previous_tag }).to_string()),
+                    blast_radius_flags_json: serde_json::to_string(blast_radius_flags)
+                        .unwrap_or_else(|_| "[]".into()),
+                    status: "PENDING_APPROVAL".to_string(),
+                    snoozed_until: None,
+                    created_at: now.to_rfc3339(),
+                    decided_at: None,
+                    executed_at: None,
+                    verification_result_json: None,
+                };
+                let _ = guard.insert_otto_proposal(&prop);
+                notify_l3_items.push(FormattedBulletItem {
+                    label: soak.app_slug.clone(),
+                    detail: reason.clone(),
+                });
+            }
+            SoakDecision::ShadowRestart {
+                ref action_id,
+                ref container_name,
+                ref reason,
+            } => {
+                let _ = guard.update_otto_soak_session(&soak.id, "DEGRADED_SHADOW", &samples_str, None);
+                let prop = OttoProposalRow {
+                    id: format!("prop-{}", Uuid::new_v4()),
+                    trace_run_id: soak.trace_run_id.clone(),
+                    domain: "HEAL".to_string(),
+                    classification: "RELIABILITY".to_string(),
+                    asset_slug: soak.app_slug.clone(),
+                    asset_tier: asset_tier.as_str().to_string(),
+                    action_id: action_id.clone(),
+                    params_json: json!({ "containerName": container_name }).to_string(),
+                    title: format!("[SHADOW] Restart container '{}'", container_name),
+                    severity: "HIGH".to_string(),
+                    confidence: 0.88,
+                    rca_summary: reason.clone(),
+                    evidence_json: samples_str.clone(),
+                    diff_preview: None,
+                    rollback_plan_json: None,
+                    blast_radius_flags_json: json!(["TIER0_CRITICAL", "SHADOW_DRY_RUN"]).to_string(),
+                    status: "SHADOW_LOGGED".to_string(),
+                    snoozed_until: None,
+                    created_at: now.to_rfc3339(),
+                    decided_at: None,
+                    executed_at: None,
+                    verification_result_json: None,
+                };
+                let _ = guard.insert_otto_proposal(&prop);
+            }
+            SoakDecision::EscalateL3Restart {
+                ref action_id,
+                ref container_name,
+                ref reason,
+            } => {
+                let _ = guard.update_otto_soak_session(&soak.id, "ESCALATED_L3", &samples_str, None);
+                let prop = OttoProposalRow {
+                    id: format!("prop-{}", Uuid::new_v4()),
+                    trace_run_id: soak.trace_run_id.clone(),
+                    domain: "HEAL".to_string(),
+                    classification: "RELIABILITY".to_string(),
+                    asset_slug: soak.app_slug.clone(),
+                    asset_tier: asset_tier.as_str().to_string(),
+                    action_id: action_id.clone(),
+                    params_json: json!({ "containerName": container_name }).to_string(),
+                    title: format!("Review Hard-Down Restart for '{}'", container_name),
+                    severity: "CRITICAL".to_string(),
+                    confidence: 0.9,
+                    rca_summary: reason.clone(),
+                    evidence_json: samples_str.clone(),
+                    diff_preview: None,
+                    rollback_plan_json: None,
+                    blast_radius_flags_json: json!(["TIER0_CRITICAL"]).to_string(),
+                    status: "PENDING_APPROVAL".to_string(),
+                    snoozed_until: None,
+                    created_at: now.to_rfc3339(),
+                    decided_at: None,
+                    executed_at: None,
+                    verification_result_json: None,
+                };
+                let _ = guard.insert_otto_proposal(&prop);
+                notify_l3_items.push(FormattedBulletItem {
+                    label: container_name.clone(),
+                    detail: reason.clone(),
+                });
+            }
+            SoakDecision::ExecuteL2Rollback {
+                ref previous_tag,
+                ..
+            } => {
+                let _ = guard.update_otto_soak_session(&soak.id, "ROLLING_BACK", &samples_str, None);
+                pending_l2_execs.push((
+                    soak.id.clone(),
+                    "rollback_n3_db_safe".to_string(),
+                    soak.app_slug.clone(),
+                    json!({ "previousTag": previous_tag, "hasDbMigration": false }).to_string(),
+                    soak.trace_run_id.clone(),
+                ));
+            }
+            SoakDecision::ExecuteL2Restart {
+                ref action_id,
+                ref container_name,
+                ..
+            } => {
+                let _ = guard.update_otto_soak_session(&soak.id, "RECOVERING", &samples_str, None);
+                pending_l2_execs.push((
+                    soak.id.clone(),
+                    action_id.clone(),
+                    soak.app_slug.clone(),
+                    json!({ "containerName": container_name }).to_string(),
+                    soak.trace_run_id.clone(),
+                ));
+            }
+        }
+    }
+
+    // Execute any L2_AUTO remediations cleanly outside DB mutex
+    for (soak_id, action_id, slug, params_json, tid) in pending_l2_execs {
+        let db_arc = Arc::clone(db.inner());
+        let rt_arc = Arc::clone(runtime.inner());
+        let jm_arc = Arc::clone(job_manager.inner());
+        let res = execute_compiled_otto_action(
+            &app,
+            &db_arc,
+            &rt_arc,
+            &jm_arc,
+            &action_id,
+            &slug,
+            &params_json,
+            Some("RELIABILITY"),
+            None,
+            tid.as_deref(),
+            false,
+            None,
+        )
+        .await;
+
+        if let Ok(guard) = db.lock() {
+            let final_soak_state = match res {
+                Ok(ref out) if out.success && action_id == "rollback_n3_db_safe" => "ROLLED_BACK",
+                Ok(ref out) if out.success => "HEALTHY_VERIFIED",
+                _ => "ESCALATED_L3",
+            };
+            if let Some(curr) = guard
+                .list_otto_soak_sessions(40)
+                .ok()
+                .and_then(|v| v.into_iter().find(|s| s.id == soak_id))
+            {
+                let _ = guard.update_otto_soak_session(
+                    &soak_id,
+                    final_soak_state,
+                    &curr.samples_json,
+                    None,
+                );
+            }
+        }
+    }
+
+    if !notify_cascade_items.is_empty() {
+        maybe_notify_otto_event(
+            db.inner(),
+            OttoPushoverCategory::CircuitBreakerOrCascade,
+            "Otto AI SRE • Shared Infra Cascade Escalated",
+            "Per-App L2 Actions Suppressed (Cascade Guard):",
+            &notify_cascade_items,
+        )
+        .await;
+    }
+    if !notify_l3_items.is_empty() {
+        maybe_notify_otto_event(
+            db.inner(),
+            OttoPushoverCategory::L3ApprovalRequired,
+            "Otto AI SRE • L3 Desktop Approval Required",
+            "Post-Deploy Soak Escalated for Review:",
+            &notify_l3_items,
+        )
+        .await;
+    }
+
+    let updated_list = {
+        let guard = db.lock().map_err(|_| "DB lock poisoned".to_string())?;
+        let _ = sync_runtime_snapshot(Some(&app), &guard, &runtime);
+        guard.list_otto_soak_sessions(25).unwrap_or_default()
+    };
+    let _ = app.emit("sre://agent-soaks-updated", &updated_list);
+    Ok(updated_list)
+}
+
+#[tauri::command]
+pub async fn evaluate_otto_steady_state(
+    app: AppHandle,
+    db: State<'_, Arc<Mutex<SreDatabase>>>,
+    runtime: State<'_, Arc<OttoRuntimeController>>,
+    job_manager: State<'_, Arc<JobManager>>,
+    input: EvaluateSteadyStateInput,
+) -> Result<OttoSteadyStateResult, String> {
+    let now = Utc::now();
+    let started = Instant::now();
+    let mut evaluated_checks = 0usize;
+    let mut proposals_created = Vec::new();
+    let mut actions_executed = Vec::new();
+    let mut l2_queue: Vec<(String, String, String, String)> = Vec::new();
+
+    let trace_run_id = {
+        let guard = db.lock().map_err(|_| "DB lock poisoned".to_string())?;
+        let tid = guard
+            .create_otto_trace_run("SCHEDULED", "HEAL", Some("fleet"), None, None)
+            .map_err(|e| format!("Failed creating steady-state trace run: {}", e))?;
+        let policies = guard.list_otto_policies().unwrap_or_default();
+        let state = guard
+            .get_otto_state()
+            .map_err(|e| format!("Failed reading Otto state: {}", e))?;
+        let hourly_l2 = guard.count_recent_l2_executions(3600).unwrap_or(0);
+        let existing_open = guard.list_otto_proposals(100).unwrap_or_default();
+
+        let has_open_proposal = |action_id: &str, slug: &str| -> bool {
+            existing_open.iter().any(|p| {
+                p.action_id == action_id
+                    && p.asset_slug.eq_ignore_ascii_case(slug)
+                    && matches!(p.status.as_str(), "PENDING_APPROVAL" | "SHADOW_LOGGED")
+            })
+        };
+
+        let mut step_idx = 0i64;
+
+        // 1. Calibrated BuildKit cache hygiene (>= 35 GB reclaimable OR >= 100 GB total)
+        if let (Some(reclaim), Some(total)) = (input.buildkit_reclaimable_bytes, input.buildkit_total_bytes) {
+            evaluated_checks += 1;
+            let high = is_buildkit_cache_high(reclaim, total);
+            let _ = guard.append_otto_trace_step(
+                &tid,
+                step_idx,
+                "STAGE0_GATE",
+                &format!(
+                    "BuildKit cache hygiene check: {} ({:.2} GB reclaimable / {:.2} GB total)",
+                    if high { "HIGH" } else { "NOMINAL" },
+                    reclaim as f64 / 1e9,
+                    total as f64 / 1e9
+                ),
+                "OK",
+                0,
+                None,
+                Some(&json!({ "reclaimableBytes": reclaim, "totalBytes": total, "high": high }).to_string()),
+            );
+            step_idx += 1;
+
+            if high && !has_open_proposal("prune_buildkit_cache", "buildkit") {
+                let pol = policies.iter().find(|p| p.action_id == "prune_buildkit_cache");
+                let mode = pol
+                    .and_then(|p| AutonomyMode::parse(&p.mode))
+                    .unwrap_or(AutonomyMode::Shadow);
+                let cool = is_cooldown_active(
+                    guard.last_executed_action_at("prune_buildkit_cache", "buildkit").ok().flatten().as_deref(),
+                    pol.map(|p| p.cooldown_secs).unwrap_or(21600),
+                    now,
+                );
+                let params_str = json!({
+                    "reclaimableBytes": reclaim,
+                    "totalBytes": total,
+                    "filter": "until=72h"
+                })
+                .to_string();
+
+                if mode == AutonomyMode::L2Auto
+                    && !state.kill_switch_active
+                    && state.circuit_breaker_state != "TRIPPED"
+                    && !cool
+                    && hourly_l2 < 3
+                {
+                    l2_queue.push(("prune_buildkit_cache".into(), "buildkit".into(), params_str, tid.clone()));
+                } else if mode != AutonomyMode::Observe {
+                    let status = if mode == AutonomyMode::Shadow { "SHADOW_LOGGED" } else { "PENDING_APPROVAL" };
+                    let pid = format!("prop-{}", Uuid::new_v4());
+                    let _ = guard.insert_otto_proposal(&OttoProposalRow {
+                        id: pid.clone(),
+                        trace_run_id: Some(tid.clone()),
+                        domain: "HEAL".to_string(),
+                        classification: "RELIABILITY".to_string(),
+                        asset_slug: "buildkit".to_string(),
+                        asset_tier: AssetTier::Tier1ChildApp.as_str().to_string(),
+                        action_id: "prune_buildkit_cache".to_string(),
+                        params_json: params_str,
+                        title: format!(
+                            "Prune Stale BuildKit Cache ({:.1} GB reclaimable / {:.1} GB total)",
+                            reclaim as f64 / 1e9,
+                            total as f64 / 1e9
+                        ),
+                        severity: "MEDIUM".to_string(),
+                        confidence: 0.96,
+                        rca_summary: "Local Docker BuildKit cache exceeded calibrated suite threshold (>= 35 GB reclaimable or >= 100 GB total). Runs docker buildx prune --all --filter until=72h -f.".to_string(),
+                        evidence_json: json!([format!("reclaimable={}B", reclaim), format!("total={}B", total)]).to_string(),
+                        diff_preview: None,
+                        rollback_plan_json: Some(json!({ "note": "Non-destructive cache prune (>72h unused layers only)" }).to_string()),
+                        blast_radius_flags_json: json!(["LOCAL_WORKSTATION_ONLY"]).to_string(),
+                        status: status.to_string(),
+                        snoozed_until: None,
+                        created_at: now.to_rfc3339(),
+                        decided_at: None,
+                        executed_at: None,
+                        verification_result_json: None,
+                    });
+                    proposals_created.push(pid);
+                }
+            }
+        }
+
+        // 2. Expiring SSL certificates (<21 days remaining)
+        if let Some(min_days) = input.ssl_min_days_remaining {
+            evaluated_checks += 1;
+            let needs_renew = min_days < SSL_RENEW_THRESHOLD_DAYS;
+            let _ = guard.append_otto_trace_step(
+                &tid,
+                step_idx,
+                "STAGE0_GATE",
+                &format!(
+                    "SSL fleet expiry check: min {}d remaining (threshold <{}d)",
+                    min_days, SSL_RENEW_THRESHOLD_DAYS
+                ),
+                "OK",
+                0,
+                None,
+                Some(&json!({ "minDaysRemaining": min_days, "needsRenew": needs_renew }).to_string()),
+            );
+            step_idx += 1;
+
+            if needs_renew && !has_open_proposal("renew_ssl_cert", "pki") {
+                let pol = policies.iter().find(|p| p.action_id == "renew_ssl_cert");
+                let mode = pol
+                    .and_then(|p| AutonomyMode::parse(&p.mode))
+                    .unwrap_or(AutonomyMode::Shadow);
+                let cool = is_cooldown_active(
+                    guard
+                        .last_executed_action_at("renew_ssl_cert", "pki")
+                        .ok()
+                        .flatten()
+                        .as_deref(),
+                    pol.map(|p| p.cooldown_secs).unwrap_or(3600),
+                    now,
+                );
+                let params_str = json!({ "minDaysRemaining": min_days }).to_string();
+                if mode == AutonomyMode::L2Auto
+                    && !state.kill_switch_active
+                    && state.circuit_breaker_state != "TRIPPED"
+                    && !cool
+                    && (hourly_l2 + l2_queue.len() as i64) < 3
+                {
+                    l2_queue.push(("renew_ssl_cert".into(), "pki".into(), params_str, tid.clone()));
+                } else if mode != AutonomyMode::Observe {
+                    let status = if mode == AutonomyMode::Shadow { "SHADOW_LOGGED" } else { "PENDING_APPROVAL" };
+                    let pid = format!("prop-{}", Uuid::new_v4());
+                    let _ = guard.insert_otto_proposal(&OttoProposalRow {
+                        id: pid.clone(),
+                        trace_run_id: Some(tid.clone()),
+                        domain: "HEAL".to_string(),
+                        classification: "RELIABILITY".to_string(),
+                        asset_slug: "pki".to_string(),
+                        asset_tier: AssetTier::Tier2ExternalEdge.as_str().to_string(),
+                        action_id: "renew_ssl_cert".to_string(),
+                        params_json: params_str,
+                        title: format!("Renew Expiring SSL Certificates ({}d remaining)", min_days),
+                        severity: if min_days < 7 { "CRITICAL" } else { "HIGH" }.to_string(),
+                        confidence: 0.95,
+                        rca_summary: format!(
+                            "Minimum fleet TLS certificate lifetime dropped to {}d (<21d threshold). Runs Get-SSLCerts.ps1 -Unattended under WshRemoteMutation lock.",
+                            min_days
+                        ),
+                        evidence_json: json!([format!("ssl_min_days={}", min_days)]).to_string(),
+                        diff_preview: None,
+                        rollback_plan_json: None,
+                        blast_radius_flags_json: json!(["EDGE_PKI"]).to_string(),
+                        status: status.to_string(),
+                        snoozed_until: None,
+                        created_at: now.to_rfc3339(),
+                        decided_at: None,
+                        executed_at: None,
+                        verification_result_json: None,
+                    });
+                    proposals_created.push(pid);
+                }
+            }
+        }
+
+        // 3. Steady-State Unhealthy Containers (respecting Cascade Guard >= 2 apps!)
+        evaluated_checks += 1;
+        if input.unhealthy_apps.len() >= 2 {
+            let names: Vec<String> = input.unhealthy_apps.iter().map(|a| a.app_slug.clone()).collect();
+            let _ = guard.append_otto_trace_step(
+                &tid,
+                step_idx,
+                "STAGE0_GATE",
+                &format!("Cross-app cascade guard triggered ({} unhealthy apps)", names.len()),
+                "WARN",
+                0,
+                None,
+                Some(&json!({ "unhealthyApps": names }).to_string()),
+            );
+            if !has_open_proposal("restart_tier0_hard_down", "wsh") {
+                let pid = format!("prop-{}", Uuid::new_v4());
+                let _ = guard.insert_otto_proposal(&OttoProposalRow {
+                    id: pid.clone(),
+                    trace_run_id: Some(tid.clone()),
+                    domain: "HEAL".to_string(),
+                    classification: "RELIABILITY".to_string(),
+                    asset_slug: "wsh".to_string(),
+                    asset_tier: AssetTier::Tier0Critical.as_str().to_string(),
+                    action_id: "restart_tier0_hard_down".to_string(),
+                    params_json: json!({ "unhealthyApps": names }).to_string(),
+                    title: format!("Multi-App Cascade Detected ({} Unhealthy Apps)", names.len()),
+                    severity: "CRITICAL".to_string(),
+                    confidence: 0.94,
+                    rca_summary: format!(
+                        "Suppressed per-app L2 restarts because {} apps are simultaneously unhealthy ({}). Inspect shared WSH ingress/Lighttpd/Tunnel.",
+                        names.len(),
+                        names.join(", ")
+                    ),
+                    evidence_json: serde_json::to_string(&names).unwrap_or_else(|_| "[]".into()),
+                    diff_preview: None,
+                    rollback_plan_json: None,
+                    blast_radius_flags_json: json!(["CASCADE_GUARD", "TIER0_CRITICAL"]).to_string(),
+                    status: "PENDING_APPROVAL".to_string(),
+                    snoozed_until: None,
+                    created_at: now.to_rfc3339(),
+                    decided_at: None,
+                    executed_at: None,
+                    verification_result_json: None,
+                });
+                proposals_created.push(pid);
+            }
+        } else if let Some(unhealthy) = input.unhealthy_apps.first() {
+            let tier = AssetTier::from_slug(&unhealthy.app_slug, unhealthy.hosting_target.as_deref());
+            let action_id = if tier == AssetTier::Tier0Critical {
+                "restart_tier0_hard_down"
+            } else {
+                "restart_container"
+            };
+            if let Some(container) = resolve_allowlisted_wsh_container(&unhealthy.app_slug) {
+                if !has_open_proposal(action_id, &unhealthy.app_slug) {
+                    let pol = policies.iter().find(|p| p.action_id == action_id);
+                    let mode = pol
+                        .and_then(|p| AutonomyMode::parse(&p.mode))
+                        .unwrap_or(AutonomyMode::Shadow);
+                    let status = if mode == AutonomyMode::Shadow { "SHADOW_LOGGED" } else { "PENDING_APPROVAL" };
+                    let pid = format!("prop-{}", Uuid::new_v4());
+                    let _ = guard.insert_otto_proposal(&OttoProposalRow {
+                        id: pid.clone(),
+                        trace_run_id: Some(tid.clone()),
+                        domain: "HEAL".to_string(),
+                        classification: "RELIABILITY".to_string(),
+                        asset_slug: unhealthy.app_slug.clone(),
+                        asset_tier: tier.as_str().to_string(),
+                        action_id: action_id.to_string(),
+                        params_json: json!({ "containerName": container }).to_string(),
+                        title: format!("Steady-State Recovery: Restart '{}'", container),
+                        severity: if tier == AssetTier::Tier0Critical { "CRITICAL" } else { "HIGH" }.to_string(),
+                        confidence: 0.87,
+                        rca_summary: format!(
+                            "App '{}' reported unhealthy ({}). Parameterized restart via sre-agent-wsh forced-command key.",
+                            unhealthy.app_slug,
+                            unhealthy.detail.as_deref().unwrap_or("probe failed")
+                        ),
+                        evidence_json: json!([unhealthy.detail.as_deref().unwrap_or("unhealthy")]).to_string(),
+                        diff_preview: None,
+                        rollback_plan_json: None,
+                        blast_radius_flags_json: json!(if tier == AssetTier::Tier0Critical { vec!["TIER0_CRITICAL"] } else { vec!["REVERSIBLE_RESTART"] }).to_string(),
+                        status: status.to_string(),
+                        snoozed_until: None,
+                        created_at: now.to_rfc3339(),
+                        decided_at: None,
+                        executed_at: None,
+                        verification_result_json: None,
+                    });
+                    proposals_created.push(pid);
+                }
+            }
+        }
+
+        let summary = format!(
+            "Steady-state sweep completed ({} checks, {} proposals staged, {} L2 actions queued)",
+            evaluated_checks,
+            proposals_created.len(),
+            l2_queue.len()
+        );
+        let _ = guard.complete_otto_trace_run(
+            &tid,
+            "COMPLETED",
+            None,
+            None,
+            0,
+            0,
+            0,
+            started.elapsed().as_millis() as i64,
+            &summary,
+            None,
+        );
+        let _ = sync_runtime_snapshot(Some(&app), &guard, &runtime);
+        tid
+    };
+
+    for (action_id, slug, params_json, tid) in l2_queue {
+        let db_arc = Arc::clone(db.inner());
+        let rt_arc = Arc::clone(runtime.inner());
+        let jm_arc = Arc::clone(job_manager.inner());
+        if let Ok(out) = execute_compiled_otto_action(
+            &app,
+            &db_arc,
+            &rt_arc,
+            &jm_arc,
+            &action_id,
+            &slug,
+            &params_json,
+            Some("RELIABILITY"),
+            None,
+            Some(&tid),
+            false,
+            None,
+        )
+        .await
+        {
+            actions_executed.push(format!("{}: {}", action_id, out.final_status));
+        }
+    }
+
+    Ok(OttoSteadyStateResult {
+        trace_run_id,
+        evaluated_checks,
+        proposals_created: proposals_created.clone(),
+        actions_executed: actions_executed.clone(),
+        summary: format!(
+            "Checked {} signals · {} proposal(s) staged · {} L2 action(s) executed",
+            evaluated_checks,
+            proposals_created.len(),
+            actions_executed.len()
+        ),
+    })
+}
+
+#[tauri::command]
+pub fn queue_otto_manual_proposal(
+    app: AppHandle,
+    db: State<'_, Arc<Mutex<SreDatabase>>>,
+    runtime: State<'_, Arc<OttoRuntimeController>>,
+    input: QueueOttoManualProposalInput,
+) -> Result<OttoProposalRow, String> {
+    let params_str = input.params_json.unwrap_or_else(|| "{}".to_string());
+    let guard = db.lock().map_err(|_| "DB lock poisoned".to_string())?;
+    let state = guard
+        .get_otto_state()
+        .map_err(|e| format!("Failed reading Otto state: {}", e))?;
+    let tier = AssetTier::from_slug(&input.asset_slug, None);
+    let has_db_mig = input.has_db_migration.unwrap_or(false);
+
+    let decision = evaluate_policy_decision(&PolicyEvalRequest {
+        action_id: input.action_id.clone(),
+        asset_slug: input.asset_slug.clone(),
+        asset_tier: tier,
+        configured_mode: AutonomyMode::L3Approval,
+        kill_switch_active: state.kill_switch_active,
+        circuit_breaker_tripped: false,
+        has_db_migration: has_db_mig,
+        classification: Some("RELIABILITY".to_string()),
+        raw_payload_text: format!("{} {} {}", input.title, input.rca_summary, params_str),
+        target_ips: vec![],
+        target_paths: vec![],
+        protected_ips: vec![],
+        proposed_semver_bump: None,
+    });
+
+    if matches!(
+        decision.verdict,
+        PolicyVerdict::DenyL4HardBlocked | PolicyVerdict::DenyKillSwitch
+    ) {
+        return Err(decision.reason);
+    }
+
+    let trace_id = guard
+        .create_otto_trace_run("MANUAL", "HEAL", Some(&input.asset_slug), None, None)
+        .map_err(|e| format!("Failed creating trace: {}", e))?;
+    let _ = guard.append_otto_trace_step(
+        &trace_id,
+        0,
+        "POLICY_KERNEL",
+        &format!("Staged L3 proposal '{}' -> {:?}", input.action_id, decision.verdict),
+        "OK",
+        0,
+        None,
+        Some(&serde_json::to_string(&decision).unwrap_or_else(|_| "{}".into())),
+    );
+    let _ = guard.complete_otto_trace_run(
+        &trace_id,
+        "COMPLETED",
+        None,
+        None,
+        0,
+        0,
+        0,
+        1,
+        &format!("Staged L3 approval card for {}", input.action_id),
+        None,
+    );
+
+    let mut flags = Vec::new();
+    if tier == AssetTier::Tier0Critical {
+        flags.push("TIER0_CRITICAL".to_string());
+    }
+    if has_db_mig {
+        flags.push("DB_MIGRATION".to_string());
+    }
+    if input.action_id == "prune_buildkit_cache" {
+        flags.push("LOCAL_WORKSTATION_ONLY".to_string());
+    }
+
+    let proposal = OttoProposalRow {
+        id: format!("prop-{}", Uuid::new_v4()),
+        trace_run_id: Some(trace_id),
+        domain: input.domain.unwrap_or_else(|| "HEAL".to_string()).to_ascii_uppercase(),
+        classification: "RELIABILITY".to_string(),
+        asset_slug: input.asset_slug,
+        asset_tier: tier.as_str().to_string(),
+        action_id: input.action_id,
+        params_json: params_str,
+        title: input.title,
+        severity: input.severity.unwrap_or_else(|| "MEDIUM".to_string()).to_ascii_uppercase(),
+        confidence: 0.95,
+        rca_summary: input.rca_summary,
+        evidence_json: "[]".to_string(),
+        diff_preview: None,
+        rollback_plan_json: Some(json!({ "checksPassed": decision.checks_passed }).to_string()),
+        blast_radius_flags_json: serde_json::to_string(&flags).unwrap_or_else(|_| "[]".into()),
+        status: "PENDING_APPROVAL".to_string(),
+        snoozed_until: None,
+        created_at: Utc::now().to_rfc3339(),
+        decided_at: None,
+        executed_at: None,
+        verification_result_json: None,
+    };
+
+    guard
+        .insert_otto_proposal(&proposal)
+        .map_err(|e| format!("Failed inserting manual proposal: {}", e))?;
+    let _ = sync_runtime_snapshot(Some(&app), &guard, &runtime);
+    Ok(proposal)
 }
 
 // ============================================================================

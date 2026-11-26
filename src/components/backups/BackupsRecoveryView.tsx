@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener';
-import { BackupLedgerSummary, BackupRecord, DiscoveredApp, LocalBackupArchive, GfsTiersBreakdown, BackupScanResult, TerminalTab } from '../../lib/types';
+import { BackupLedgerSummary, BackupRecord, DiscoveredApp, LocalBackupArchive, GfsTiersBreakdown, BackupScanResult, OttoContextSeed, TerminalTab } from '../../lib/types';
+import { OttoIcon } from '../agent/OttoAvatar';
 import { formatLocalDate, formatLocalTime, formatLocalIsoDate, formatLocalDateTime } from '../../lib/formatters';
 import { CustomSelect } from '../ui/CustomSelect';
 import { ConfirmDangerModal } from '../ui/ConfirmDangerModal';
@@ -45,6 +46,7 @@ interface BackupsRecoveryViewProps {
   isInitialSyncComplete?: boolean;
   isIncidentDismissed?: boolean;
   onDismissIncident?: () => void;
+  onAskOtto?: (seed: OttoContextSeed) => void;
 }
 
 interface TablePaginationProps {
@@ -141,6 +143,7 @@ export function BackupsRecoveryView({
   isInitialSyncComplete = true,
   isIncidentDismissed = false,
   onDismissIncident,
+  onAskOtto,
 }: BackupsRecoveryViewProps) {
   // Filter only DietPi WSH applications backed by an operational SQLite database (exclude Cloudflare Pages & headless services)
   const dbApps = apps.filter(
@@ -451,6 +454,43 @@ export function BackupsRecoveryView({
                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
                     <span>Today&apos;s Snapshot Verified ({todayPip?.date}) • No Action Needed</span>
                   </span>
+                )}
+                {onAskOtto && (
+                  <button
+                    type="button"
+                    data-testid="backups-ask-otto-btn"
+                    onClick={() =>
+                      onAskOtto({
+                        kind: 'backup_failure',
+                        entityId: ledger?.last_run_timestamp || 'backups-dr-incident',
+                        originView: 'backups',
+                        title: isLastFailed
+                          ? 'Automated Database Backup Run Failed'
+                          : `Missed or Failed Daily Backup Run (${ledger?.failed_runs_7d}/${ledger?.runs_7d || 7})`,
+                        severity: isActionableNow ? 'CRITICAL' : 'MEDIUM',
+                        summary: isLastFailed
+                          ? 'Latest nightly GFS SQLite backup run failed.'
+                          : `Missed/failed days: ${missedOrFailedDays.map((d) => `${d.date}:${d.status}`).join(', ')}`,
+                        metadata: {
+                          lastRunStatus: ledger?.last_run_status,
+                          lastRunTimestamp: ledger?.last_run_timestamp,
+                          failedRuns7d: ledger?.failed_runs_7d,
+                          failedApps: (ledger?.latest_app_details || []).filter(
+                            (a) => a.status.toLowerCase() === 'failed'
+                          ),
+                          missedOrFailedDays,
+                        },
+                        starterPrompts: [
+                          'Diagnose this GFS SQLite Backup failure/SLA gap. Determine whether it was a workstation sleep/network miss or a remote SQLite/SSH backup defect, and advise the safest next step.',
+                          'Are any SQLite WAL files or local backup archives at risk right now?',
+                        ],
+                      })
+                    }
+                    className="btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5 whitespace-nowrap"
+                  >
+                    <OttoIcon state="IDLE" className="w-3.5 h-3.5" />
+                    <span>Ask Otto</span>
+                  </button>
                 )}
                 {onDismissIncident && (
                   <button

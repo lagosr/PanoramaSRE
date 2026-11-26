@@ -23,6 +23,7 @@ interface PriorityAttentionQueueProps {
   onAction: (action: HudIncidentAction) => void;
   onRunPenetrationAudit?: () => void;
   onAskOtto?: (seed: OttoContextSeed) => void;
+  onOpenOttoApprovals?: () => void;
 }
 
 const DOMAIN_ICONS: Record<HudIncidentDomain, React.ComponentType<{ className?: string }>> = {
@@ -42,6 +43,7 @@ export const PriorityAttentionQueue: React.FC<PriorityAttentionQueueProps> = ({
   onAction,
   onRunPenetrationAudit,
   onAskOtto,
+  onOpenOttoApprovals,
 }) => {
   const [isCollapsed, setIsCollapsed] = useState(false);
 
@@ -103,9 +105,19 @@ export const PriorityAttentionQueue: React.FC<PriorityAttentionQueueProps> = ({
             </span>
           )}
           {pendingAgentApprovalsCount > 0 && (
-            <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-[var(--color-brand-subtle)] text-[var(--color-brand-text)] border border-[var(--color-brand-ring)] tabular-nums whitespace-nowrap">
-              {pendingAgentApprovalsCount} L3 APPROVAL{pendingAgentApprovalsCount > 1 ? 'S' : ''}
-            </span>
+            onOpenOttoApprovals ? (
+              <button
+                type="button"
+                onClick={onOpenOttoApprovals}
+                className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-[var(--color-brand-subtle)] text-[var(--color-brand-text)] border border-[var(--color-brand-ring)] hover:opacity-90 tabular-nums whitespace-nowrap cursor-pointer"
+              >
+                {pendingAgentApprovalsCount} L3 APPROVAL{pendingAgentApprovalsCount > 1 ? 'S' : ''}
+              </button>
+            ) : (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-[var(--color-brand-subtle)] text-[var(--color-brand-text)] border border-[var(--color-brand-ring)] tabular-nums whitespace-nowrap">
+                {pendingAgentApprovalsCount} L3 APPROVAL{pendingAgentApprovalsCount > 1 ? 'S' : ''}
+              </span>
+            )
           )}
         </div>
 

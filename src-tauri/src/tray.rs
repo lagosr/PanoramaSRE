@@ -75,11 +75,13 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                             },
                         ) {
                             let pending = guard.count_pending_otto_approvals().unwrap_or(0);
+                            let active_soaks = guard.count_active_otto_soaks().unwrap_or(0);
                             runtime_state.sync_from_db_state(
                                 Some(app),
                                 next_state.kill_switch_active,
                                 &next_state.circuit_breaker_state,
                                 pending,
+                                active_soaks,
                                 next_state.daily_t1_calls,
                                 next_state.daily_t2_calls,
                                 next_state.dropped_noise_24h_count,

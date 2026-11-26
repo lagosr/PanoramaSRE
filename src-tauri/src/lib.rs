@@ -25,6 +25,7 @@ pub mod notifications;
 pub mod otto_db;
 pub mod otto_policy;
 pub mod otto_runtime;
+pub mod otto_soak;
 pub mod pushover;
 pub mod scheduler;
 pub mod scrubber;
@@ -110,11 +111,13 @@ pub fn run() {
             let _ = guard.log_action("SYSTEM", "INFO", "PanoramaSRE Control Plane Initialized", None);
             if let Ok(otto_state) = guard.get_otto_state() {
                 let pending = guard.count_pending_otto_approvals().unwrap_or(0);
+                let active_soaks = guard.count_active_otto_soaks().unwrap_or(0);
                 otto_runtime.sync_from_db_state(
                     None,
                     otto_state.kill_switch_active,
                     &otto_state.circuit_breaker_state,
                     pending,
+                    active_soaks,
                     otto_state.daily_t1_calls,
                     otto_state.daily_t2_calls,
                     otto_state.dropped_noise_24h_count,
@@ -240,7 +243,13 @@ pub fn run() {
             delete_otto_prompt,
             get_suricata_gatekeeper_status,
             test_sre_agent_gatekeeper_connection,
-            run_otto_log_delta_probe
+            run_otto_log_delta_probe,
+            get_otto_soak_sessions,
+            start_otto_soak_session,
+            evaluate_otto_soak_tick,
+            cancel_otto_soak_session,
+            evaluate_otto_steady_state,
+            queue_otto_manual_proposal
         ])
         .setup(move |app| {
             // Setup System Tray

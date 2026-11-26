@@ -277,7 +277,7 @@ describe('Otto AI SRE — Phase 1 UI, Avatar, Global Pill & Console Isolation', 
       />
     );
     expect(approvalsHtml).toContain('DETECTION_DEFECT_SUSPECTED');
-    expect(approvalsHtml).toContain('Approve (Dry-Run)');
+    expect(approvalsHtml).toContain('Approve &amp; Execute');
   });
 
   it('DietPiHardwareNetworkCard displays live Suricata SSH SYN budget and PriorityAttentionQueue renders Ask Otto CTA', () => {

@@ -16,7 +16,8 @@ import {
   Terminal,
   Square,
 } from 'lucide-react';
-import { SmokeTestRun, TerminalTab } from '../../lib/types';
+import { OttoContextSeed, SmokeTestRun, TerminalTab } from '../../lib/types';
+import { OttoIcon } from '../agent/OttoAvatar';
 import { parseUtcDate } from '../../lib/formatters';
 import { filterTabsForScope, getTabFinishedDetails } from '../../lib/stream-utils';
 
@@ -33,6 +34,7 @@ interface SmokeTestsViewProps {
   onClearTab?: (tabId: string) => void;
   scheduleSlots?: string[];
   lastError?: string | null;
+  onAskOtto?: (seed: OttoContextSeed) => void;
 }
 
 function formatRunTimestamp(iso: string): string {
@@ -338,6 +340,7 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
   onAbortJob,
   scheduleSlots = ['08:00', '13:00', '17:00', '22:00'],
   lastError,
+  onAskOtto,
 }) => {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [manualTabOverrideId, setManualTabOverrideId] = useState<string | null>(null);
@@ -551,8 +554,33 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
       </div>
 
       {lastError && (
-        <div className="rounded-2xl bg-rose-500/10 border border-rose-500/30 px-4 py-3 text-xs text-rose-700 dark:text-rose-200">
-          <span className="font-semibold">Smoke Runner Error:</span> {lastError}
+        <div className="rounded-2xl bg-rose-500/10 border border-rose-500/30 px-4 py-3 text-xs text-rose-700 dark:text-rose-200 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <span className="font-semibold">Smoke Runner Error:</span> {lastError}
+          </div>
+          {onAskOtto && (
+            <button
+              type="button"
+              onClick={() =>
+                onAskOtto({
+                  kind: 'smoke_failure',
+                  entityId: latestRun?.id || 'smoke-runner-error',
+                  originView: 'smoke',
+                  title: 'Production Smoke Runner Error',
+                  severity: 'HIGH',
+                  summary: lastError,
+                  metadata: { lastError, latestRunId: latestRun?.id ?? null },
+                  starterPrompts: [
+                    'Diagnose this Production Smoke Test runner failure. Is this a workstation/script issue, network posture issue, or a live WSH regression?',
+                  ],
+                })
+              }
+              className="btn-secondary text-xs py-1 px-2.5 flex items-center gap-1.5 whitespace-nowrap"
+            >
+              <OttoIcon state="IDLE" className="w-3.5 h-3.5" />
+              <span>Ask Otto</span>
+            </button>
+          )}
         </div>
       )}
 
@@ -714,6 +742,39 @@ export const SmokeTestsView: React.FC<SmokeTestsViewProps> = ({
               </h2>
             </div>
             <div className="flex flex-wrap items-center gap-1.5">
+              {onAskOtto && selectedRun && selectedRun.failed > 0 && (
+                <button
+                  type="button"
+                  data-testid="smoke-ask-otto-btn"
+                  onClick={() => {
+                    const failed = selectedRun.results.filter((r) => !r.passed);
+                    onAskOtto({
+                      kind: 'smoke_failure',
+                      entityId: selectedRun.id,
+                      originView: 'smoke',
+                      title: `Smoke Run Failure (${selectedRun.failed}/${selectedRun.total} failed)`,
+                      severity: 'HIGH',
+                      summary: failed.map((f) => `${f.name}: ${f.detail}`).slice(0, 4).join(' | '),
+                      metadata: {
+                        runId: selectedRun.id,
+                        timestamp: selectedRun.timestamp,
+                        triggeredBy: selectedRun.triggeredBy,
+                        failedCount: selectedRun.failed,
+                        totalCount: selectedRun.total,
+                        failedChecks: failed,
+                      },
+                      starterPrompts: [
+                        `Investigate the ${selectedRun.failed} failed Production Smoke Test assertion(s) in run ${selectedRun.id}. Identify whether this is a real app regression, a test/harness defect, or a transient edge blip, and suggest the safest remediation.`,
+                        'Should we re-run the smoke suite or inspect container health first?',
+                      ],
+                    });
+                  }}
+                  className="btn-tonal text-xs py-1 px-2.5 flex items-center gap-1.5 whitespace-nowrap mr-1"
+                >
+                  <OttoIcon state="IDLE" className="w-3.5 h-3.5" />
+                  <span>Ask Otto</span>
+                </button>
+              )}
               {categories.map((cat) => (
                 <button
                   key={cat}

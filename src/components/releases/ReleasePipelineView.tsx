@@ -6,6 +6,9 @@ import {
   CloudflareDeployment,
   DiscoveredApp,
   NetworkPosture,
+  OttoContextSeed,
+  OttoSoakSample,
+  OttoSoakSessionRow,
   TerminalTab,
   UnifiSiemEnvConfigDto,
   WshSnapshot,
@@ -46,6 +49,7 @@ import { ToggleSwitch } from '@lagosr/panorama-ui-kit';
 import { formatLocalDateTime, formatRelativeTime } from '../../lib/formatters';
 import { ReleaseCompositionDrawer } from '../hud/ReleaseCompositionDrawer';
 import { BlastRadiusBadge } from '../ui/BlastRadiusBadge';
+import { OttoIcon } from '../agent/OttoAvatar';
 import {
   resolveActiveBuildTelemetry,
   evaluateBuildHealthBadge,
@@ -93,6 +97,10 @@ interface ReleasePipelineViewProps {
     action: 'verify_local' | 'test' | 'status' | 'stop'
   ) => void;
   onReapplyHardening?: () => void;
+  ottoSoaks?: OttoSoakSessionRow[];
+  onStartManualSoak?: (app: DiscoveredApp) => void;
+  onCancelSoak?: (soakId: string) => void;
+  onAskOtto?: (seed: OttoContextSeed) => void;
 }
 
 export function ReleasePipelineView({
@@ -120,6 +128,10 @@ export function ReleasePipelineView({
   networkPosture = 'LAN_DIRECT',
   onTriggerServiceAction,
   onReapplyHardening,
+  ottoSoaks = [],
+  onStartManualSoak,
+  onCancelSoak,
+  onAskOtto,
 }: ReleasePipelineViewProps) {
   const [localSelectedAppSlug, setLocalSelectedAppSlug] = useState<string>(apps[0]?.manifest.slug || '');
   const [hasUserSelectedApp, setHasUserSelectedApp] = useState<boolean>(false);
@@ -721,6 +733,39 @@ export function ReleasePipelineView({
           </div>
 
           <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+            {onAskOtto && (
+              <button
+                type="button"
+                onClick={() =>
+                  onAskOtto({
+                    kind: 'smoke_failure',
+                    entityId: batchSmokeFailureReport.smokeRunId || 'batch-smoke-failure',
+                    originView: 'releases',
+                    title: 'Batch Smoke Gate Failure',
+                    severity: 'HIGH',
+                    summary: batchSmokeFailureReport.attribution.summaryReason,
+                    metadata: {
+                      failedChecks: batchSmokeFailureReport.failedChecks.slice(0, 10),
+                      blockedByDbMigrationSlugs:
+                        batchSmokeFailureReport.attribution.blockedByDbMigrationSlugs,
+                      deployedApps: batchSmokeFailureReport.deployedApps.map((d) => ({
+                        slug: d.slug,
+                        preBatchTag: d.preBatchTag,
+                        hasDbMigration: d.hasDbMigration,
+                      })),
+                    },
+                    starterPrompts: [
+                      'Analyze this Batch Smoke Gate failure. Which deployed app caused the regression, is DB_MIGRATION blocking safe N-3 rollback, and what is the lowest-risk recovery step?',
+                      'Could this smoke failure be an external or harness glitch rather than an app regression?',
+                    ],
+                  })
+                }
+                className="btn-secondary text-xs flex items-center gap-1.5"
+              >
+                <OttoIcon state="IDLE" className="w-3.5 h-3.5" />
+                <span>Ask Otto</span>
+              </button>
+            )}
             {onOpenSmokeTests && (
               <button
                 type="button"
@@ -838,6 +883,7 @@ export function ReleasePipelineView({
           isInitialSyncComplete={isInitialSyncComplete}
           networkPosture={networkPosture}
           isDeployingAll={isDeployingAll}
+          ottoSoaks={ottoSoaks}
         />
 
       {selectedApp && (
@@ -1055,6 +1101,153 @@ export function ReleasePipelineView({
               onOpenTelemetry={onOpenTelemetry}
             />
           )}
+
+          {/* Phase 2: Otto 15-Minute Post-Deploy Soak Monitor Banner (wsh-docker & wsh-docker-service) */}
+          {!isEdgeApp && (() => {
+            const matchingSoaks = ottoSoaks.filter(
+              (s) => s.appSlug.toLowerCase() === selectedApp.manifest.slug.toLowerCase()
+            );
+            const activeSoak = matchingSoaks.find((s) => s.status === 'SOAKING') ?? null;
+            const latestSoak = activeSoak ?? matchingSoaks[0] ?? null;
+            const parsedSamples: OttoSoakSample[] = (() => {
+              if (!latestSoak) return [];
+              try {
+                const arr = JSON.parse(latestSoak.samplesJson);
+                return Array.isArray(arr) ? arr : [];
+              } catch {
+                return [];
+              }
+            })();
+            const healthySamples = parsedSamples.filter((s) => s.healthy).length;
+            const minsLeft = activeSoak
+              ? Math.max(
+                  0,
+                  Math.ceil((new Date(activeSoak.endsAt).getTime() - Date.now()) / 60000)
+                )
+              : 0;
+
+            return (
+              <div
+                data-testid="release-soak-banner"
+                className={`rounded-2xl border bg-white dark:bg-slate-900 px-4 py-3 shadow-sm flex flex-wrap items-center justify-between gap-3 ${
+                  activeSoak
+                    ? 'border-sky-500/50 ring-1 ring-sky-500/20'
+                    : 'border-slate-200 dark:border-slate-800'
+                }`}
+              >
+                <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                  <OttoIcon
+                    state={activeSoak ? 'VERIFYING' : 'IDLE'}
+                    className="w-5 h-5 shrink-0"
+                  />
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs font-bold text-slate-900 dark:text-slate-100">
+                        Otto 15m Post-Deploy Soak
+                      </span>
+                      {activeSoak ? (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-sky-500/15 text-sky-700 dark:text-sky-300 border border-sky-500/40 tabular-nums">
+                          SOAKING · {minsLeft}m left ({healthySamples}/{parsedSamples.length} healthy)
+                        </span>
+                      ) : latestSoak ? (
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold border ${
+                            latestSoak.status === 'HEALTHY_VERIFIED'
+                              ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/35'
+                              : latestSoak.status === 'ROLLED_BACK' ||
+                                latestSoak.status === 'ESCALATED_L3'
+                              ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/35'
+                              : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+                          }`}
+                        >
+                          LAST SOAK: {latestSoak.status}
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700">
+                          AUTO-ARMED ON DEPLOY
+                        </span>
+                      )}
+                      {latestSoak && (
+                        <span
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold border ${
+                            latestSoak.hasDbMigration
+                              ? 'bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/30'
+                              : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
+                          }`}
+                        >
+                          {latestSoak.hasDbMigration
+                            ? 'DB_MIGRATION · L3 Rollback Only'
+                            : 'DB-Safe N-3 Eligible'}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-0.5 truncate">
+                      {activeSoak
+                        ? `Monitoring release ${activeSoak.releaseId} (${activeSoak.hostingTarget}) · Prev tag: ${activeSoak.previousImageTag || 'none'}`
+                        : `Watches ${selectedApp.manifest.displayName} for 15m after every WSH deploy with DB_MIGRATION & cross-app cascade guards.`}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  {activeSoak && onCancelSoak && (
+                    <button
+                      type="button"
+                      onClick={() => onCancelSoak(activeSoak.id)}
+                      className="btn-ghost text-xs py-1.5 px-2.5 whitespace-nowrap"
+                    >
+                      Cancel Soak
+                    </button>
+                  )}
+                  {!activeSoak && onStartManualSoak && (
+                    <button
+                      type="button"
+                      onClick={() => onStartManualSoak(selectedApp)}
+                      className="btn-secondary text-xs py-1.5 px-3 whitespace-nowrap"
+                      title="Start a 15-minute Otto post-deploy soak monitor window for this app now"
+                    >
+                      Start 15m Soak
+                    </button>
+                  )}
+                  {onAskOtto && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onAskOtto({
+                          kind: 'soak_session',
+                          entityId: activeSoak?.id || `release-${selectedApp.manifest.slug}`,
+                          originView: 'releases',
+                          title: `Release & Soak: ${selectedApp.manifest.displayName}`,
+                          severity: isHealthy ? 'LOW' : 'HIGH',
+                          summary: activeSoak
+                            ? `Active 15m soak (${minsLeft}m left, ${healthySamples}/${parsedSamples.length} healthy) for release ${activeSoak.releaseId}`
+                            : `Release health=${selectedApp.health?.status || 'unknown'}, provenance=${selectedApp.provenanceState || 'UNKNOWN'}`,
+                          metadata: {
+                            appSlug: selectedApp.manifest.slug,
+                            hostingTarget: selectedApp.manifest.hostingTarget || 'wsh-docker',
+                            prodRelease,
+                            provenanceState: selectedApp.provenanceState,
+                            aheadCount: selectedAheadCount,
+                            blastRadiusBadges: comp?.blast_radius_badges || [],
+                            activeSoak,
+                            latestSoak,
+                          },
+                          starterPrompts: [
+                            `Review the deployment health, git blast-radius badges, and 15m soak posture for ${selectedApp.manifest.displayName} (${selectedApp.manifest.slug}). Is it safe to deploy or roll back?`,
+                            `Does ${selectedApp.manifest.displayName} carry any DB_MIGRATION risk that would prevent DB-safe N-3 rollback?`,
+                          ],
+                        })
+                      }
+                      className="btn-tonal text-xs py-1.5 px-3 flex items-center gap-1.5 whitespace-nowrap"
+                    >
+                      <OttoIcon state="IDLE" className="w-3.5 h-3.5" />
+                      <span>Ask Otto</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Position 5: Decoupled Deployment Stage Stepper (Output Console Dock handles raw logs) */}
           {(() => {

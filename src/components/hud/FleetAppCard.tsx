@@ -3,12 +3,14 @@ import {
   AppBackupDetail,
   OptInComplianceSnapshot,
   NetworkPosture,
+  OttoContextSeed,
   getAppOperationalHealth,
   isAppCritical,
   isAppDeployCandidate,
 } from '../../lib/types';
 import { ProvenanceBadge } from '../ui/ProvenanceBadge';
 import { BlastRadiusBadge } from '../ui/BlastRadiusBadge';
+import { OttoIcon } from '../agent/OttoAvatar';
 import { AlertCircle, HardDriveDownload, XCircle, Globe, MessageSquare, Server, Rocket } from 'lucide-react';
 
 interface FleetAppCardProps {
@@ -22,6 +24,7 @@ interface FleetAppCardProps {
   onInspectComposition: (app: DiscoveredApp) => void;
   onNavigateToOptIns?: () => void;
   onNavigateToRelease?: (slug: string) => void;
+  onAskOtto?: (seed: OttoContextSeed) => void;
 }
 
 export function FleetAppCard({
@@ -35,6 +38,7 @@ export function FleetAppCard({
   onInspectComposition,
   onNavigateToOptIns,
   onNavigateToRelease,
+  onAskOtto,
 }: FleetAppCardProps) {
   const isEdgePages = app.manifest.hostingTarget === 'cloudflare-pages';
   const isWshService = app.manifest.hostingTarget === 'wsh-docker-service';
@@ -335,6 +339,35 @@ export function FleetAppCard({
         >
           Inspect Drift
         </button>
+        {(isCritical || isBackupFailed) && onAskOtto && (
+          <button
+            type="button"
+            onClick={() =>
+              onAskOtto({
+                kind: 'hud_incident',
+                entityId: `app:${app.manifest.slug}`,
+                originView: 'hud',
+                title: `${app.manifest.displayName} ${isCritical ? 'Unhealthy' : 'Backup Failed'}`,
+                severity: 'CRITICAL',
+                summary: `App ${app.manifest.displayName} (${app.manifest.slug}, port ${app.manifest.port}) reports health=${app.health?.status || 'offline'}, backup=${backupStatus?.status || 'unknown'}, release=${release?.release_id || 'unknown'}.`,
+                metadata: {
+                  appSlug: app.manifest.slug,
+                  hostingTarget: app.manifest.hostingTarget || 'wsh-docker',
+                  releaseId: release?.release_id,
+                },
+                starterPrompts: [
+                  `Diagnose why ${app.manifest.displayName} is unhealthy and check recent deploy telemetry & system logs.`,
+                  `Is it safe to restart ${app.manifest.displayName} or roll back to its previous N-3 tag?`,
+                ],
+              })
+            }
+            className="btn-tonal py-1.5 px-2.5 text-xs flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+            title={`Ask Otto to diagnose ${app.manifest.displayName}`}
+          >
+            <OttoIcon className="w-3.5 h-3.5" />
+            <span>Ask Otto</span>
+          </button>
+        )}
         {isWshService && onNavigateToRelease ? (
           <button
             type="button"

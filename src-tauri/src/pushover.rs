@@ -271,6 +271,12 @@ pub struct PushoverCategoryPrefs {
     pub opt_in_events: bool,
     #[serde(default)]
     pub recovery_alerts: bool,
+    #[serde(default = "default_true")]
+    pub otto_l2_auto_actions: bool,
+    #[serde(default = "default_true")]
+    pub otto_l3_approvals: bool,
+    #[serde(default = "default_true")]
+    pub otto_circuit_breaker: bool,
 }
 
 impl Default for PushoverCategoryPrefs {
@@ -283,6 +289,9 @@ impl Default for PushoverCategoryPrefs {
             backup_failures: true,
             opt_in_events: false,
             recovery_alerts: false,
+            otto_l2_auto_actions: true,
+            otto_l3_approvals: true,
+            otto_circuit_breaker: true,
         }
     }
 }
@@ -1642,6 +1651,108 @@ pub fn plan_pushover_batches_from_sync(
     }
 
     batches
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OttoPushoverCategory {
+    L2AutoAction,
+    L3ApprovalRequired,
+    CircuitBreakerOrCascade,
+}
+
+/// Dispatches an Otto AI SRE notification through the existing DPAPI Pushover client,
+/// strictly honoring `prefs.enabled`, Trusted Home/VPN gate, and Otto category toggles.
+pub async fn maybe_notify_otto_event(
+    db: &Arc<Mutex<SreDatabase>>,
+    category: OttoPushoverCategory,
+    title: &str,
+    heading: &str,
+    items: &[FormattedBulletItem],
+) {
+    if items.is_empty() {
+        return;
+    }
+
+    let (prefs, creds_opt) = {
+        let Ok(guard) = db.lock() else {
+            return;
+        };
+        let p = load_preferences(&guard);
+        let c = resolve_pushover_credentials(&guard);
+        (p, c)
+    };
+
+    if !prefs.enabled {
+        return;
+    }
+    let category_enabled = match category {
+        OttoPushoverCategory::L2AutoAction => prefs.categories.otto_l2_auto_actions,
+        OttoPushoverCategory::L3ApprovalRequired => prefs.categories.otto_l3_approvals,
+        OttoPushoverCategory::CircuitBreakerOrCascade => prefs.categories.otto_circuit_breaker,
+    };
+    if !category_enabled {
+        return;
+    }
+
+    let Some(creds) = creds_opt else {
+        return;
+    };
+
+    let verdict = verify_trusted_home_network(&prefs.expected_wsh_ip, &prefs.canary_host).await;
+    if !verdict.is_trusted {
+        return;
+    }
+
+    let priority = match category {
+        OttoPushoverCategory::L2AutoAction => -1,
+        OttoPushoverCategory::L3ApprovalRequired => prefs.failure_priority.clamp(0, 1),
+        OttoPushoverCategory::CircuitBreakerOrCascade => 1,
+    };
+    let html = build_scannable_html_message(
+        heading,
+        items,
+        Some("Review trace & approval card in PanoramaSRE → Otto AI SRE"),
+        MAX_SCANNABLE_MESSAGE_CHARS,
+    );
+    let device_opt = if prefs.device.is_empty() {
+        None
+    } else {
+        Some(prefs.device.as_str())
+    };
+
+    match dispatch_pushover_message(
+        &creds,
+        title,
+        &html,
+        priority,
+        Some(PANORAMA_SRE_PUSHOVER_SOUND),
+        device_opt,
+        None,
+        None,
+    )
+    .await
+    {
+        Ok(receipt) => {
+            if let Ok(guard) = db.lock() {
+                let _ = guard.log_action(
+                    "AGENT_AUDIT",
+                    "INFO",
+                    &format!("Sent Otto Pushover alert: {}", title),
+                    Some(&format!("request={}", receipt.request_id)),
+                );
+            }
+        }
+        Err(err) => {
+            if let Ok(guard) = db.lock() {
+                let _ = guard.log_action(
+                    "AGENT_AUDIT",
+                    "WARN",
+                    &format!("Otto Pushover dispatch failed: {}", err),
+                    None,
+                );
+            }
+        }
+    }
 }
 
 /// Optional hook invoked from `optin_ops.rs` when new Parakith D1 SMS opt-in records arrive.

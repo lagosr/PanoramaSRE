@@ -1000,6 +1000,9 @@ export interface PushoverCategoryPrefs {
   backupFailures: boolean;
   optInEvents: boolean;
   recoveryAlerts: boolean;
+  ottoL2AutoActions?: boolean;
+  ottoL3Approvals?: boolean;
+  ottoCircuitBreaker?: boolean;
 }
 
 export interface PushoverPreferences {
@@ -1764,6 +1767,11 @@ export interface OttoContextSeed {
     | 'hud_incident'
     | 'wsh_invariant'
     | 'app_release'
+    | 'soak_session'
+    | 'smoke_failure'
+    | 'telemetry_alert'
+    | 'dietpi_host'
+    | 'backup_failure'
     | 'general';
   entityId: string;
   originView: NavSectionId;
@@ -1772,6 +1780,47 @@ export interface OttoContextSeed {
   summary: string;
   metadata?: Record<string, unknown>;
   starterPrompts: string[];
+}
+
+export interface OttoSoakSample {
+  timestamp: string;
+  healthy: boolean;
+  latencyMs?: number | null;
+  containerState?: string | null;
+  detail: string;
+}
+
+export interface OttoSoakSessionRow {
+  id: string;
+  appSlug: string;
+  hostingTarget: string;
+  releaseId: string;
+  previousImageTag?: string | null;
+  hasDbMigration: boolean;
+  startedAt: string;
+  endsAt: string;
+  status:
+    | 'SOAKING'
+    | 'HEALTHY_VERIFIED'
+    | 'DEGRADED_SHADOW'
+    | 'ESCALATED_L3'
+    | 'ROLLING_BACK'
+    | 'RECOVERING'
+    | 'ROLLED_BACK'
+    | 'CANCELLED'
+    | 'SUPERSEDED'
+    | string;
+  samplesJson: string;
+  traceRunId?: string | null;
+  updatedAt: string;
+}
+
+export interface OttoSteadyStateResult {
+  traceRunId: string;
+  evaluatedChecks: number;
+  proposalsCreated: string[];
+  actionsExecuted: string[];
+  summary: string;
 }
 
 export interface SendOttoChatMessageResult {

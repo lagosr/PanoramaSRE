@@ -16,6 +16,7 @@ import {
 import {
   DiscoveredApp,
   NetworkPosture,
+  OttoSoakSessionRow,
   TerminalTab,
   getAppOperationalHealth,
   isAppCritical,
@@ -41,6 +42,7 @@ interface ReleaseFleetRailProps {
   isInitialSyncComplete: boolean;
   networkPosture: NetworkPosture;
   isDeployingAll?: boolean;
+  ottoSoaks?: OttoSoakSessionRow[];
 }
 
 export const ReleaseFleetRail: React.FC<ReleaseFleetRailProps> = ({
@@ -58,6 +60,7 @@ export const ReleaseFleetRail: React.FC<ReleaseFleetRailProps> = ({
   isInitialSyncComplete,
   networkPosture,
   isDeployingAll = false,
+  ottoSoaks = [],
 }) => {
   const [filterMode, setFilterMode] = useState<'all' | 'behind'>('all');
 
@@ -172,6 +175,11 @@ export const ReleaseFleetRail: React.FC<ReleaseFleetRailProps> = ({
               app.manifest.containerName || app.manifest.slug || app.manifest.appId;
             const telResolved = resolveActiveBuildTelemetry(app.health?.release, comp);
             const buildBadge = evaluateBuildHealthBadge(telResolved.telemetry, appIdent);
+            const activeSoak = ottoSoaks.find(
+              (s) =>
+                s.status === 'SOAKING' &&
+                s.appSlug.toLowerCase() === app.manifest.slug.toLowerCase()
+            );
 
             return (
               <div
@@ -245,6 +253,15 @@ export const ReleaseFleetRail: React.FC<ReleaseFleetRailProps> = ({
                         {isService && (
                           <span className="px-1 py-0.2 rounded text-[9px] font-mono font-bold bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 shrink-0">
                             SVC
+                          </span>
+                        )}
+                        {activeSoak && (
+                          <span
+                            data-testid={`rail-soak-badge-${app.manifest.slug}`}
+                            className="px-1 py-0.2 rounded text-[9px] font-mono font-bold bg-sky-500/15 text-sky-700 dark:text-sky-300 border border-sky-500/40 shrink-0 tabular-nums"
+                            title={`Otto 15m Post-Deploy Soak active until ${activeSoak.endsAt}`}
+                          >
+                            SOAK
                           </span>
                         )}
                       </div>

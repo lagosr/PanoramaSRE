@@ -278,6 +278,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       backupFailures: true,
       optInEvents: false,
       recoveryAlerts: false,
+      ottoL2AutoActions: true,
+      ottoL3Approvals: true,
+      ottoCircuitBreaker: true,
     },
   });
   const [isLoadingPushover, setIsLoadingPushover] = useState<boolean>(false);
@@ -1864,26 +1867,57 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
               </div>
 
-              {/* Reserved Autonomous Agent Alert Channels */}
-              <div className="pt-2 border-t border-slate-200 dark:border-slate-800 space-y-2">
-                <div className="text-[11px] font-mono font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-                  Autonomous AI Agent Channels (Standby)
+              {/* Otto Autonomous AI Agent Alert Channels (Active in Phase 2) */}
+              <div className="pt-2 border-t border-slate-200 dark:border-slate-800 space-y-2.5">
+                <div className="text-[11px] font-mono font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
+                  Otto AI SRE Notification Channels
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 text-xs">
-                  {[
-                    { title: 'L2 Auto-Actions Digest', desc: 'Quiet confirmation when autonomous playbooks remediate drift.' },
-                    { title: 'L3 Approvals Required', desc: 'High-priority mobile notification for operator sign-off.' },
-                    { title: 'Attack Onset Escalation', desc: 'Immediate bypass alert if multi-vector attack circuit breaker trips.' },
-                  ].map((ch) => (
+                  {(
+                    [
+                      {
+                        key: 'ottoL2AutoActions',
+                        title: 'L2 Auto-Actions Digest',
+                        desc: 'Quiet (-1) confirmation when Otto executes & verifies reversible L2 self-healing.',
+                      },
+                      {
+                        key: 'ottoL3Approvals',
+                        title: 'L3 Approvals Required',
+                        desc: 'Desktop review alert when Otto escalates a soak regression or guarded remediation.',
+                      },
+                      {
+                        key: 'ottoCircuitBreaker',
+                        title: 'Circuit Breaker & Cascade',
+                        desc: 'Immediate high-priority alert if Otto circuit breaker trips or multi-app cascade triggers.',
+                      },
+                    ] as const
+                  ).map((ch) => (
                     <div
-                      key={ch.title}
-                      className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-dashed border-slate-300 dark:border-slate-800 space-y-1"
+                      key={ch.key}
+                      className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 flex items-start justify-between gap-3"
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="font-semibold text-slate-800 dark:text-slate-200">{ch.title}</span>
-                        <StatusBadge label="Standby" variant="neutral" />
+                      <div className="space-y-0.5 min-w-0">
+                        <div className="font-semibold text-slate-800 dark:text-slate-200">
+                          {ch.title}
+                        </div>
+                        <div className="text-[11px] text-slate-600 dark:text-slate-400">
+                          {ch.desc}
+                        </div>
                       </div>
-                      <div className="text-[11px] text-slate-500 dark:text-slate-400">{ch.desc}</div>
+                      <ToggleSwitch
+                        size="sm"
+                        checked={pushoverPrefs.categories[ch.key] ?? true}
+                        onChange={(val) =>
+                          setPushoverPrefs((prev) => ({
+                            ...prev,
+                            categories: {
+                              ...prev.categories,
+                              [ch.key]: val,
+                            },
+                          }))
+                        }
+                        activeColor="brand"
+                      />
                     </div>
                   ))}
                 </div>

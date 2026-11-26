@@ -13,6 +13,7 @@ import {
   OptInComplianceSnapshot,
   OttoContextSeed,
   OttoLifecycleSnapshot,
+  OttoSoakSessionRow,
   QuarantinedAccessEmailRow,
   SecurityPostureInvariant,
   SmokeTestRun,
@@ -89,7 +90,9 @@ interface CommandCenterViewProps {
   onAbortJob?: (id: string) => void;
   onClearTab?: (id: string) => void;
   ottoLifecycle?: OttoLifecycleSnapshot | null;
+  ottoSoaks?: OttoSoakSessionRow[];
   onOpenOtto?: () => void;
+  onOpenOttoApprovals?: () => void;
   onAskOtto?: (seed: OttoContextSeed) => void;
 }
 
@@ -137,7 +140,9 @@ export function CommandCenterView({
   isDeployingAll = false,
   onTriggerDeployAll,
   ottoLifecycle = null,
+  ottoSoaks = [],
   onOpenOtto,
+  onOpenOttoApprovals,
   onAskOtto,
 }: CommandCenterViewProps) {
   const [selectedApp, setSelectedApp] = useState<DiscoveredApp | null>(null);
@@ -370,22 +375,40 @@ export function CommandCenterView({
         onAction={handleIncidentAction}
         onRunPenetrationAudit={onRunPenetrationAudit}
         onAskOtto={onAskOtto}
+        onOpenOttoApprovals={onOpenOttoApprovals ?? onOpenOtto}
       />
 
       {/* Zone 2: Symmetric 6-Domain Executive System Posture Scorecard */}
-      <ExecutiveScorecardStrip
-        cards={scorecardCards}
-        onNavigate={handleScorecardNavigate}
-        agentRibbon={
-          ottoLifecycle && onOpenOtto
-            ? {
-                modeLabel: ottoLifecycle.phaseLabel,
-                detail: ottoLifecycle.summary,
-                onOpenAgent: onOpenOtto,
-              }
-            : null
-        }
-      />
+      {(() => {
+        const activeSoaks = ottoSoaks.filter((s) => s.status === 'SOAKING');
+        const firstSoak = activeSoaks[0];
+        const soakMinsLeft = firstSoak
+          ? Math.max(1, Math.ceil((Date.parse(firstSoak.endsAt) - Date.now()) / 60000))
+          : 0;
+        const ribbonModeLabel =
+          activeSoaks.length > 0
+            ? `SOAKING ${soakMinsLeft}m · ${firstSoak.appSlug.toUpperCase()}`
+            : ottoLifecycle?.phaseLabel || 'Otto: Idle';
+        const ribbonDetail =
+          activeSoaks.length > 0
+            ? `Monitoring ${activeSoaks.length} post-deploy soak window${activeSoaks.length === 1 ? '' : 's'} (${firstSoak.releaseId}${firstSoak.hasDbMigration ? ' · DB_MIGRATION L3-only' : ' · DB-Safe N-3 ready'})`
+            : ottoLifecycle?.summary || '';
+        return (
+          <ExecutiveScorecardStrip
+            cards={scorecardCards}
+            onNavigate={handleScorecardNavigate}
+            agentRibbon={
+              (ottoLifecycle || activeSoaks.length > 0) && onOpenOtto
+                ? {
+                    modeLabel: ribbonModeLabel,
+                    detail: ribbonDetail,
+                    onOpenAgent: onOpenOtto,
+                  }
+                : null
+            }
+          />
+        );
+      })()}
 
       {/* Zone 3: Panorama Suite Fleet Matrix (Cards | Compact Table Toggle + Batch Deploy) */}
       <section aria-label="Panorama Suite Applications" className="space-y-4">
@@ -486,6 +509,20 @@ export function CommandCenterView({
                   b.app_name.toLowerCase() === app.manifest.appId.toLowerCase() ||
                   b.app_name.toLowerCase() === app.manifest.slug.toLowerCase()
               );
+              const activeSoak = ottoSoaks.find(
+                (s) =>
+                  s.status === 'SOAKING' &&
+                  s.appSlug.toLowerCase() === app.manifest.slug.toLowerCase()
+              );
+              const soakBadge = activeSoak
+                ? {
+                    kind: 'soaking' as const,
+                    label: `SOAKING ${Math.max(
+                      1,
+                      Math.ceil((Date.parse(activeSoak.endsAt) - Date.now()) / 60000)
+                    )}m`,
+                  }
+                : null;
 
               return (
                 <FleetAppCard
@@ -497,10 +534,12 @@ export function CommandCenterView({
                   }
                   isInitialSyncComplete={isInitialSyncComplete}
                   networkPosture={networkPosture}
+                  agentBadge={soakBadge}
                   onOpenApp={handleOpenApp}
                   onInspectComposition={handleInspectComposition}
                   onNavigateToOptIns={onNavigateToOptIns}
                   onNavigateToRelease={onNavigateToRelease}
+                  onAskOtto={onAskOtto}
                 />
               );
             })}

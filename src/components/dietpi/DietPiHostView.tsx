@@ -4,8 +4,10 @@ import {
   TerminalTab,
   DiscoveredApp,
   FleetCronAuditSummary,
+  OttoContextSeed,
   SuricataGatekeeperStatusDto,
 } from '../../lib/types';
+import { OttoIcon } from '../agent/OttoAvatar';
 import { RefreshCw, Server, Terminal, ShieldAlert, Cpu, Clock, Network } from 'lucide-react';
 import { SegmentedControl } from '@lagosr/panorama-ui-kit';
 import { buildRemoteSshCommand } from '../../lib/script-adapters';
@@ -36,6 +38,7 @@ interface DietPiHostViewProps {
   onClearTab?: (id: string) => void;
   isRebooting?: boolean;
   suricataStatus?: SuricataGatekeeperStatusDto | null;
+  onAskOtto?: (seed: OttoContextSeed) => void;
 }
 
 export function DietPiHostView({
@@ -54,6 +57,7 @@ export function DietPiHostView({
   onNavigateToHardening,
   isRebooting = false,
   suricataStatus = null,
+  onAskOtto,
 }: DietPiHostViewProps) {
   const effectiveCronSummary = cronSummary ?? auditFleetCrons(apps, snapshot);
   const dietpiBadges = computeDietPiBadges(snapshot, effectiveCronSummary);
@@ -167,20 +171,52 @@ export function DietPiHostView({
               </p>
             </div>
           </div>
-          <button
-            onClick={onTriggerReboot}
-            disabled={isRebooting}
-            className="btn-danger text-xs py-1.5 px-3"
-          >
-            {isRebooting ? (
-              <>
-                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                Verifying Reboot...
-              </>
-            ) : (
-              'Reboot WSH Now'
+          <div className="flex items-center gap-2 shrink-0">
+            {onAskOtto && (
+              <button
+                type="button"
+                onClick={() =>
+                  onAskOtto({
+                    kind: 'dietpi_host',
+                    entityId: 'wsh-reboot-required',
+                    originView: 'dietpi',
+                    title: 'DietPi WSH Reboot Required',
+                    severity: 'HIGH',
+                    summary: `Kernel ${snapshot?.kernel || 'unknown'} flagged /var/run/reboot-required with ${upgradablePkgs.length} pending APT package(s).`,
+                    metadata: {
+                      kernel: snapshot?.kernel,
+                      dietpiVersion: snapshot?.dietpi_version,
+                      rebootRequired: snapshot?.reboot_required,
+                      services: snapshot?.services,
+                      upgradablePackagesCount: upgradablePkgs.length,
+                    },
+                    starterPrompts: [
+                      'DietPi WSH has /var/run/reboot-required set. Assess the blast radius on PanoramaAuth, Lighttpd, cloudflared, and our 6 containers, and tell me the safest reboot checklist.',
+                      'Should we verify any active crons or backups before rebooting WSH?',
+                    ],
+                  })
+                }
+                className="btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5 whitespace-nowrap"
+              >
+                <OttoIcon state="IDLE" className="w-3.5 h-3.5" />
+                <span>Ask Otto</span>
+              </button>
             )}
-          </button>
+            <button
+              onClick={onTriggerReboot}
+              disabled={isRebooting}
+              className="btn-danger text-xs py-1.5 px-3"
+            >
+              {isRebooting ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  Verifying Reboot...
+                </>
+              ) : (
+                'Reboot WSH Now'
+              )}
+            </button>
+          </div>
         </div>
       )}
 
@@ -296,6 +332,38 @@ export function DietPiHostView({
           </div>
 
           <div className="flex items-center gap-2">
+            {onAskOtto && (
+              <button
+                type="button"
+                data-testid="dietpi-apt-ask-otto-btn"
+                onClick={() =>
+                  onAskOtto({
+                    kind: 'dietpi_host',
+                    entityId: 'wsh-apt-packages',
+                    originView: 'dietpi',
+                    title: `DietPi WSH Host & APT Audit (${upgradablePkgs.length} upgradable)`,
+                    severity: upgradablePkgs.length > 0 ? 'MEDIUM' : 'LOW',
+                    summary: `${upgradablePkgs.length} upgradable APT package(s), rebootRequired=${Boolean(snapshot?.reboot_required)}, cronAlerts=${dietpiBadges.tabs.crons.count}`,
+                    metadata: {
+                      kernel: snapshot?.kernel,
+                      dietpiVersion: snapshot?.dietpi_version,
+                      rebootRequired: snapshot?.reboot_required,
+                      upgradablePackages: upgradablePkgs.slice(0, 40),
+                      services: snapshot?.services,
+                      cronAlertsCount: dietpiBadges.tabs.crons.count,
+                    },
+                    starterPrompts: [
+                      `Review the ${upgradablePkgs.length} pending Debian APT upgrade(s) on DietPi WSH. Identify any high-risk packages (kernel, docker, lighttpd, openssh, libc) that require a reboot or extra caution before upgrading.`,
+                      'Are any of these APT packages security fixes that should be prioritized?',
+                    ],
+                  })
+                }
+                className="btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5 whitespace-nowrap"
+              >
+                <OttoIcon state="IDLE" className="w-3.5 h-3.5" />
+                <span>Ask Otto</span>
+              </button>
+            )}
             <button
               onClick={() => {
                 const sshCmd = buildRemoteSshCommand(

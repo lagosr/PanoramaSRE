@@ -3610,7 +3610,7 @@ mod tests {
             true,
         );
         assert_eq!(snap.state, OttoRuntimePhase::Thinking);
-        let paused = ctrl.sync_from_db_state(None, true, "CLOSED", 0, 1, 1, 0);
+        let paused = ctrl.sync_from_db_state(None, true, "CLOSED", 0, 0, 1, 1, 0);
         assert_eq!(paused.state, OttoRuntimePhase::Paused);
 
         // Gemini 4 includeThoughts part separation & Carbon xhigh clamp
@@ -3667,5 +3667,231 @@ mod tests {
         let md = build_trace_debug_bundle_markdown(&det);
         assert!(md.contains("Deep-Thinking Rundown"));
         assert!(md.contains("Confirmed zero PHP exposure"));
+    }
+
+    // ========================================================================
+    // Otto Autonomous AI SRE — Phase 2 Soak State Machine, Self-Heal & Guards
+    // ========================================================================
+
+    #[test]
+    fn test_otto_phase2_soak_matrix_cascade_db_migration_tier0_and_buildkit() {
+        use chrono::Utc;
+        use panorama_sre_lib::otto_db::{OttoHandoffPacketRow, OttoSoakSessionRow};
+        use panorama_sre_lib::otto_policy::{AssetTier, AutonomyMode};
+        use panorama_sre_lib::otto_runtime::{
+            resolve_allowlisted_wsh_container, validate_gatekeeper_command,
+        };
+        use panorama_sre_lib::otto_soak::{
+            compiled_buildkit_prune_args, evaluate_soak_decision, is_buildkit_cache_high,
+            is_cooldown_active, is_valid_rollback_tag, SoakDecision, SoakEvaluationInput,
+        };
+        use panorama_sre_lib::pushover::PushoverCategoryPrefs;
+
+        let base_soak = || SoakEvaluationInput {
+            app_slug: "spendy".into(),
+            hosting_target: "wsh-docker".into(),
+            asset_tier: AssetTier::Tier1ChildApp,
+            release_id: "1.4.2+abc1234".into(),
+            previous_image_tag: Some("1.4.1-9988776".into()),
+            has_db_migration: false,
+            window_elapsed: false,
+            consecutive_unhealthy: 2,
+            degraded_apps_in_window: vec!["spendy".into()],
+            rollback_policy_mode: AutonomyMode::Shadow,
+            restart_policy_mode: AutonomyMode::Shadow,
+            kill_switch_active: false,
+            circuit_breaker_tripped: false,
+            rollback_cooldown_active: false,
+            restart_cooldown_active: false,
+            hourly_l2_executions: 0,
+        };
+
+        // 1. Tier-1 + DB_MIGRATION == false + SHADOW -> logs rollback proposal, 0 remote commands
+        let d_shadow = evaluate_soak_decision(&base_soak());
+        assert!(matches!(d_shadow, SoakDecision::ShadowRollback { .. }));
+
+        // 2. Tier-1 + DB_MIGRATION == false + L2_AUTO -> ExecuteL2Rollback
+        let mut l2 = base_soak();
+        l2.rollback_policy_mode = AutonomyMode::L2Auto;
+        match evaluate_soak_decision(&l2) {
+            SoakDecision::ExecuteL2Rollback { previous_tag, .. } => {
+                assert_eq!(previous_tag, "1.4.1-9988776");
+            }
+            other => panic!("Expected ExecuteL2Rollback, got {:?}", other),
+        }
+
+        // 2b. Cooldown active (60m) -> escalates L2_AUTO rollback to L3
+        let mut l2_cool = l2.clone();
+        l2_cool.rollback_cooldown_active = true;
+        assert!(matches!(
+            evaluate_soak_decision(&l2_cool),
+            SoakDecision::EscalateL3Rollback { .. }
+        ));
+
+        // 3. Tier-1 + DB_MIGRATION == true + L2_AUTO -> HARD-ROUTED to L3 Approval Queue!
+        let mut db_mig = l2.clone();
+        db_mig.has_db_migration = true;
+        match evaluate_soak_decision(&db_mig) {
+            SoakDecision::EscalateL3Rollback {
+                blast_radius_flags, ..
+            } => {
+                assert!(blast_radius_flags.contains(&"DB_MIGRATION".to_string()));
+            }
+            other => panic!("Expected EscalateL3Rollback for DB_MIGRATION, got {:?}", other),
+        }
+
+        // 4. Tier-0 (PanoramaAuth / unifi-siem) -> NEVER auto-rolls back; hard-down restart respects 15m cooldown
+        let mut tier0 = base_soak();
+        tier0.app_slug = "auth".into();
+        tier0.asset_tier = AssetTier::Tier0Critical;
+        tier0.rollback_policy_mode = AutonomyMode::L2Auto;
+        tier0.restart_policy_mode = AutonomyMode::L2Auto;
+        match evaluate_soak_decision(&tier0) {
+            SoakDecision::ExecuteL2Restart {
+                action_id,
+                container_name,
+                ..
+            } => {
+                assert_eq!(action_id, "restart_tier0_hard_down");
+                assert_eq!(container_name, "panorama-auth");
+            }
+            other => panic!("Expected ExecuteL2Restart for Tier-0 hard-down, got {:?}", other),
+        }
+
+        let mut tier0_cool = tier0.clone();
+        tier0_cool.restart_cooldown_active = true;
+        assert!(matches!(
+            evaluate_soak_decision(&tier0_cool),
+            SoakDecision::EscalateL3Restart { .. }
+        ));
+
+        let mut siem = tier0.clone();
+        siem.app_slug = "unifi-siem".into();
+        siem.hosting_target = "wsh-docker-service".into();
+        siem.restart_policy_mode = AutonomyMode::Shadow;
+        assert!(matches!(
+            evaluate_soak_decision(&siem),
+            SoakDecision::ShadowRestart { .. }
+        ));
+
+        // 5. Multi-app cascade (>= 2 apps degraded in 5m) -> suppresses per-app L2 & opens single shared-infra L3
+        let mut cascade = l2.clone();
+        cascade.degraded_apps_in_window = vec!["spendy".into(), "biomed".into()];
+        match evaluate_soak_decision(&cascade) {
+            SoakDecision::CascadeEscalateL3 { degraded_apps, .. } => {
+                assert_eq!(degraded_apps.len(), 2);
+            }
+            other => panic!("Expected CascadeEscalateL3, got {:?}", other),
+        }
+
+        // 6. Clean 15m soak completion -> HealthyVerified
+        let mut clean = base_soak();
+        clean.consecutive_unhealthy = 0;
+        clean.window_elapsed = true;
+        clean.degraded_apps_in_window = vec![];
+        assert_eq!(evaluate_soak_decision(&clean), SoakDecision::HealthyVerified);
+
+        // 7. Calibrated BuildKit cache thresholds (35 GB reclaimable OR 100 GB total) & compiled prune args
+        assert!(!is_buildkit_cache_high(34_999_999_999, 99_999_999_999));
+        assert!(is_buildkit_cache_high(35_000_000_000, 40_000_000_000));
+        assert!(is_buildkit_cache_high(1_000_000_000, 100_000_000_000));
+        assert_eq!(
+            compiled_buildkit_prune_args(),
+            vec!["buildx", "prune", "--all", "--filter", "until=72h", "-f"]
+        );
+
+        // 8. Rollback tag & gatekeeper 4-verb strict allowlist validation
+        assert!(is_valid_rollback_tag("1.4.1-abc1234"));
+        assert!(!is_valid_rollback_tag("-rf"));
+        assert!(!is_valid_rollback_tag("1.0.0; rm -rf /"));
+        assert_eq!(
+            resolve_allowlisted_wsh_container("spendy"),
+            Some("spendy-ledger")
+        );
+        assert_eq!(
+            validate_gatekeeper_command("restart-container spendy").unwrap(),
+            "restart-container spendy-ledger"
+        );
+        assert_eq!(
+            validate_gatekeeper_command("container-health unifi-siem").unwrap(),
+            "container-health unifi-siem"
+        );
+        assert!(validate_gatekeeper_command("restart-container spendy; whoami").is_err());
+        assert!(validate_gatekeeper_command("restart-container rogue-box").is_err());
+
+        // 9. Cooldown evaluator & SQLite soak/handoff/Pushover defaults persistence
+        let now = Utc::now();
+        let ten_mins_ago = (now - chrono::Duration::minutes(10)).to_rfc3339();
+        let seventy_mins_ago = (now - chrono::Duration::minutes(70)).to_rfc3339();
+        assert!(is_cooldown_active(Some(&ten_mins_ago), 900, now));
+        assert!(!is_cooldown_active(Some(&seventy_mins_ago), 3600, now));
+
+        let db = SreDatabase::new(":memory:").unwrap();
+        let soak = OttoSoakSessionRow {
+            id: "soak-test-1".into(),
+            app_slug: "spendy".into(),
+            hosting_target: "wsh-docker".into(),
+            release_id: "1.4.2+abc".into(),
+            previous_image_tag: Some("1.4.1-xyz".into()),
+            has_db_migration: false,
+            started_at: now.to_rfc3339(),
+            ends_at: (now + chrono::Duration::minutes(15)).to_rfc3339(),
+            status: "SOAKING".into(),
+            samples_json: "[]".into(),
+            trace_run_id: None,
+            updated_at: now.to_rfc3339(),
+        };
+        db.insert_otto_soak_session(&soak).unwrap();
+        assert_eq!(db.count_active_otto_soaks().unwrap(), 1);
+        db.update_otto_soak_session("soak-test-1", "HEALTHY_VERIFIED", "[{\"healthy\":true}]", None)
+            .unwrap();
+        assert_eq!(db.count_active_otto_soaks().unwrap(), 0);
+
+        let pkt = OttoHandoffPacketRow {
+            id: "handoff-test-1".into(),
+            proposal_id: None,
+            trace_run_id: None,
+            app_slug: "auth".into(),
+            category: "DETECTION_DEFECT_SUSPECTED".into(),
+            summary: "Key GEMINI_API_KEY=AIzaSyDummySecretValue12345678901234567".into(),
+            logs_scrubbed: "token=cfat_1234567890abcdefghijklmno".into(),
+            diff_patch: None,
+            status: "OPEN".into(),
+            created_at: now.to_rfc3339(),
+        };
+        db.insert_otto_handoff_packet(&pkt).unwrap();
+        let loaded_pkts = db.list_otto_handoff_packets(10).unwrap();
+        assert_eq!(loaded_pkts.len(), 1);
+        assert!(!loaded_pkts[0].summary.contains("AIzaSy"));
+        assert!(!loaded_pkts[0].logs_scrubbed.contains("cfat_"));
+
+        let push_defaults = PushoverCategoryPrefs::default();
+        assert!(push_defaults.otto_l2_auto_actions);
+        assert!(push_defaults.otto_l3_approvals);
+        assert!(push_defaults.otto_circuit_breaker);
+
+        // 10. Execution-time fail-closed L2 guards (rejects non-AllowL2Auto, cooldown, and >= 3/hr cap)
+        use panorama_sre_lib::otto_policy::{PolicyDecision, PolicyVerdict};
+        use panorama_sre_lib::otto_soak::validate_execution_time_guards;
+        let l3_verdict = PolicyDecision {
+            verdict: PolicyVerdict::RequireL3Approval,
+            effective_mode: AutonomyMode::L3Approval,
+            reason: "Requires Desktop L3 Approval".into(),
+            invariant_id: None,
+            checks_passed: vec![],
+        };
+        assert!(validate_execution_time_guards(false, &l3_verdict, false, 0).is_err());
+        assert!(validate_execution_time_guards(true, &l3_verdict, true, 99).is_ok());
+
+        let l2_verdict = PolicyDecision {
+            verdict: PolicyVerdict::AllowL2Auto,
+            effective_mode: AutonomyMode::L2Auto,
+            reason: "L2 permitted".into(),
+            invariant_id: None,
+            checks_passed: vec![],
+        };
+        assert!(validate_execution_time_guards(false, &l2_verdict, false, 2).is_ok());
+        assert!(validate_execution_time_guards(false, &l2_verdict, true, 0).is_err());
+        assert!(validate_execution_time_guards(false, &l2_verdict, false, 3).is_err());
     }
 }

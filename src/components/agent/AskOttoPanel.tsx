@@ -17,6 +17,7 @@ import {
   Wrench,
   X,
 } from 'lucide-react';
+import { ConfirmDangerModal } from '../ui/ConfirmDangerModal';
 import { CustomSelect } from '../ui/CustomSelect';
 import { formatLocalDateTime, formatRelativeTime } from '../../lib/formatters';
 import type {
@@ -112,6 +113,8 @@ export const AskOttoPanel: React.FC<AskOttoPanelProps> = ({
   const [showSavePromptForm, setShowSavePromptForm] = useState(false);
   const [newPromptTitle, setNewPromptTitle] = useState('');
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [confirmApproveProposal, setConfirmApproveProposal] = useState<OttoProposalRow | null>(null);
+  const [isApprovingProposal, setIsApprovingProposal] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const lastConsumedSeedNonceRef = useRef<number>(0);
@@ -683,9 +686,15 @@ export const AskOttoPanel: React.FC<AskOttoPanelProps> = ({
                               variant={
                                 linkedProposal.status === 'PENDING_APPROVAL'
                                   ? 'warning'
-                                  : linkedProposal.status.includes('APPROVED') ||
+                                  : linkedProposal.status === 'VERIFIED' ||
+                                    linkedProposal.status === 'ROLLED_BACK' ||
+                                    linkedProposal.status.includes('APPROVED') ||
                                     linkedProposal.status === 'SHADOW_AGREED'
                                   ? 'success'
+                                  : linkedProposal.status === 'FAILED' ||
+                                    linkedProposal.status === 'REJECTED' ||
+                                    linkedProposal.status === 'BLOCKED'
+                                  ? 'danger'
                                   : 'info'
                               }
                             />
@@ -731,10 +740,17 @@ export const AskOttoPanel: React.FC<AskOttoPanelProps> = ({
                             <>
                               <button
                                 type="button"
-                                onClick={() => void onDecideProposal(linkedProposal.id, 'APPROVE')}
+                                onClick={() => setConfirmApproveProposal(linkedProposal)}
                                 className="btn-primary text-xs py-1 px-2.5 whitespace-nowrap flex-shrink-0"
                               >
-                                Approve (Phase 1 Dry-Run)
+                                Approve &amp; Execute
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void onDecideProposal(linkedProposal.id, 'SNOOZE_24H')}
+                                className="btn-secondary text-xs py-1 px-2.5 whitespace-nowrap flex-shrink-0"
+                              >
+                                Snooze 24h
                               </button>
                               <button
                                 type="button"
@@ -893,6 +909,37 @@ export const AskOttoPanel: React.FC<AskOttoPanelProps> = ({
           </div>
         </div>
       </div>
+
+      {/* L3 Desktop Approval Confirmation Gate for Inline Chat Proposals */}
+      <ConfirmDangerModal
+        isOpen={Boolean(confirmApproveProposal)}
+        title={
+          confirmApproveProposal
+            ? `Approve & Execute: ${confirmApproveProposal.title}`
+            : 'Approve L3 Action'
+        }
+        description={
+          confirmApproveProposal
+            ? `Otto will re-validate "${confirmApproveProposal.actionId}" targeting "${confirmApproveProposal.assetSlug}" (${confirmApproveProposal.assetTier}) through the compiled Rust Policy Kernel, stream live output in Tier A Console Dock, and run Post-Action Outcome Verification.\n\nSummary: ${confirmApproveProposal.rcaSummary || confirmApproveProposal.title}`
+            : ''
+        }
+        confirmWord={
+          confirmApproveProposal?.assetTier === 'TIER0_CRITICAL' ? 'CONFIRM' : undefined
+        }
+        confirmLabel="Approve & Execute"
+        isProcessing={isApprovingProposal}
+        onCancel={() => {
+          if (!isApprovingProposal) setConfirmApproveProposal(null);
+        }}
+        onConfirm={() => {
+          if (!confirmApproveProposal) return;
+          setIsApprovingProposal(true);
+          void onDecideProposal(confirmApproveProposal.id, 'APPROVE').finally(() => {
+            setIsApprovingProposal(false);
+            setConfirmApproveProposal(null);
+          });
+        }}
+      />
     </div>
   );
 };

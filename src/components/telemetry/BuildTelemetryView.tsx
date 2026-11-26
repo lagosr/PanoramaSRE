@@ -5,8 +5,10 @@ import {
   DeployTelemetryRunRecord,
   DiscoveredApp,
   LocalDockerDiskUsage,
+  OttoContextSeed,
   TerminalTab,
 } from '../../lib/types';
+import { OttoIcon } from '../agent/OttoAvatar';
 import {
   TelemetryActionableAlert,
   TelemetryTimeRange,
@@ -50,6 +52,7 @@ interface BuildTelemetryViewProps {
   onOpenInReleases?: (slug: string) => void;
   actionableAlerts?: TelemetryActionableAlert[];
   onDismissAlert?: (alertId: string) => void;
+  onAskOtto?: (seed: OttoContextSeed) => void;
 }
 
 function formatBytes(bytes: number | undefined | null): string {
@@ -75,6 +78,7 @@ export const BuildTelemetryView: React.FC<BuildTelemetryViewProps> = ({
   onOpenInReleases,
   actionableAlerts = [],
   onDismissAlert,
+  onAskOtto,
 }) => {
   const [localAppSlug, setLocalAppSlug] = useState<string>('all');
   const [range, setRange] = useState<TelemetryTimeRange>('14d');
@@ -354,6 +358,38 @@ export const BuildTelemetryView: React.FC<BuildTelemetryViewProps> = ({
                         <span>
                           {isPruningCache ? 'Pruning Cache...' : 'Prune Stale Cache (>3d)'}
                         </span>
+                      </button>
+                    )}
+                    {onAskOtto && (
+                      <button
+                        type="button"
+                        data-testid={`telemetry-ask-otto-${alert.id}`}
+                        onClick={() =>
+                          onAskOtto({
+                            kind: 'telemetry_alert',
+                            entityId: alert.id,
+                            originView: 'telemetry',
+                            title: alert.title,
+                            severity: alert.severity === 'error' ? 'HIGH' : 'MEDIUM',
+                            summary: alert.detail,
+                            metadata: {
+                              alertId: alert.id,
+                              alertKind: alert.kind,
+                              severity: alert.severity,
+                              appSlug: alert.appSlug || 'buildkit',
+                              warnings: alert.warnings,
+                              dockerDiskUsage,
+                            },
+                            starterPrompts: [
+                              `Diagnose this Build Telemetry alert ("${alert.title}"). Explain the root cause (e.g., cache invalidation, context budget bloat, or BuildKit disk pressure) and whether a safe prune or Dockerfile check is warranted.`,
+                              'How can we improve ARM64 BuildKit cache hit rates without invalidating warm layers?',
+                            ],
+                          })
+                        }
+                        className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                      >
+                        <OttoIcon state="IDLE" className="w-3.5 h-3.5" />
+                        <span>Ask Otto</span>
                       </button>
                     )}
                     {onDismissAlert && (

@@ -87,7 +87,9 @@ import {
   OttoLifecycleSnapshot,
   OttoPolicyRow,
   OttoProposalRow,
+  OttoSoakSessionRow,
   OttoStatusDto,
+  OttoSteadyStateResult,
   OttoTraceRunRow,
 } from './lib/types';
 import { computeActionableSecuritySummary } from './lib/threat-actionability';
@@ -285,6 +287,17 @@ export const App: React.FC = () => {
   const [ottoL4Invariants, setOttoL4Invariants] = useState<OttoL4Invariant[]>([]);
   const [ottoTraces, setOttoTraces] = useState<OttoTraceRunRow[]>([]);
   const [ottoProposals, setOttoProposals] = useState<OttoProposalRow[]>([]);
+  const [ottoSoaks, setOttoSoaks] = useState<OttoSoakSessionRow[]>([]);
+  const ottoSoaksRef = useRef<OttoSoakSessionRow[]>([]);
+  ottoSoaksRef.current = ottoSoaks;
+  const dockerDiskUsageRef = useRef<LocalDockerDiskUsage | null>(null);
+  dockerDiskUsageRef.current = dockerDiskUsage;
+  const sslFleetRef = useRef<SslFleetSummary | null>(null);
+  sslFleetRef.current = sslFleet;
+  const networkPostureRef = useRef<NetworkPosture>('LAN_DIRECT');
+  networkPostureRef.current = networkPosture;
+  const hasCompletedInitialSyncRef = useRef<boolean>(false);
+  hasCompletedInitialSyncRef.current = hasCompletedInitialSync;
   const [ottoNav, setOttoNav] = useState<{ tab: OttoSubView; nonce: number }>({
     tab: 'ask',
     nonce: 0,
@@ -1249,6 +1262,27 @@ export const App: React.FC = () => {
       const reconciledApps = reconcileServiceAppsFromSnapshot(preSnapApps, latestSnap);
       setApps(reconciledApps);
 
+      // Phase 2: If any Otto 15m Post-Deploy Soak is active, feed fresh health observations
+      if (ottoSoaksRef.current.some((s) => s.status === 'SOAKING')) {
+        const soakObservations = reconciledApps.map((a) => ({
+          appSlug: a.manifest.slug,
+          hostingTarget: a.manifest.hostingTarget || 'wsh-docker',
+          healthy: a.health?.status === 'healthy',
+          latencyMs: a.latencyMs ?? null,
+          containerState: a.health?.status ?? null,
+          detail: a.health?.status === 'healthy' ? 'healthy' : a.health?.status || 'unreachable',
+        }));
+        void invoke<OttoSoakSessionRow[]>('evaluate_otto_soak_tick', {
+          input: { observations: soakObservations },
+        })
+          .then((nextSoaks) => {
+            if (Array.isArray(nextSoaks)) {
+              setOttoSoaks(nextSoaks);
+            }
+          })
+          .catch((e) => console.warn('[PanoramaSRE] Otto soak tick warning:', e));
+      }
+
       // 6. On initial startup or manual Sync Now, also execute Tier 2 appliances + Tier 4 hourly checks
       let hourlyAppliances: ApplianceStatus[] | undefined;
       let hourlyLedger: BackupLedgerSummary | null = null;
@@ -1464,28 +1498,46 @@ export const App: React.FC = () => {
     }).then((unsub) => {
       unlistenOtto = unsub;
     });
+    let unlistenOttoSoaks: (() => void) | undefined;
+    listen('sre://agent-soaks-updated', () => {
+      void invoke<OttoSoakSessionRow[]>('get_otto_soak_sessions', { limit: 25 })
+        .then((list) => {
+          if (Array.isArray(list)) setOttoSoaks(list);
+        })
+        .catch(() => {});
+      void invoke<OttoProposalRow[]>('get_otto_proposals', { limit: 80 })
+        .then((list) => {
+          if (Array.isArray(list)) setOttoProposals(list);
+        })
+        .catch(() => {});
+    }).then((unsub) => {
+      unlistenOttoSoaks = unsub;
+    });
     return () => {
       if (unlistenThreat) unlistenThreat();
       if (unlistenQuarantine) unlistenQuarantine();
       if (unlistenOtto) unlistenOtto();
+      if (unlistenOttoSoaks) unlistenOttoSoaks();
     };
   }, [refreshThreatIntelState]);
 
   const refreshOttoState = useCallback(async () => {
     try {
-      const [statusDto, policiesList, invariantsList, tracesList, proposalsList] =
+      const [statusDto, policiesList, invariantsList, tracesList, proposalsList, soaksList] =
         await Promise.all([
           invoke<OttoStatusDto>('get_otto_status'),
           invoke<OttoPolicyRow[]>('get_otto_policies'),
           invoke<OttoL4Invariant[]>('get_otto_l4_invariants'),
           invoke<OttoTraceRunRow[]>('get_otto_trace_runs', { limit: 60 }),
           invoke<OttoProposalRow[]>('get_otto_proposals', { limit: 80 }),
+          invoke<OttoSoakSessionRow[]>('get_otto_soak_sessions', { limit: 25 }),
         ]);
       setOttoStatus(statusDto);
       setOttoPolicies(Array.isArray(policiesList) ? policiesList : []);
       setOttoL4Invariants(Array.isArray(invariantsList) ? invariantsList : []);
       setOttoTraces(Array.isArray(tracesList) ? tracesList : []);
       setOttoProposals(Array.isArray(proposalsList) ? proposalsList : []);
+      setOttoSoaks(Array.isArray(soaksList) ? soaksList : []);
     } catch (err) {
       console.warn('[PanoramaSRE] Failed to hydrate Otto state:', err);
     }
@@ -1562,6 +1614,102 @@ export const App: React.FC = () => {
     [refreshOttoState]
   );
 
+  const handleCancelOttoSoak = useCallback(
+    async (soakId: string) => {
+      try {
+        await invoke<OttoSoakSessionRow>('cancel_otto_soak_session', { soakId });
+        showActionFeedback('Cancelled active Otto post-deploy soak monitor.', 'success', 3500);
+        await refreshOttoState();
+      } catch (err) {
+        showActionFeedback(`Failed cancelling soak monitor: ${String(err)}`, 'error', 5000);
+      }
+    },
+    [refreshOttoState, showActionFeedback]
+  );
+
+  const handleStartManualOttoSoak = useCallback(
+    async (app: DiscoveredApp) => {
+      try {
+        const hasDbMigration = Boolean(
+          app.composition?.blast_radius_badges?.includes('DB_MIGRATION')
+        );
+        const prevTag = app.health?.release?.image_tag ?? null;
+        const releaseId =
+          app.health?.release?.release_id ||
+          app.composition?.local_head_short ||
+          app.health?.version ||
+          'manual-soak';
+        await invoke<OttoSoakSessionRow>('start_otto_soak_session', {
+          input: {
+            appSlug: app.manifest.slug,
+            hostingTarget: app.manifest.hostingTarget || 'wsh-docker',
+            releaseId,
+            previousImageTag: prevTag,
+            hasDbMigration,
+            durationSecs: 900,
+          },
+        });
+        showActionFeedback(
+          `Started 15-minute Otto post-deploy soak for ${app.manifest.displayName}.`,
+          'success',
+          4000
+        );
+        await refreshOttoState();
+      } catch (err) {
+        showActionFeedback(`Failed starting Otto soak: ${String(err)}`, 'error', 5000);
+      }
+    },
+    [refreshOttoState, showActionFeedback]
+  );
+
+  const handleEvaluateOttoSteadyState = useCallback(async (): Promise<string> => {
+    const evalOpts = {
+      isInitialSyncComplete: hasCompletedInitialSyncRef.current,
+      networkPosture: networkPostureRef.current,
+    };
+    const unhealthyApps = appsRef.current
+      .filter((a) => isAppUnhealthy(a, evalOpts))
+      .map((a) => ({
+        appSlug: a.manifest.slug,
+        hostingTarget: a.manifest.hostingTarget || 'wsh-docker',
+        healthy: false,
+        latencyMs: a.latencyMs ?? null,
+        containerState: a.health?.status ?? null,
+        detail: a.health?.status || 'unhealthy',
+      }));
+    const usage = dockerDiskUsageRef.current;
+    const ssl = sslFleetRef.current;
+    const res = await invoke<OttoSteadyStateResult>('evaluate_otto_steady_state', {
+      input: {
+        unhealthyApps,
+        buildkitReclaimableBytes: usage?.build_cache?.reclaimable_bytes ?? null,
+        buildkitTotalBytes: usage?.build_cache?.size_bytes ?? null,
+        sslMinDaysRemaining: ssl ? ssl.min_days_remaining : null,
+      },
+    });
+    showActionFeedback(`Otto steady-state sweep: ${res.summary}`, 'success', 4500);
+    await refreshOttoState();
+    return res.summary;
+  }, [refreshOttoState, showActionFeedback]);
+
+  const handleQueueBuildKitPruneProposal = useCallback(async () => {
+    await invoke<OttoProposalRow>('queue_otto_manual_proposal', {
+      input: {
+        actionId: 'prune_buildkit_cache',
+        assetSlug: 'buildkit',
+        title: 'Prune Stale Local BuildKit Cache (>72h)',
+        rcaSummary:
+          'Runs compiled `docker buildx prune --all --filter until=72h -f` locally on the workstation (zero SSH/WSH production mutation).',
+        paramsJson: JSON.stringify({ filter: 'until=72h', scope: 'local-workstation' }),
+        severity: 'LOW',
+        domain: 'HEAL',
+        hasDbMigration: false,
+      },
+    });
+    showActionFeedback('Staged Local BuildKit Prune in Otto Approval Queue.', 'success', 4000);
+    await refreshOttoState();
+  }, [refreshOttoState, showActionFeedback]);
+
   // Background 15-minute D1 SMS Opt-In sync with new-record desktop notification
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -1623,6 +1771,23 @@ export const App: React.FC = () => {
       // Tier 2 (60s): pooled home lab appliance probes (4x/day smoke schedule is owned by Windows Task Scheduler)
       if (dueTiers.includes(2)) {
         refreshAppliances();
+        if (ottoSoaksRef.current.some((s) => s.status === 'SOAKING') && appsRef.current.length > 0) {
+          const obs = appsRef.current.map((a) => ({
+            appSlug: a.manifest.slug,
+            hostingTarget: a.manifest.hostingTarget || 'wsh-docker',
+            healthy: a.health?.status === 'healthy',
+            latencyMs: a.latencyMs ?? null,
+            containerState: a.health?.status ?? null,
+            detail: a.health?.status === 'healthy' ? 'healthy' : a.health?.status || 'unreachable',
+          }));
+          void invoke<OttoSoakSessionRow[]>('evaluate_otto_soak_tick', {
+            input: { observations: obs },
+          })
+            .then((nextSoaks) => {
+              if (Array.isArray(nextSoaks)) setOttoSoaks(nextSoaks);
+            })
+            .catch(() => {});
+        }
       }
 
       // Tier 3 (300s default / configurable): posture + fleet health + fleet git composition + WSH --fast SSH snapshot
@@ -1769,6 +1934,102 @@ export const App: React.FC = () => {
       if (unlistenEnd) unlistenEnd();
     };
   }, [refreshDevServers, saveTabToDb]);
+
+  // Listen for Otto AI SRE compiled executor stream events (Unified Output Console Dock)
+  // L2 background actions use source='agent', autoOpenTier='C' (zero focus steal);
+  // L3 human-clicked approvals use source='ui', autoOpenTier='A' (auto-opens dock).
+  useEffect(() => {
+    let unlistenStart: (() => void) | undefined;
+    let unlistenLine: (() => void) | undefined;
+    let unlistenEnd: (() => void) | undefined;
+
+    listen<{
+      id: string;
+      title?: string;
+      appSlug?: string;
+      source?: string;
+      autoOpenTier?: string;
+      pageScope?: string;
+    }>('sre://agent-stream-start', (event) => {
+      const { id, title, appSlug, source, autoOpenTier } = event.payload || {};
+      if (!id) return;
+      const mappedSource: WorkStreamSource = source === 'ui' ? 'ui' : 'agent';
+      const mappedTier = autoOpenTier === 'A' ? 'A' : 'C';
+      const newTab: TerminalTab = {
+        id,
+        title: title || `Otto Action (${appSlug || 'fleet'})`,
+        lines: [],
+        isRunning: true,
+        createdAt: new Date().toISOString(),
+        pageScope: 'agent',
+        source: mappedSource,
+        appSlug,
+        abortable: true,
+        autoOpenTier: mappedTier,
+      };
+      registerStreamTab(newTab, {
+        upsert: true,
+        persist: false,
+        focusTab: mappedSource === 'ui',
+      });
+    }).then((unsub) => {
+      unlistenStart = unsub;
+    });
+
+    listen<{ id: string; line: string }>('sre://agent-stream-line', (event) => {
+      const { id, line } = event.payload || {};
+      if (!id || typeof line !== 'string') return;
+      setTerminalTabs((prev) => {
+        const exists = prev.some((t) => t.id === id);
+        if (!exists) {
+          return [
+            ...prev,
+            {
+              id,
+              title: 'Otto Action',
+              lines: [line],
+              isRunning: true,
+              createdAt: new Date().toISOString(),
+              pageScope: 'agent',
+              source: 'agent',
+              abortable: true,
+              autoOpenTier: 'C',
+            },
+          ];
+        }
+        return prev.map((t) => (t.id === id ? { ...t, lines: [...t.lines, line] } : t));
+      });
+    }).then((unsub) => {
+      unlistenLine = unsub;
+    });
+
+    listen<{ id: string; exitCode: number }>('sre://agent-stream-end', (event) => {
+      const { id, exitCode } = event.payload || {};
+      if (!id) return;
+      const code = typeof exitCode === 'number' ? exitCode : 0;
+      const finishedAt = new Date().toISOString();
+      setTerminalTabs((prev) =>
+        prev.map((t) => {
+          if (t.id === id) {
+            const updated: TerminalTab = { ...t, isRunning: false, exitCode: code, finishedAt };
+            saveTabToDb(updated);
+            return updated;
+          }
+          return t;
+        })
+      );
+      evaluateJobFinishAutoOpen(id, code);
+      void refreshOttoState();
+    }).then((unsub) => {
+      unlistenEnd = unsub;
+    });
+
+    return () => {
+      if (unlistenStart) unlistenStart();
+      if (unlistenLine) unlistenLine();
+      if (unlistenEnd) unlistenEnd();
+    };
+  }, [registerStreamTab, saveTabToDb, evaluateJobFinishAutoOpen, refreshOttoState]);
 
   // Dev Server Actions
   const handleStartDevServer = async (appId: string, workspacePath: string, devCommand: string, port?: number) => {
@@ -2336,6 +2597,29 @@ export const App: React.FC = () => {
           currentRunningDeployJobIdRef.current = null;
         }
         finalizeTerminalJob(jobId, exitCode);
+        if (exitCode === 0 && !isEdgeApp) {
+          const hasDbMigration = Boolean(
+            app.composition?.blast_radius_badges?.includes('DB_MIGRATION')
+          );
+          const prevTag = app.health?.release?.image_tag ?? null;
+          const nextReleaseId =
+            app.composition?.local_head_short ||
+            app.health?.release?.release_id ||
+            app.health?.version ||
+            'deployed';
+          void invoke<OttoSoakSessionRow>('start_otto_soak_session', {
+            input: {
+              appSlug: app.manifest.slug,
+              hostingTarget: app.manifest.hostingTarget || 'wsh-docker',
+              releaseId: nextReleaseId,
+              previousImageTag: prevTag,
+              hasDbMigration,
+              durationSecs: 900,
+            },
+          })
+            .then(() => refreshOttoState())
+            .catch((e) => console.warn('[PanoramaSRE] Failed starting Otto soak session:', e));
+        }
         if (isWshService) {
           await refreshWshTelemetry(true);
           if (app.manifest.slug === 'unifi-siem') {
@@ -4285,12 +4569,17 @@ export const App: React.FC = () => {
     }
   }
 
-  const totalAttentionCount = unifiedAlerts.length;
+  const pendingOttoProposals = useMemo(
+    () => ottoProposals.filter((p) => p.status === 'PENDING_APPROVAL'),
+    [ottoProposals]
+  );
+
+  const totalAttentionCount = unifiedAlerts.length + pendingOttoProposals.length;
   const totalAttentionSeverity: 'error' | 'warning' | null = unifiedAlerts.some(
     (a) => a.severity === 'critical'
   )
     ? 'error'
-    : unifiedAlerts.length > 0
+    : unifiedAlerts.length > 0 || pendingOttoProposals.length > 0
     ? 'warning'
     : null;
 
@@ -4622,7 +4911,11 @@ export const App: React.FC = () => {
               onAbortJob={handleAbortJob}
               onClearTab={handleClearTab}
               ottoLifecycle={ottoStatus?.lifecycle ?? null}
+              ottoSoaks={ottoSoaks}
               onOpenOtto={() => navigateTo('agent', { tab: 'ask', returnFromCurrent: true })}
+              onOpenOttoApprovals={() =>
+                navigateTo('agent', { tab: 'approvals', returnFromCurrent: true })
+              }
               onAskOtto={openOttoWithContext}
             />
           )}
@@ -4635,6 +4928,7 @@ export const App: React.FC = () => {
               l4Invariants={ottoL4Invariants}
               traces={ottoTraces}
               proposals={ottoProposals}
+              soaks={ottoSoaks}
               initialSubView={ottoNav.tab}
               initialSubViewNonce={ottoNav.nonce}
               pendingContextSeed={ottoPendingSeed.seed}
@@ -4650,6 +4944,10 @@ export const App: React.FC = () => {
               onResetCircuitBreaker={handleResetOttoCircuitBreaker}
               onUpdatePolicyMode={handleUpdateOttoPolicyMode}
               onDecideProposal={handleDecideOttoProposal}
+              onCancelSoak={handleCancelOttoSoak}
+              onEvaluateSteadyState={handleEvaluateOttoSteadyState}
+              onQueueBuildKitPruneProposal={handleQueueBuildKitPruneProposal}
+              onAskOtto={openOttoWithContext}
               onNavigateToSettings={() =>
                 navigateTo('settings', { tab: 'security', returnFromCurrent: true })
               }
@@ -4778,6 +5076,7 @@ export const App: React.FC = () => {
               }
               isRebooting={isHostRebooting}
               suricataStatus={ottoStatus?.suricata ?? null}
+              onAskOtto={openOttoWithContext}
               onOpenInBottomConsole={handleOpenInBottomConsole}
               onAbortJob={handleAbortJob}
               onClearTab={handleClearTab}
@@ -4890,6 +5189,10 @@ export const App: React.FC = () => {
               networkPosture={networkPosture}
               onTriggerServiceAction={(app, action) => void handleTriggerServiceAction(app, action)}
               onReapplyHardening={() => handleReapplyHardening('releases')}
+              ottoSoaks={ottoSoaks}
+              onStartManualSoak={(app) => void handleStartManualOttoSoak(app)}
+              onCancelSoak={(soakId) => void handleCancelOttoSoak(soakId)}
+              onAskOtto={openOttoWithContext}
             />
           )}
 
@@ -4913,6 +5216,7 @@ export const App: React.FC = () => {
               }
               actionableAlerts={actionableTelemetryAlerts}
               onDismissAlert={handleDismissTelemetryAlert}
+              onAskOtto={openOttoWithContext}
             />
           )}
 
@@ -4933,6 +5237,7 @@ export const App: React.FC = () => {
               onClearTab={handleClearTab}
               isIncidentDismissed={isBackupIncidentDismissed}
               onDismissIncident={handleDismissBackupIncident}
+              onAskOtto={openOttoWithContext}
             />
           )}
 
@@ -4951,6 +5256,7 @@ export const App: React.FC = () => {
               onAbortJob={handleAbortJob}
               onClearTab={handleClearTab}
               lastError={smokeError}
+              onAskOtto={openOttoWithContext}
             />
           )}
 
@@ -5190,6 +5496,34 @@ export const App: React.FC = () => {
         isOpen={isAlertsDrawerOpen}
         onClose={() => setIsAlertsDrawerOpen(false)}
         alerts={unifiedAlerts}
+        pendingOttoProposals={pendingOttoProposals}
+        onOpenOttoApprovals={() => {
+          setIsAlertsDrawerOpen(false);
+          navigateTo('agent', { tab: 'approvals', returnFromCurrent: true });
+        }}
+        onSnoozeOttoProposal={(proposalId) => void handleDecideOttoProposal(proposalId, 'SNOOZE_24H')}
+        onAskOttoProposal={(proposal) => {
+          setIsAlertsDrawerOpen(false);
+          openOttoWithContext({
+            kind: 'general',
+            entityId: proposal.id,
+            originView: 'hud',
+            title: `Review L3 Proposal: ${proposal.title}`,
+            severity: proposal.severity,
+            summary: proposal.rcaSummary,
+            metadata: {
+              proposalId: proposal.id,
+              actionId: proposal.actionId,
+              assetSlug: proposal.assetSlug,
+              severity: proposal.severity,
+              paramsJson: proposal.paramsJson,
+            },
+            starterPrompts: [
+              `Walk me through L3 proposal "${proposal.title}" (${proposal.actionId} on ${proposal.assetSlug}). What is the blast radius, verification plan, and safest way to execute or decline it?`,
+              `Are there any hidden risks or prerequisite checks before approving ${proposal.actionId} on ${proposal.assetSlug}?`,
+            ],
+          });
+        }}
       />
     </div>
   );

@@ -147,6 +147,38 @@ pub struct OttoSavedPromptRow {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OttoSoakSessionRow {
+    pub id: String,
+    pub app_slug: String,
+    pub hosting_target: String,
+    pub release_id: String,
+    pub previous_image_tag: Option<String>,
+    pub has_db_migration: bool,
+    pub started_at: String,
+    pub ends_at: String,
+    pub status: String,
+    pub samples_json: String,
+    pub trace_run_id: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OttoHandoffPacketRow {
+    pub id: String,
+    pub proposal_id: Option<String>,
+    pub trace_run_id: Option<String>,
+    pub app_slug: String,
+    pub category: String,
+    pub summary: String,
+    pub logs_scrubbed: String,
+    pub diff_patch: Option<String>,
+    pub status: String,
+    pub created_at: String,
+}
+
 impl SreDatabase {
     pub(crate) fn init_otto_tables(&self) -> Result<()> {
         let conn = self.conn();
@@ -299,7 +331,44 @@ impl SreDatabase {
             );
 
             CREATE INDEX IF NOT EXISTS idx_agent_audit_ledger_created
-                ON agent_audit_ledger (created_at DESC);",
+                ON agent_audit_ledger (created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS agent_soak_sessions (
+                id TEXT PRIMARY KEY,
+                app_slug TEXT NOT NULL,
+                hosting_target TEXT NOT NULL,
+                release_id TEXT NOT NULL,
+                previous_image_tag TEXT,
+                has_db_migration INTEGER NOT NULL DEFAULT 0,
+                started_at TEXT NOT NULL,
+                ends_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'SOAKING',
+                samples_json TEXT NOT NULL DEFAULT '[]',
+                trace_run_id TEXT,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_agent_soak_sessions_status_ends
+                ON agent_soak_sessions (status, ends_at DESC);
+
+            CREATE INDEX IF NOT EXISTS idx_agent_soak_sessions_slug_started
+                ON agent_soak_sessions (app_slug, started_at DESC);
+
+            CREATE TABLE IF NOT EXISTS agent_handoff_packets (
+                id TEXT PRIMARY KEY,
+                proposal_id TEXT,
+                trace_run_id TEXT,
+                app_slug TEXT NOT NULL,
+                category TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                logs_scrubbed TEXT NOT NULL DEFAULT '',
+                diff_patch TEXT,
+                status TEXT NOT NULL DEFAULT 'OPEN',
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_agent_handoff_packets_created
+                ON agent_handoff_packets (created_at DESC);",
         )?;
 
         let now = Utc::now().to_rfc3339();
@@ -494,6 +563,47 @@ impl SreDatabase {
             None,
         );
         self.get_otto_state()
+    }
+
+    pub fn record_otto_verified_success(&self) -> Result<OttoAgentStateRow> {
+        let now = Utc::now().to_rfc3339();
+        self.conn().execute(
+            "UPDATE agent_state SET consecutive_failures = 0, updated_at = ?1 WHERE id = 1",
+            params![now],
+        )?;
+        self.get_otto_state()
+    }
+
+    pub fn last_executed_action_at(
+        &self,
+        action_id: &str,
+        asset_slug: &str,
+    ) -> Result<Option<String>> {
+        self.conn()
+            .query_row(
+                "SELECT created_at
+                 FROM agent_audit_ledger
+                 WHERE action_id = ?1
+                   AND asset_slug = ?2
+                   AND decision IN ('EXECUTED_L2', 'VERIFIED', 'EXECUTED_L3', 'ROLLED_BACK')
+                 ORDER BY created_at DESC
+                 LIMIT 1",
+                params![action_id, asset_slug],
+                |r| r.get(0),
+            )
+            .optional()
+    }
+
+    pub fn count_recent_l2_executions(&self, window_secs: i64) -> Result<i64> {
+        let cutoff = (Utc::now() - chrono::Duration::seconds(window_secs.max(60))).to_rfc3339();
+        self.conn().query_row(
+            "SELECT COUNT(*)
+             FROM agent_audit_ledger
+             WHERE decision IN ('EXECUTED_L2', 'ROLLED_BACK')
+               AND created_at >= ?1",
+            params![cutoff],
+            |r| r.get(0),
+        )
     }
 
     pub fn increment_otto_ai_usage(&self, is_tier2: bool) -> Result<OttoAgentStateRow> {
@@ -921,6 +1031,208 @@ impl SreDatabase {
             ],
         )?;
         Ok(())
+    }
+
+    pub fn update_otto_proposal_execution(
+        &self,
+        proposal_id: &str,
+        new_status: &str,
+        verification_json: Option<&str>,
+    ) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn().execute(
+            "UPDATE agent_proposals
+             SET status = ?1,
+                 decided_at = COALESCE(decided_at, ?2),
+                 executed_at = COALESCE(executed_at, ?2),
+                 verification_result_json = COALESCE(?3, verification_result_json)
+             WHERE id = ?4",
+            params![
+                new_status,
+                now,
+                verification_json.map(scrub_secrets),
+                proposal_id
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_otto_proposal_by_id(&self, proposal_id: &str) -> Result<Option<OttoProposalRow>> {
+        self.conn()
+            .query_row(
+                "SELECT id, trace_run_id, domain, classification, asset_slug, asset_tier, action_id, params_json,
+                        title, severity, confidence, rca_summary, evidence_json, diff_preview, rollback_plan_json,
+                        blast_radius_flags_json, status, snoozed_until, created_at, decided_at, executed_at, verification_result_json
+                 FROM agent_proposals
+                 WHERE id = ?1",
+                params![proposal_id],
+                |r| {
+                    Ok(OttoProposalRow {
+                        id: r.get(0)?,
+                        trace_run_id: r.get(1)?,
+                        domain: r.get(2)?,
+                        classification: r.get(3)?,
+                        asset_slug: r.get(4)?,
+                        asset_tier: r.get(5)?,
+                        action_id: r.get(6)?,
+                        params_json: r.get(7)?,
+                        title: r.get(8)?,
+                        severity: r.get(9)?,
+                        confidence: r.get(10)?,
+                        rca_summary: r.get(11)?,
+                        evidence_json: r.get(12)?,
+                        diff_preview: r.get(13)?,
+                        rollback_plan_json: r.get(14)?,
+                        blast_radius_flags_json: r.get(15)?,
+                        status: r.get(16)?,
+                        snoozed_until: r.get(17)?,
+                        created_at: r.get(18)?,
+                        decided_at: r.get(19)?,
+                        executed_at: r.get(20)?,
+                        verification_result_json: r.get(21)?,
+                    })
+                },
+            )
+            .optional()
+    }
+
+    pub fn insert_otto_soak_session(&self, s: &OttoSoakSessionRow) -> Result<()> {
+        // Supersede any older active soak for the same app so only 1 soak runs per app at a time
+        let now = Utc::now().to_rfc3339();
+        self.conn().execute(
+            "UPDATE agent_soak_sessions SET status = 'SUPERSEDED', updated_at = ?1
+             WHERE app_slug = ?2 AND status = 'SOAKING'",
+            params![now, s.app_slug],
+        )?;
+        self.conn().execute(
+            "INSERT INTO agent_soak_sessions
+             (id, app_slug, hosting_target, release_id, previous_image_tag, has_db_migration,
+              started_at, ends_at, status, samples_json, trace_run_id, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                s.id,
+                s.app_slug,
+                s.hosting_target,
+                scrub_secrets(&s.release_id),
+                s.previous_image_tag.as_deref().map(scrub_secrets),
+                if s.has_db_migration { 1 } else { 0 },
+                s.started_at,
+                s.ends_at,
+                s.status,
+                scrub_secrets(&s.samples_json),
+                s.trace_run_id,
+                s.updated_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_otto_soak_session(
+        &self,
+        soak_id: &str,
+        status: &str,
+        samples_json: &str,
+        trace_run_id: Option<&str>,
+    ) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn().execute(
+            "UPDATE agent_soak_sessions
+             SET status = ?1,
+                 samples_json = ?2,
+                 trace_run_id = COALESCE(?3, trace_run_id),
+                 updated_at = ?4
+             WHERE id = ?5",
+            params![status, scrub_secrets(samples_json), trace_run_id, now, soak_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_otto_soak_sessions(&self, limit: usize) -> Result<Vec<OttoSoakSessionRow>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT id, app_slug, hosting_target, release_id, previous_image_tag, has_db_migration,
+                    started_at, ends_at, status, samples_json, trace_run_id, updated_at
+             FROM agent_soak_sessions
+             ORDER BY started_at DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit.min(100) as i64], |r| {
+            Ok(OttoSoakSessionRow {
+                id: r.get(0)?,
+                app_slug: r.get(1)?,
+                hosting_target: r.get(2)?,
+                release_id: r.get(3)?,
+                previous_image_tag: r.get(4)?,
+                has_db_migration: r.get::<_, i64>(5)? != 0,
+                started_at: r.get(6)?,
+                ends_at: r.get(7)?,
+                status: r.get(8)?,
+                samples_json: r.get(9)?,
+                trace_run_id: r.get(10)?,
+                updated_at: r.get(11)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn count_active_otto_soaks(&self) -> Result<i64> {
+        self.conn().query_row(
+            "SELECT COUNT(*) FROM agent_soak_sessions WHERE status = 'SOAKING'",
+            [],
+            |r| r.get(0),
+        )
+    }
+
+    pub fn insert_otto_handoff_packet(&self, pkt: &OttoHandoffPacketRow) -> Result<()> {
+        self.conn().execute(
+            "INSERT INTO agent_handoff_packets
+             (id, proposal_id, trace_run_id, app_slug, category, summary, logs_scrubbed, diff_patch, status, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                pkt.id,
+                pkt.proposal_id,
+                pkt.trace_run_id,
+                pkt.app_slug,
+                pkt.category,
+                scrub_secrets(&pkt.summary),
+                scrub_secrets(&pkt.logs_scrubbed),
+                pkt.diff_patch.as_deref().map(scrub_secrets),
+                pkt.status,
+                pkt.created_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_otto_handoff_packets(&self, limit: usize) -> Result<Vec<OttoHandoffPacketRow>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT id, proposal_id, trace_run_id, app_slug, category, summary, logs_scrubbed, diff_patch, status, created_at
+             FROM agent_handoff_packets
+             ORDER BY created_at DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit.min(50) as i64], |r| {
+            Ok(OttoHandoffPacketRow {
+                id: r.get(0)?,
+                proposal_id: r.get(1)?,
+                trace_run_id: r.get(2)?,
+                app_slug: r.get(3)?,
+                category: r.get(4)?,
+                summary: r.get(5)?,
+                logs_scrubbed: r.get(6)?,
+                diff_patch: r.get(7)?,
+                status: r.get(8)?,
+                created_at: r.get(9)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
     }
 
     pub fn record_shadow_feedback(&self, action_id: &str, agreed: bool) -> Result<()> {

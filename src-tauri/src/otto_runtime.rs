@@ -186,20 +186,77 @@ pub fn default_gatekeeper_key_path() -> String {
     "C:\\Users\\rodrigo\\.ssh\\sre-agent-wsh".to_string()
 }
 
+pub const ALLOWED_WSH_CONTAINERS: &[&str] = &[
+    "panorama-auth",
+    "spendy-ledger",
+    "biomed-maven",
+    "water-analyzer",
+    "tasty-basket",
+    "energy-analyzer",
+    "panorama-resources",
+    "unifi-siem",
+];
+
+pub fn resolve_allowlisted_wsh_container(slug_or_name: &str) -> Option<&'static str> {
+    match slug_or_name.trim().to_ascii_lowercase().as_str() {
+        "auth" | "panorama-auth" => Some("panorama-auth"),
+        "spendy" | "spendy-ledger" => Some("spendy-ledger"),
+        "biomed" | "biomed-maven" => Some("biomed-maven"),
+        "water" | "water-analyzer" => Some("water-analyzer"),
+        "basket" | "tasty-basket" => Some("tasty-basket"),
+        "energy" | "energy-analyzer" => Some("energy-analyzer"),
+        "res" | "resources" | "panorama-resources" => Some("panorama-resources"),
+        "unifi-siem" | "siem" => Some("unifi-siem"),
+        _ => None,
+    }
+}
+
+/// Validates and normalizes a compiled gatekeeper command strictly matching
+/// `/usr/local/bin/sre-agent-gatekeeper.sh` (4 verbs only, zero shell metacharacters).
+pub fn validate_gatekeeper_command(raw_verb: &str) -> Result<String, String> {
+    let trimmed = raw_verb.trim();
+    if trimmed.is_empty() {
+        return Err("Gatekeeper command cannot be empty".to_string());
+    }
+    if trimmed.contains([';', '&', '|', '$', '`', '\n', '\r', '>', '<', '\\', '"', '\'']) {
+        return Err("Gatekeeper command contains prohibited shell metacharacters".to_string());
+    }
+    let tokens: Vec<&str> = trimmed.split_whitespace().collect();
+    match tokens.as_slice() {
+        ["probe-snapshot"] => Ok("probe-snapshot".to_string()),
+        ["probe-logs"] => Ok("probe-logs".to_string()),
+        ["restart-container", target] => {
+            let safe_name = resolve_allowlisted_wsh_container(target).ok_or_else(|| {
+                format!(
+                    "Container '{}' is not in compiled WSH gatekeeper allowlist",
+                    target
+                )
+            })?;
+            Ok(format!("restart-container {}", safe_name))
+        }
+        ["container-health", target] => {
+            let safe_name = resolve_allowlisted_wsh_container(target).ok_or_else(|| {
+                format!(
+                    "Container '{}' is not in compiled WSH gatekeeper allowlist",
+                    target
+                )
+            })?;
+            Ok(format!("container-health {}", safe_name))
+        }
+        _ => Err(format!(
+            "Gatekeeper verb '{}' is not in the compiled 4-verb allowlist",
+            trimmed
+        )),
+    }
+}
+
 /// Executes a strictly compiled verb against WSH using ONLY the dedicated `sre-agent-wsh`
 /// Ed25519 key (never `rsa-key-deployment`), enforced by the Suricata SSH SYN token bucket.
 pub fn run_gatekeeper_verb(
     budget: &SuricataSshBudget,
     verb: &str,
 ) -> Result<String, String> {
-    // Allow strictly compiled read-only verbs in Phase 1
-    let clean_verb = verb.trim();
-    if !matches!(clean_verb, "probe-snapshot" | "probe-logs") {
-        return Err(format!(
-            "Gatekeeper verb '{}' is not permitted in Phase 1 read-only broker",
-            clean_verb
-        ));
-    }
+    let clean_verb = validate_gatekeeper_command(verb)?;
 
     let key_path = default_gatekeeper_key_path();
     if !Path::new(&key_path).exists() {
@@ -234,7 +291,7 @@ pub fn run_gatekeeper_verb(
         "-i",
         &key_path,
         "root@wsh.panoramadr.com",
-        clean_verb,
+        &clean_verb,
     ]);
 
     #[cfg(windows)]
@@ -377,6 +434,7 @@ impl OttoRuntimeController {
         kill_switch_active: bool,
         circuit_breaker_state: &str,
         pending_approvals_count: i64,
+        active_soaks_count: i64,
         daily_t1_calls: i64,
         daily_t2_calls: i64,
         dropped_noise_24h_count: i64,
@@ -385,6 +443,7 @@ impl OttoRuntimeController {
         guard.kill_switch_active = kill_switch_active;
         guard.circuit_breaker_state = circuit_breaker_state.to_string();
         guard.pending_approvals_count = pending_approvals_count;
+        guard.active_soaks_count = active_soaks_count;
         guard.daily_t1_calls = daily_t1_calls;
         guard.daily_t2_calls = daily_t2_calls;
         guard.dropped_noise_24h_count = dropped_noise_24h_count;
@@ -418,9 +477,25 @@ impl OttoRuntimeController {
                     if pending_approvals_count == 1 { "" } else { "s" }
                 );
                 guard.summary = format!(
-                    "{} L3 proposal{} waiting for desktop review",
+                    "{} L3 proposal{} waiting for desktop review{}",
                     pending_approvals_count,
-                    if pending_approvals_count == 1 { "" } else { "s" }
+                    if pending_approvals_count == 1 { "" } else { "s" },
+                    if active_soaks_count > 0 {
+                        format!(" · {} soak{} active", active_soaks_count, if active_soaks_count == 1 { "" } else { "s" })
+                    } else {
+                        String::new()
+                    }
+                );
+            } else if active_soaks_count > 0 {
+                guard.state = OttoRuntimePhase::Verifying;
+                guard.phase_label = format!(
+                    "Otto: Soaking ({})",
+                    active_soaks_count
+                );
+                guard.summary = format!(
+                    "Monitoring {} active 15m post-deploy soak window{}",
+                    active_soaks_count,
+                    if active_soaks_count == 1 { "" } else { "s" }
                 );
             } else {
                 guard.state = OttoRuntimePhase::Idle;
@@ -479,7 +554,7 @@ mod tests {
         assert!(s1.started_at.is_some());
         assert!(s1.can_abort);
 
-        let paused = ctrl.sync_from_db_state(None, true, "CLOSED", 0, 1, 1, 12);
+        let paused = ctrl.sync_from_db_state(None, true, "CLOSED", 0, 0, 1, 1, 12);
         assert_eq!(paused.state, OttoRuntimePhase::Paused);
         assert!(paused.kill_switch_active);
         assert!(!paused.can_abort);
