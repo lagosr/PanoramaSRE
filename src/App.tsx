@@ -97,6 +97,7 @@ import { inferPageScopeFromJob } from './lib/stream-utils';
 import {
   shouldAutoOpenOnJobStart,
   shouldAutoOpenOnJobFinish,
+  shouldAutoCollapseDockOnNavigate,
   resolveResponsiveDockLayout,
 } from './lib/console-dock-policy';
 import { buildSyncAlertEvaluationInput } from './lib/pushover-payload';
@@ -260,6 +261,8 @@ export const App: React.FC = () => {
   isDrawerOpenRef.current = isDrawerOpen;
   const autoOpenModeRef = useRef<ConsoleAutoOpenMode>('smart');
   autoOpenModeRef.current = autoOpenMode;
+  const scopeModeRef = useRef<ConsoleScopeMode>('page');
+  scopeModeRef.current = scopeMode;
   const activeTerminalTabIdRef = useRef<string>('');
   activeTerminalTabIdRef.current = activeTerminalTabId;
   const terminalTabsRef = useRef<TerminalTab[]>([]);
@@ -685,6 +688,18 @@ export const App: React.FC = () => {
           focusId: undefined,
           nonce: prev.nonce + 1,
         }));
+      }
+      if (
+        shouldAutoCollapseDockOnNavigate({
+          dockOpen: isDrawerOpenRef.current,
+          fromPage: activeTab,
+          toPage: view,
+          tabs: terminalTabsRef.current,
+          activeTabId: activeTerminalTabIdRef.current,
+          scopeMode: scopeModeRef.current,
+        })
+      ) {
+        setIsDrawerOpen(false);
       }
       setActiveTab(view);
     },
@@ -1556,10 +1571,23 @@ export const App: React.FC = () => {
 
   const openOttoWithContext = useCallback(
     (seed: OttoContextSeed) => {
+      if (
+        shouldAutoCollapseDockOnNavigate({
+          dockOpen: isDrawerOpenRef.current,
+          fromPage: activeTab,
+          toPage: 'agent',
+          tabs: terminalTabsRef.current,
+          activeTabId: activeTerminalTabIdRef.current,
+          scopeMode: scopeModeRef.current,
+          forceFocusTargetView: true,
+        })
+      ) {
+        setIsDrawerOpen(false);
+      }
       setOttoPendingSeed((prev) => ({ seed, nonce: prev.nonce + 1 }));
       navigateTo('agent', { tab: 'ask', returnFromCurrent: true });
     },
-    [navigateTo]
+    [activeTab, navigateTo]
   );
 
   const handleToggleOttoKillSwitch = useCallback(

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   shouldAutoOpenOnJobStart,
   shouldAutoOpenOnJobFinish,
+  shouldAutoCollapseDockOnNavigate,
   computeVisibleDockTabs,
   resolveResponsiveDockLayout,
   getLastMeaningfulLine,
@@ -184,6 +185,76 @@ describe('console-dock-policy', () => {
         scopeMode: 'all',
       });
       expect(visible).toHaveLength(2);
+    });
+  });
+
+  describe('shouldAutoCollapseDockOnNavigate', () => {
+    it('collapses finished deploy dock when navigating from releases to agent in page scope', () => {
+      const tabs = [
+        makeTab({ id: 'deploy-auth-1', pageScope: 'releases', isRunning: false, exitCode: 0 }),
+        makeTab({ id: 'otto-old-fail', pageScope: 'agent', isRunning: false, exitCode: 1 }),
+      ];
+      expect(
+        shouldAutoCollapseDockOnNavigate({
+          dockOpen: true,
+          fromPage: 'releases',
+          toPage: 'agent',
+          tabs,
+          activeTabId: 'deploy-auth-1',
+          scopeMode: 'page',
+        })
+      ).toBe(true);
+    });
+
+    it('keeps dock open if any job is still actively running', () => {
+      const tabs = [
+        makeTab({ id: 'deploy-auth-1', pageScope: 'releases', isRunning: true }),
+        makeTab({ id: 'otto-old-fail', pageScope: 'agent', isRunning: false, exitCode: 1 }),
+      ];
+      expect(
+        shouldAutoCollapseDockOnNavigate({
+          dockOpen: true,
+          fromPage: 'releases',
+          toPage: 'agent',
+          tabs,
+          activeTabId: 'deploy-auth-1',
+          scopeMode: 'page',
+          forceFocusTargetView: true,
+        })
+      ).toBe(false);
+    });
+
+    it('collapses finished dock on Ask Otto deep-link even in all-suite mode', () => {
+      const tabs = [
+        makeTab({ id: 'deploy-auth-1', pageScope: 'releases', isRunning: false, exitCode: 0 }),
+      ];
+      expect(
+        shouldAutoCollapseDockOnNavigate({
+          dockOpen: true,
+          fromPage: 'releases',
+          toPage: 'agent',
+          tabs,
+          activeTabId: 'deploy-auth-1',
+          scopeMode: 'all',
+          forceFocusTargetView: true,
+        })
+      ).toBe(true);
+    });
+
+    it('keeps dock open in all-suite mode during normal sidebar navigation', () => {
+      const tabs = [
+        makeTab({ id: 'deploy-auth-1', pageScope: 'releases', isRunning: false, exitCode: 0 }),
+      ];
+      expect(
+        shouldAutoCollapseDockOnNavigate({
+          dockOpen: true,
+          fromPage: 'releases',
+          toPage: 'agent',
+          tabs,
+          activeTabId: 'deploy-auth-1',
+          scopeMode: 'all',
+        })
+      ).toBe(false);
     });
   });
 

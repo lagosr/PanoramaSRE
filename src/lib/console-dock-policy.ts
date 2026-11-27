@@ -72,6 +72,47 @@ export function computeVisibleDockTabs(params: {
 }
 
 /**
+ * Determine whether switching views (or deep-linking into an investigation view such
+ * as Ask Otto) should auto-collapse an open Console Dock so a finished job from the
+ * previous page never silently swaps into an unrelated historical log from the target page.
+ *
+ * Never collapses while any console job is actively running.
+ */
+export function shouldAutoCollapseDockOnNavigate(params: {
+  dockOpen: boolean;
+  fromPage: NavSectionId;
+  toPage: NavSectionId;
+  tabs: TerminalTab[];
+  activeTabId: string;
+  scopeMode: ConsoleScopeMode;
+  forceFocusTargetView?: boolean;
+}): boolean {
+  const {
+    dockOpen,
+    fromPage,
+    toPage,
+    tabs,
+    activeTabId,
+    scopeMode,
+    forceFocusTargetView = false,
+  } = params;
+  if (!dockOpen) return false;
+  if (tabs.some((t) => t.isRunning)) return false;
+  if (forceFocusTargetView) return true;
+  if (fromPage === toPage) return false;
+  if (scopeMode !== 'page') return false;
+
+  const activeTab = tabs.find((t) => t.id === activeTabId);
+  if (!activeTab) return true;
+  const activeTabScope = inferPageScopeFromJob(
+    activeTab.id,
+    activeTab.pageScope,
+    activeTab.title
+  );
+  return activeTabScope !== toPage;
+}
+
+/**
  * Resolve responsive desktop layout geometry for Right vs. Bottom console docking
  * and automatic soft-collapse of the sidebar on medium viewports (1280px–1599px).
  */

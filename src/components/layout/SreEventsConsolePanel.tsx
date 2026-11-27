@@ -41,6 +41,7 @@ import {
   computeVisibleDockTabs,
   getLastMeaningfulLine,
 } from '../../lib/console-dock-policy';
+import { formatRelativeTime } from '../../lib/formatters';
 import { useSmartAutoScroll } from '../../hooks/useSmartAutoScroll';
 
 export type { TerminalTab };
@@ -1042,6 +1043,80 @@ export const SreEventsConsolePanel: React.FC<SreEventsConsolePanelProps> = ({
         {/* Main Body Viewport */}
         {activeMainSection === 'console' ? (
           <div className="relative flex-1 flex flex-col min-h-0 bg-slate-50 dark:bg-[#050b14]">
+            {activeTab && (() => {
+              const finishDetails = getTabFinishedDetails(activeTab);
+              const isFailed =
+                !activeTab.isRunning &&
+                activeTab.exitCode !== undefined &&
+                activeTab.exitCode !== 0;
+              const isHistorical =
+                !activeTab.isRunning &&
+                finishDetails.timestampMs > 0 &&
+                Date.now() - finishDetails.timestampMs > 2 * 60_000;
+              const relativeLabel =
+                !activeTab.isRunning && finishDetails.timestampMs > 0
+                  ? formatRelativeTime(new Date(finishDetails.timestampMs).toISOString())
+                  : null;
+              return (
+                <div
+                  className={`px-3.5 py-1.5 border-b text-[11px] font-mono flex flex-wrap items-center justify-between gap-2 shrink-0 ${
+                    isFailed
+                      ? 'bg-rose-50/90 dark:bg-rose-950/35 border-rose-200 dark:border-rose-500/30 text-rose-900 dark:text-rose-200'
+                      : activeTab.isRunning
+                      ? 'bg-emerald-50/80 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-500/30 text-emerald-900 dark:text-emerald-200'
+                      : 'bg-white dark:bg-slate-900/90 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300'
+                  }`}
+                >
+                  <div className="flex flex-wrap items-center gap-2 min-w-0">
+                    <span
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase shrink-0 ${
+                        activeTab.isRunning
+                          ? 'bg-emerald-500/20 text-emerald-800 dark:text-emerald-300'
+                          : isFailed
+                          ? 'bg-rose-500/20 text-rose-800 dark:text-rose-300'
+                          : 'bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+                      }`}
+                    >
+                      {activeTab.isRunning
+                        ? 'LIVE'
+                        : isFailed
+                        ? `FAILED · EXIT ${activeTab.exitCode}`
+                        : `COMPLETED · EXIT ${activeTab.exitCode ?? 0}`}
+                    </span>
+                    {isHistorical && (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-amber-500/20 text-amber-900 dark:text-amber-300 border border-amber-500/30 shrink-0">
+                        HISTORICAL LOG
+                      </span>
+                    )}
+                    <span className="font-semibold truncate max-w-[320px]" title={activeTab.title}>
+                      {activeTab.title}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0 text-[10px] text-slate-600 dark:text-slate-400 tabular-nums">
+                    <span className="inline-flex items-center gap-1">
+                      <Clock className="w-3 h-3 shrink-0" />
+                      <span>
+                        {activeTab.isRunning
+                          ? 'Running now'
+                          : relativeLabel
+                          ? `Ran ${relativeLabel} · ${finishDetails.label}`
+                          : finishDetails.label}
+                      </span>
+                    </span>
+                    {!activeTab.isRunning && (
+                      <button
+                        type="button"
+                        onClick={() => onCloseTab(activeTab.id)}
+                        className="px-1.5 py-0.5 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 cursor-pointer"
+                        title="Dismiss this saved console session"
+                      >
+                        Dismiss
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
             <div
               ref={scrollRef}
               onScroll={handleConsoleScroll}
