@@ -115,7 +115,8 @@ export const AskOttoPanel: React.FC<AskOttoPanelProps> = ({
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [confirmApproveProposal, setConfirmApproveProposal] = useState<OttoProposalRow | null>(null);
   const [isApprovingProposal, setIsApprovingProposal] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const shouldAutoScrollChatRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const lastConsumedSeedNonceRef = useRef<number>(0);
 
@@ -177,7 +178,7 @@ export const AskOttoPanel: React.FC<AskOttoPanelProps> = ({
         setMessages([]);
         setChatError(null);
         onConsumeContextSeed?.();
-        setTimeout(() => textareaRef.current?.focus(), 60);
+        setTimeout(() => textareaRef.current?.focus({ preventScroll: true }), 60);
       } catch (err) {
         setChatError(`Failed to open context-seeded Otto thread: ${String(err)}`);
       }
@@ -186,7 +187,14 @@ export const AskOttoPanel: React.FC<AskOttoPanelProps> = ({
   }, [pendingContextSeed, pendingContextNonce, onConsumeContextSeed]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (!shouldAutoScrollChatRef.current) return;
+    const container = messagesContainerRef.current;
+    if (container) {
+      container.scrollTop = container.scrollHeight;
+    }
+    if (!isSending) {
+      shouldAutoScrollChatRef.current = false;
+    }
   }, [messages.length, isSending]);
 
   const activeThread = useMemo(
@@ -232,7 +240,7 @@ export const AskOttoPanel: React.FC<AskOttoPanelProps> = ({
       setActiveThreadId(created.id);
       setMessages([]);
       setChatError(null);
-      setTimeout(() => textareaRef.current?.focus(), 50);
+      setTimeout(() => textareaRef.current?.focus({ preventScroll: true }), 50);
     } catch (err) {
       setChatError(String(err));
     }
@@ -280,6 +288,7 @@ export const AskOttoPanel: React.FC<AskOttoPanelProps> = ({
     }
 
     if (!overrideText) setDraft('');
+    shouldAutoScrollChatRef.current = true;
     setIsSending(true);
     try {
       const res = await invoke<SendOttoChatMessageResult>('send_otto_chat_message', {
@@ -555,7 +564,10 @@ export const AskOttoPanel: React.FC<AskOttoPanelProps> = ({
         )}
 
         {/* Messages Transcript */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-[340px] max-h-[540px]">
+        <div
+          ref={messagesContainerRef}
+          className="flex-1 overflow-y-auto p-4 space-y-4 min-h-[340px] max-h-[540px]"
+        >
           {messages.length === 0 ? (
             <div className="py-6 space-y-4">
               <div className="flex flex-col items-center text-center max-w-lg mx-auto space-y-2">
@@ -805,8 +817,6 @@ export const AskOttoPanel: React.FC<AskOttoPanelProps> = ({
               </div>
             </div>
           )}
-
-          <div ref={messagesEndRef} />
         </div>
 
         {/* Error Banner */}

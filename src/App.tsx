@@ -255,6 +255,7 @@ export const App: React.FC = () => {
     typeof window !== 'undefined' ? window.innerWidth : 1600
   );
   const dismissedJobIdsRef = useRef<Set<string>>(new Set());
+  const mainScrollContainerRef = useRef<HTMLDivElement>(null);
   const isDrawerOpenRef = useRef<boolean>(false);
   isDrawerOpenRef.current = isDrawerOpen;
   const autoOpenModeRef = useRef<ConsoleAutoOpenMode>('smart');
@@ -689,6 +690,12 @@ export const App: React.FC = () => {
     },
     [activeTab]
   );
+
+  useEffect(() => {
+    if (mainScrollContainerRef.current) {
+      mainScrollContainerRef.current.scrollTop = 0;
+    }
+  }, [activeTab]);
 
   // Persist dock & sidebar user preferences
   useEffect(() => {
@@ -4844,7 +4851,10 @@ export const App: React.FC = () => {
               responsiveDockLayout.effectiveDockSide === 'right' ? 'flex-row' : 'flex-col'
             } overflow-hidden`}
           >
-          <div className="flex-1 min-w-0 min-h-0 overflow-y-auto">
+          <div
+            ref={mainScrollContainerRef}
+            className="flex-1 min-w-0 min-h-0 overflow-y-auto"
+          >
           {returnTo && (
             <ReturnBreadcrumbPill
               returnTo={returnTo}

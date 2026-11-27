@@ -2769,8 +2769,40 @@ struct IpRollup {
     strict_non_us_unblocked: u64,
     hosts: BTreeSet<String>,
     paths: BTreeSet<String>,
+    strict_origin_hosts: BTreeSet<String>,
+    strict_origin_paths: BTreeSet<String>,
     ray_ids: BTreeSet<String>,
     countries: BTreeSet<String>,
+}
+
+/// Returns true for static public branding/UI assets (logos, icons, fonts, CSS,
+/// `/_next/static/*`, web manifests) and Cloudflare `/cdn-cgi/*` edge plumbing that
+/// contain zero user/app data and must NEVER fire protected-route `ORIGIN_BREACH_THROUGH`.
+/// Dynamic API/app routes (including `*/api/health`, `/spendy/*`, `/api/admin/*`) stay
+/// strictly fail-closed behind Cloudflare Zero Trust Access.
+pub fn is_public_wsh_non_breach_path(raw_path: &str) -> bool {
+    let base = raw_path
+        .split('?')
+        .next()
+        .unwrap_or(raw_path)
+        .trim()
+        .to_ascii_lowercase();
+    if base.is_empty() || base == "/" {
+        return true;
+    }
+    if base.starts_with("/cdn-cgi/")
+        || base.contains("/_next/static/")
+        || base.ends_with("/favicon.ico")
+        || base.ends_with("/robots.txt")
+        || base.ends_with("/manifest.json")
+        || base.ends_with("/manifest.webmanifest")
+    {
+        return true;
+    }
+    const PUBLIC_STATIC_EXTS: &[&str] = &[
+        ".png", ".svg", ".ico", ".webp", ".jpg", ".jpeg", ".gif", ".woff", ".woff2", ".css", ".map",
+    ];
+    PUBLIC_STATIC_EXTS.iter().any(|ext| base.ends_with(ext))
 }
 
 pub fn evaluate_stage0_triage(
@@ -2992,7 +3024,12 @@ pub fn evaluate_stage0_triage_with_quarantine(
             let path_lower = ev.path.to_ascii_lowercase();
             let is_parakith_optin = host_lower.contains("parakith") && path_lower.starts_with("/api/opt-in");
 
-            let is_origin_app_hit = (ev.origin_status == 200 || ev.origin_status == 302)
+            // Only count actual HTTP 200 origin content serves on dynamic/protected app routes.
+            // Unauthenticated HTTP 302 redirects to Access/SSO login and static branding/UI
+            // assets (logos, icons, fonts, CSS, /_next/static/*, /cdn-cgi/*) are NOT origin
+            // data leaks, while dynamic API/app routes (including */api/health) stay fail-closed.
+            let is_origin_app_hit = ev.origin_status == 200
+                && !is_public_wsh_non_breach_path(&ev.path)
                 && (ev.path.starts_with("/api/admin")
                     || ev.path.starts_with("/auth")
                     || ev.path.starts_with("/spendy")
@@ -3087,6 +3124,12 @@ pub fn evaluate_stage0_triage_with_quarantine(
 
             if profile == DomainProfile::StrictPrivate && is_origin_app_hit {
                 entry.origin_200s += 1;
+                if !ev.host.is_empty() {
+                    entry.strict_origin_hosts.insert(ev.host.clone());
+                }
+                if entry.strict_origin_paths.len() < 15 {
+                    entry.strict_origin_paths.insert(ev.path.clone());
+                }
             } else if profile == DomainProfile::StrictPrivate
                 && !ev.client_country.is_empty()
                 && !ev.client_country.eq_ignore_ascii_case("US")
@@ -3177,9 +3220,26 @@ pub fn evaluate_stage0_triage_with_quarantine(
                     .get(ip)
                     .map(|i| !i.tags.is_empty())
                     .unwrap_or(false);
+                let strict_host_target = r
+                    .strict_origin_hosts
+                    .iter()
+                    .next()
+                    .cloned()
+                    .or_else(|| {
+                        r.hosts
+                            .iter()
+                            .find(|h| classify_host_sensitivity(h) == DomainProfile::StrictPrivate)
+                            .cloned()
+                    })
+                    .or_else(|| r.hosts.iter().next().cloned());
+                let strict_paths_for_evidence = if !r.strict_origin_paths.is_empty() {
+                    &r.strict_origin_paths
+                } else {
+                    &r.paths
+                };
                 let has_probe_or_admin_hit = r.probe_200_or_5xx > 0
                     || r.stack_probe_unblocked > 0
-                    || r.paths
+                    || strict_paths_for_evidence
                         .iter()
                         .any(|p| p.starts_with("/api/admin") || p.contains("/api/admin/"));
                 let has_access_deny = cf
@@ -3200,12 +3260,7 @@ pub fn evaluate_stage0_triage_with_quarantine(
                     if !r.asn.is_empty() {
                         suspect_asns.insert(r.asn.clone());
                     }
-                    if let Some(strict_host) = r
-                        .hosts
-                        .iter()
-                        .find(|h| classify_host_sensitivity(h) == DomainProfile::StrictPrivate)
-                        .or_else(|| r.hosts.iter().next())
-                    {
+                    if let Some(ref strict_host) = strict_host_target {
                         *zone_origin_breach_counts
                             .entry(strict_host.clone())
                             .or_insert(0) += r.origin_200s;
@@ -3232,15 +3287,15 @@ pub fn evaluate_stage0_triage_with_quarantine(
                         "ORIGIN_BREACH",
                         format!("Untrusted Origin Response on Strict Private Route ({})", ip),
                         format!(
-                            "{} (AS{} {}, {}) received {} origin 200/302 responses on protected routes.{}",
+                            "{} (AS{} {}, {}) received {} origin 200 responses on protected routes.{}",
                             ip, r.asn, r.as_org, r.country, r.origin_200s, auth_context_note
                         ),
-                        r.hosts.iter().next().cloned(),
+                        strict_host_target.clone(),
                         Some(ip.clone()),
                         Some(r.asn.clone()),
                         r.ray_ids.iter().cloned().collect(),
                         json!({
-                            "paths": r.paths,
+                            "paths": strict_paths_for_evidence,
                             "origin_200s": r.origin_200s,
                             "matchedAccessEmails": matched_emails,
                             "authProofStatus": auth_proof_status,
@@ -3256,15 +3311,15 @@ pub fn evaluate_stage0_triage_with_quarantine(
                         "ZERO_TRUST",
                         format!("Uncorrelated US Session Under Intact Access Gate ({})", ip),
                         format!(
-                            "{} (AS{} {}, US) received {} origin 200/302 responses on protected app routes while Family Access policy is verified intact (0 broad rules, all policy emails allowlisted, clean IP intel, 0 PanoramaAuth anomalies). Likely a cached Access cookie across carrier/Wi-Fi IPv6 rotation.",
+                            "{} (AS{} {}, US) received {} origin 200 responses on protected app routes while Family Access policy is verified intact (0 broad rules, all policy emails allowlisted, clean IP intel, 0 PanoramaAuth anomalies). Likely a cached Access cookie across carrier/Wi-Fi IPv6 rotation.",
                             ip, r.asn, r.as_org, r.origin_200s
                         ),
-                        r.hosts.iter().next().cloned(),
+                        strict_host_target,
                         Some(ip.clone()),
                         Some(r.asn.clone()),
                         r.ray_ids.iter().cloned().collect(),
                         json!({
-                            "paths": r.paths,
+                            "paths": strict_paths_for_evidence,
                             "origin_200s": r.origin_200s,
                             "authProofStatus": "UNCORRELATED_US_INTACT_GATE",
                             "accessGateVerified": true,

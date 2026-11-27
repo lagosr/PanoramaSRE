@@ -3971,4 +3971,113 @@ mod tests {
             "14.20 GB reclaimable / 48.50 GB total"
         );
     }
+
+    #[test]
+    fn test_origin_breach_excludes_public_static_302_and_cross_host_paths() {
+        use panorama_sre_lib::commands::threat_intel_ops::is_public_wsh_non_breach_path;
+
+        // 1. Public health, JWKS, login, and static branding assets are NOT protected-route breaches
+        // 1. Static branding/UI assets and edge plumbing are exempt; dynamic/API routes stay fail-closed
+        assert!(is_public_wsh_non_breach_path("/basket/logo-dark.png"));
+        assert!(is_public_wsh_non_breach_path("/spendy/logo-dark.png?v=2"));
+        assert!(is_public_wsh_non_breach_path("/spendy/_next/static/chunks/app.js"));
+        assert!(is_public_wsh_non_breach_path("/cdn-cgi/access/login"));
+        assert!(is_public_wsh_non_breach_path("/favicon.ico"));
+        assert!(!is_public_wsh_non_breach_path("/spendy/api/health"));
+        assert!(!is_public_wsh_non_breach_path("/spendy/transactions"));
+        assert!(!is_public_wsh_non_breach_path("/spendy/api/admin/logs"));
+        assert!(!is_public_wsh_non_breach_path("/basket/lists"));
+
+        // 2. Residential US IP hitting ONLY public static logos, 302 auth redirect, and parakith.com
+        //    must produce ZERO ORIGIN_BREACH_THROUGH and ZERO UNCORRELATED_US_SESSION findings even with empty allowlist.
+        let ip = "76.25.246.157";
+        let benign_events = vec![
+            CfHttpEvent {
+                path: "/basket/logo-dark.png".into(),
+                origin_status: 200,
+                ..make_basket_http_event(ip)
+            },
+            CfHttpEvent {
+                path: "/spendy/logo-dark.png".into(),
+                origin_status: 200,
+                ..make_basket_http_event(ip)
+            },
+            CfHttpEvent {
+                path: "/spendy/_next/static/chunks/main.css".into(),
+                origin_status: 200,
+                ..make_basket_http_event(ip)
+            },
+            CfHttpEvent {
+                path: "/spendy".into(),
+                edge_status: 302,
+                origin_status: 302, // unauthenticated redirect to auth login, NOT a data leak
+                ..make_basket_http_event(ip)
+            },
+            CfHttpEvent {
+                host: "www.parakith.com".into(),
+                path: "/opt-in".into(),
+                origin_status: 200,
+                ..make_basket_http_event(ip)
+            },
+        ];
+        let cf_benign = make_cf_snapshot_for_family_tests(benign_events, vec![]);
+        let res_benign = evaluate_stage0_triage(
+            "run-benign-static",
+            "2026-11-27T19:30:00Z",
+            Some(&cf_benign),
+            None,
+            None,
+            &[],
+            &[],
+            &[],
+        );
+        assert!(
+            res_benign
+                .findings
+                .iter()
+                .all(|f| f.rule_id != "ORIGIN_BREACH_THROUGH" && f.rule_id != "UNCORRELATED_US_SESSION"),
+            "Static logos, health checks, and 302 redirects must not fire origin breach: {:?}",
+            res_benign.findings
+        );
+
+        // 3. Genuine unauthenticated 200 on protected /spendy/transactions alongside www.parakith.com /opt-in
+        //    MUST still fire HIGH ORIGIN_BREACH_THROUGH, and host + paths must be strictly wsh.panoramadr.com only!
+        let mixed_events = vec![
+            CfHttpEvent {
+                host: "www.parakith.com".into(),
+                path: "/opt-in".into(),
+                origin_status: 200,
+                ..make_basket_http_event("198.51.100.77")
+            },
+            CfHttpEvent {
+                host: "wsh.panoramadr.com".into(),
+                path: "/spendy/transactions".into(),
+                origin_status: 200,
+                ..make_basket_http_event("198.51.100.77")
+            },
+        ];
+        let cf_mixed = make_cf_snapshot_for_family_tests(mixed_events, vec![]);
+        let res_mixed = evaluate_stage0_triage(
+            "run-mixed-host-breach",
+            "2026-11-27T19:31:00Z",
+            Some(&cf_mixed),
+            None,
+            None,
+            &[],
+            &[],
+            &[],
+        );
+        let breach = res_mixed
+            .findings
+            .iter()
+            .find(|f| f.rule_id == "ORIGIN_BREACH_THROUGH")
+            .expect("Real protected /spendy/transactions 200 must fire ORIGIN_BREACH_THROUGH");
+        assert_eq!(breach.severity, "HIGH");
+        assert_eq!(breach.host.as_deref(), Some("wsh.panoramadr.com"));
+        assert!(breach.evidence_json.contains("/spendy/transactions"));
+        assert!(
+            !breach.evidence_json.contains("/opt-in"),
+            "parakith.com /opt-in must never contaminate wsh.panoramadr.com breach evidence"
+        );
+    }
 }

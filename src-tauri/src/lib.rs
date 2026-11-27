@@ -60,13 +60,17 @@ use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
 pub fn resolve_sre_db_path() -> std::path::PathBuf {
-    // 1. If running in local dev repository or directory with existing data/sre.sqlite, use local
+    // 1. In debug/dev runs only, honor a local repository `data/sre.sqlite` when present.
+    // Release binaries ALWAYS use the single authoritative AppData Local database so a
+    // stray `data/` folder next to `target/release/panorama-sre.exe` never creates a
+    // split-brain cold-start database (which would wipe allowlist & LAN baselines).
     let local_data = std::path::Path::new("data/sre.sqlite");
+    #[cfg(debug_assertions)]
     if local_data.exists() || std::path::Path::new("data").is_dir() {
         return local_data.to_path_buf();
     }
 
-    // 2. Fallback to AppData Local directory (e.g. C:\Users\<user>\AppData\Local\com.panoramadr.sre\data\sre.sqlite)
+    // 2. Canonical AppData Local directory (e.g. C:\Users\<user>\AppData\Local\com.panoramadr.sre\data\sre.sqlite)
     #[cfg(windows)]
     if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
         let app_dir = std::path::Path::new(&local_app_data).join("com.panoramadr.sre").join("data");

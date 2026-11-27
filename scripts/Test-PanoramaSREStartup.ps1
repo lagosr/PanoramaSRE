@@ -41,5 +41,9 @@ Write-Host "Process running healthy: PID $($proc.Id), Memory: $([math]::Round($w
 $hwnd = (Get-Process -Id $proc.Id).MainWindowHandle
 Write-Host "MainWindowHandle: $hwnd" -ForegroundColor Green
 
+# 6. Cleanly terminate the smoke-test target\release binary so it never lingers or splits state
+Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 300
+
 Write-Host "=== Test Passed: PanoramaSRE started cleanly with zero startup crashes ===" -ForegroundColor Green
 exit 0
