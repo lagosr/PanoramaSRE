@@ -179,6 +179,56 @@ pub struct OttoHandoffPacketRow {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OttoWafLeaseRow {
+    pub id: String,
+    pub proposal_id: Option<String>,
+    pub cf_zone_id: String,
+    pub cf_zone_name: String,
+    pub cf_ruleset_id: String,
+    pub cf_rule_id: String,
+    pub rule_description: String,
+    pub rule_expression: String,
+    pub action_type: String,
+    pub target_summary: String,
+    pub prior_ruleset_snapshot_json: String,
+    pub ttl_minutes: Option<i64>,
+    pub created_at: String,
+    pub expires_at: Option<String>,
+    pub reverted_at: Option<String>,
+    pub status: String, // ACTIVE | EXPIRED_REVERTED | MANUALLY_REVERTED | FAILED
+    pub trace_run_id: Option<String>,
+    pub error_text: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OttoDroppedNoiseRow {
+    pub id: String,
+    pub actor_ip: String,
+    pub actor_asn: String,
+    pub country: String,
+    pub host: String,
+    pub surface: String, // StrictPrivate | PublicWeb | ApexMonitor
+    pub reason: String,  // absent_stack | edge_blocked_zero_origin | static_404_crawler | wan_default_deny
+    pub score: i64,
+    pub request_count: i64,
+    pub sample_paths_json: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DroppedNoiseBreakdown {
+    pub total_events: i64,
+    pub total_requests: i64,
+    pub absent_stack: i64,
+    pub edge_blocked_zero_origin: i64,
+    pub static_404_crawler: i64,
+    pub wan_default_deny: i64,
+}
+
 impl SreDatabase {
     pub(crate) fn init_otto_tables(&self) -> Result<()> {
         let conn = self.conn();
@@ -368,7 +418,51 @@ impl SreDatabase {
             );
 
             CREATE INDEX IF NOT EXISTS idx_agent_handoff_packets_created
-                ON agent_handoff_packets (created_at DESC);",
+                ON agent_handoff_packets (created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS agent_waf_leases (
+                id TEXT PRIMARY KEY,
+                proposal_id TEXT,
+                cf_zone_id TEXT NOT NULL,
+                cf_zone_name TEXT NOT NULL DEFAULT '',
+                cf_ruleset_id TEXT NOT NULL,
+                cf_rule_id TEXT NOT NULL,
+                rule_description TEXT NOT NULL DEFAULT '',
+                rule_expression TEXT NOT NULL,
+                action_type TEXT NOT NULL,
+                target_summary TEXT NOT NULL DEFAULT '',
+                prior_ruleset_snapshot_json TEXT NOT NULL DEFAULT '{}',
+                ttl_minutes INTEGER,
+                created_at TEXT NOT NULL,
+                expires_at TEXT,
+                reverted_at TEXT,
+                status TEXT NOT NULL DEFAULT 'ACTIVE',
+                trace_run_id TEXT,
+                error_text TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_agent_waf_leases_status_expires
+                ON agent_waf_leases (status, expires_at ASC);
+
+            CREATE INDEX IF NOT EXISTS idx_agent_waf_leases_created
+                ON agent_waf_leases (created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS agent_dropped_noise_events (
+                id TEXT PRIMARY KEY,
+                actor_ip TEXT NOT NULL,
+                actor_asn TEXT NOT NULL DEFAULT '',
+                country TEXT NOT NULL DEFAULT '',
+                host TEXT NOT NULL DEFAULT '',
+                surface TEXT NOT NULL DEFAULT 'PublicWeb',
+                reason TEXT NOT NULL,
+                score INTEGER NOT NULL DEFAULT 0,
+                request_count INTEGER NOT NULL DEFAULT 1,
+                sample_paths_json TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_agent_dropped_noise_created
+                ON agent_dropped_noise_events (created_at DESC);",
         )?;
 
         let now = Utc::now().to_rfc3339();
@@ -1511,6 +1605,282 @@ impl SreDatabase {
         );
         let _ = self.log_action("AGENT_AUDIT", level, &msg, trace_run_id);
         Ok(())
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 3: Cloudflare WAF TTL Leases & 1-Click Revert Snapshots
+    // ------------------------------------------------------------------------
+
+    pub fn insert_otto_waf_lease(&self, lease: &OttoWafLeaseRow) -> Result<()> {
+        let safe_desc = scrub_secrets(&lease.rule_description);
+        let safe_expr = scrub_secrets(&lease.rule_expression);
+        let safe_target = scrub_secrets(&lease.target_summary);
+        let safe_snap = scrub_secrets(&lease.prior_ruleset_snapshot_json);
+        let safe_err = lease.error_text.as_deref().map(scrub_secrets);
+
+        self.conn().execute(
+            "INSERT OR REPLACE INTO agent_waf_leases (
+                id, proposal_id, cf_zone_id, cf_zone_name, cf_ruleset_id, cf_rule_id,
+                rule_description, rule_expression, action_type, target_summary,
+                prior_ruleset_snapshot_json, ttl_minutes, created_at, expires_at,
+                reverted_at, status, trace_run_id, error_text
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+            params![
+                lease.id,
+                lease.proposal_id,
+                lease.cf_zone_id,
+                lease.cf_zone_name,
+                lease.cf_ruleset_id,
+                lease.cf_rule_id,
+                safe_desc,
+                safe_expr,
+                lease.action_type,
+                safe_target,
+                safe_snap,
+                lease.ttl_minutes,
+                lease.created_at,
+                lease.expires_at,
+                lease.reverted_at,
+                lease.status,
+                lease.trace_run_id,
+                safe_err,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn map_waf_lease_row(r: &rusqlite::Row<'_>) -> Result<OttoWafLeaseRow> {
+        Ok(OttoWafLeaseRow {
+            id: r.get(0)?,
+            proposal_id: r.get(1)?,
+            cf_zone_id: r.get(2)?,
+            cf_zone_name: r.get(3)?,
+            cf_ruleset_id: r.get(4)?,
+            cf_rule_id: r.get(5)?,
+            rule_description: r.get(6)?,
+            rule_expression: r.get(7)?,
+            action_type: r.get(8)?,
+            target_summary: r.get(9)?,
+            prior_ruleset_snapshot_json: r.get(10)?,
+            ttl_minutes: r.get(11)?,
+            created_at: r.get(12)?,
+            expires_at: r.get(13)?,
+            reverted_at: r.get(14)?,
+            status: r.get(15)?,
+            trace_run_id: r.get(16)?,
+            error_text: r.get(17)?,
+        })
+    }
+
+    pub fn list_otto_waf_leases(
+        &self,
+        status_filter: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<OttoWafLeaseRow>> {
+        let cap = limit.clamp(1, 200) as i64;
+        if let Some(st) = status_filter {
+            let mut stmt = self.conn().prepare(
+                "SELECT id, proposal_id, cf_zone_id, cf_zone_name, cf_ruleset_id, cf_rule_id,
+                        rule_description, rule_expression, action_type, target_summary,
+                        prior_ruleset_snapshot_json, ttl_minutes, created_at, expires_at,
+                        reverted_at, status, trace_run_id, error_text
+                 FROM agent_waf_leases
+                 WHERE status = ?1
+                 ORDER BY created_at DESC
+                 LIMIT ?2",
+            )?;
+            let rows = stmt
+                .query_map(params![st, cap], Self::map_waf_lease_row)?
+                .filter_map(|r| r.ok())
+                .collect();
+            return Ok(rows);
+        }
+
+        let mut stmt = self.conn().prepare(
+            "SELECT id, proposal_id, cf_zone_id, cf_zone_name, cf_ruleset_id, cf_rule_id,
+                    rule_description, rule_expression, action_type, target_summary,
+                    prior_ruleset_snapshot_json, ttl_minutes, created_at, expires_at,
+                    reverted_at, status, trace_run_id, error_text
+             FROM agent_waf_leases
+             ORDER BY created_at DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt
+            .query_map(params![cap], Self::map_waf_lease_row)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    pub fn get_otto_waf_lease_by_id(&self, id: &str) -> Result<Option<OttoWafLeaseRow>> {
+        self.conn()
+            .query_row(
+                "SELECT id, proposal_id, cf_zone_id, cf_zone_name, cf_ruleset_id, cf_rule_id,
+                        rule_description, rule_expression, action_type, target_summary,
+                        prior_ruleset_snapshot_json, ttl_minutes, created_at, expires_at,
+                        reverted_at, status, trace_run_id, error_text
+                 FROM agent_waf_leases
+                 WHERE id = ?1",
+                params![id],
+                Self::map_waf_lease_row,
+            )
+            .optional()
+    }
+
+    pub fn list_expired_active_waf_leases(&self, now_iso: &str) -> Result<Vec<OttoWafLeaseRow>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT id, proposal_id, cf_zone_id, cf_zone_name, cf_ruleset_id, cf_rule_id,
+                    rule_description, rule_expression, action_type, target_summary,
+                    prior_ruleset_snapshot_json, ttl_minutes, created_at, expires_at,
+                    reverted_at, status, trace_run_id, error_text
+             FROM agent_waf_leases
+             WHERE status = 'ACTIVE' AND expires_at IS NOT NULL AND expires_at <= ?1
+             ORDER BY expires_at ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![now_iso], Self::map_waf_lease_row)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    pub fn mark_otto_waf_lease_reverted(
+        &self,
+        id: &str,
+        next_status: &str,
+        reverted_at: &str,
+        error_text: Option<&str>,
+    ) -> Result<()> {
+        let safe_err = error_text.map(scrub_secrets);
+        self.conn().execute(
+            "UPDATE agent_waf_leases
+             SET status = ?1, reverted_at = ?2, error_text = ?3
+             WHERE id = ?4",
+            params![next_status, reverted_at, safe_err, id],
+        )?;
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 3: Stage-0 Dropped Noise Audit Trail & 24h Breakdown ($0 LLM)
+    // ------------------------------------------------------------------------
+
+    pub fn record_dropped_noise_events(&self, events: &[OttoDroppedNoiseRow]) -> Result<i64> {
+        if events.is_empty() {
+            return self.sync_dropped_noise_24h_count();
+        }
+        let conn = self.conn();
+        for ev in events {
+            let safe_paths = scrub_secrets(&ev.sample_paths_json);
+            conn.execute(
+                "INSERT OR REPLACE INTO agent_dropped_noise_events (
+                    id, actor_ip, actor_asn, country, host, surface, reason, score,
+                    request_count, sample_paths_json, created_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    ev.id,
+                    ev.actor_ip,
+                    ev.actor_asn,
+                    ev.country,
+                    ev.host,
+                    ev.surface,
+                    ev.reason,
+                    ev.score,
+                    ev.request_count,
+                    safe_paths,
+                    ev.created_at,
+                ],
+            )?;
+        }
+        // Prune older than 7 days and keep latest 500 rows to bound SQLite growth
+        let cutoff_7d = (Utc::now() - chrono::Duration::days(7)).to_rfc3339();
+        let _ = conn.execute(
+            "DELETE FROM agent_dropped_noise_events WHERE created_at < ?1",
+            params![cutoff_7d],
+        );
+        let _ = conn.execute(
+            "DELETE FROM agent_dropped_noise_events
+             WHERE id NOT IN (SELECT id FROM agent_dropped_noise_events ORDER BY created_at DESC LIMIT 500)",
+            [],
+        );
+        self.sync_dropped_noise_24h_count()
+    }
+
+    pub fn sync_dropped_noise_24h_count(&self) -> Result<i64> {
+        let cutoff_24h = (Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
+        let total: i64 = self
+            .conn()
+            .query_row(
+                "SELECT COALESCE(SUM(request_count), 0) FROM agent_dropped_noise_events WHERE created_at >= ?1",
+                params![cutoff_24h],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        let now = Utc::now().to_rfc3339();
+        let _ = self.conn().execute(
+            "UPDATE agent_state SET dropped_noise_24h_count = ?1, updated_at = ?2 WHERE id = 1",
+            params![total, now],
+        );
+        Ok(total)
+    }
+
+    pub fn get_dropped_noise_breakdown_24h(&self) -> Result<DroppedNoiseBreakdown> {
+        let cutoff_24h = (Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
+        let mut stmt = self.conn().prepare(
+            "SELECT reason, COUNT(*), COALESCE(SUM(request_count), 0)
+             FROM agent_dropped_noise_events
+             WHERE created_at >= ?1
+             GROUP BY reason",
+        )?;
+        let mut out = DroppedNoiseBreakdown::default();
+        let rows = stmt.query_map(params![cutoff_24h], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
+        })?;
+        for row in rows.flatten() {
+            let (reason, cnt, reqs) = row;
+            out.total_events += cnt;
+            out.total_requests += reqs;
+            match reason.as_str() {
+                "absent_stack" => out.absent_stack += reqs,
+                "edge_blocked_zero_origin" => out.edge_blocked_zero_origin += reqs,
+                "static_404_crawler" => out.static_404_crawler += reqs,
+                "wan_default_deny" => out.wan_default_deny += reqs,
+                _ => {}
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn list_dropped_noise_events(&self, hours: i64, limit: usize) -> Result<Vec<OttoDroppedNoiseRow>> {
+        let cutoff = (Utc::now() - chrono::Duration::hours(hours.clamp(1, 168))).to_rfc3339();
+        let cap = limit.clamp(1, 200) as i64;
+        let mut stmt = self.conn().prepare(
+            "SELECT id, actor_ip, actor_asn, country, host, surface, reason, score,
+                    request_count, sample_paths_json, created_at
+             FROM agent_dropped_noise_events
+             WHERE created_at >= ?1
+             ORDER BY created_at DESC
+             LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![cutoff, cap], |r| {
+                Ok(OttoDroppedNoiseRow {
+                    id: r.get(0)?,
+                    actor_ip: r.get(1)?,
+                    actor_asn: r.get(2)?,
+                    country: r.get(3)?,
+                    host: r.get(4)?,
+                    surface: r.get(5)?,
+                    reason: r.get(6)?,
+                    score: r.get(7)?,
+                    request_count: r.get(8)?,
+                    sample_paths_json: r.get(9)?,
+                    created_at: r.get(10)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
     }
 }
 

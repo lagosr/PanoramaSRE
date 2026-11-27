@@ -266,6 +266,14 @@ pub fn resolve_gemini_api_key(db: &SreDatabase) -> Option<ResolvedSecret> {
     resolve_dpapi_or_env_secret(db, SETTING_GEMINI_KEY_DPAPI, "GEMINI_API_KEY")
 }
 
+pub fn resolve_cf_api_token(db: &SreDatabase) -> Option<ResolvedSecret> {
+    resolve_dpapi_or_env_secret(db, SETTING_CF_TOKEN_DPAPI, "CLOUDFLARE_API_TOKEN")
+}
+
+pub fn shared_cf_http_client() -> Option<&'static reqwest::Client> {
+    shared_cloudflare_client()
+}
+
 // ============================================================================
 // HTTP Clients & Overlap Mutexes
 // ============================================================================
@@ -939,7 +947,7 @@ fn parse_cf_ip_intel_payload(ip: &str, payload: &Value) -> CfIpIntelInfo {
     }
 }
 
-async fn resolve_cf_account_and_zones(
+pub async fn resolve_cf_account_and_zones(
     client: &reqwest::Client,
     token: &str,
     configured_acct: Option<&str>,
@@ -1467,7 +1475,7 @@ pub async fn collect_cloudflare_snapshot(
     })
 }
 
-fn free_plan_rule_limit_for_plan(plan: &str) -> usize {
+pub fn free_plan_rule_limit_for_plan(plan: &str) -> usize {
     let lower = plan.to_ascii_lowercase();
     if lower.contains("enterprise") {
         1000
@@ -2526,29 +2534,45 @@ pub fn is_irrelevant_cms_probe(path: &str) -> bool {
         "/vendor/phpunit",
         "/boaform",
         "/cgi-bin/",
+        "/actuator",
+        "/.aws",
+        ".aspx",
+        ".jsp",
     ];
     CMS_PATTERNS.iter().any(|pat| p.contains(pat))
 }
 
 pub fn is_stack_relevant_probe(path: &str) -> bool {
-    let p = path.to_ascii_lowercase();
-    const STACK_PATTERNS: &[&str] = &[
-        "/.env",
-        "/.git",
-        "/.aws",
-        "/.ssh",
-        "/api/admin",
-        "/etc/passwd",
-        "../",
-        "..\\",
-        "<script",
-        "union+select",
-        "union%20select",
-        "/actuator",
-        "x-middleware-subrequest",
-        "/_next/data",
-    ];
-    STACK_PATTERNS.iter().any(|pat| p.contains(pat))
+    // Default StrictPrivate-scoped stack probe check (non-suite /actuator & /.aws moved to absent-stack)
+    crate::otto_defense::is_stack_relevant_probe_for_surface(
+        path,
+        crate::otto_defense::ExposureSurface::StrictPrivate,
+        &[
+            "/auth".to_string(),
+            "/spendy".to_string(),
+            "/biomed".to_string(),
+            "/water".to_string(),
+            "/basket".to_string(),
+            "/energy".to_string(),
+            "/res".to_string(),
+        ],
+    )
+}
+
+pub fn is_stack_relevant_probe_on_host(path: &str, profile: DomainProfile) -> bool {
+    crate::otto_defense::is_stack_relevant_probe_for_surface(
+        path,
+        crate::otto_defense::ExposureSurface::from_domain_profile(profile),
+        &[
+            "/auth".to_string(),
+            "/spendy".to_string(),
+            "/biomed".to_string(),
+            "/water".to_string(),
+            "/basket".to_string(),
+            "/energy".to_string(),
+            "/res".to_string(),
+        ],
+    )
 }
 
 pub fn is_suspicious_path(path: &str) -> bool {
@@ -3018,7 +3042,8 @@ pub fn evaluate_stage0_triage_with_quarantine(
 
             let profile = classify_host_sensitivity(&ev.host);
             let cms_probe = is_irrelevant_cms_probe(&ev.path) || is_irrelevant_cms_probe(&ev.query);
-            let stack_probe = is_stack_relevant_probe(&ev.path) || is_stack_relevant_probe(&ev.query);
+            let stack_probe = is_stack_relevant_probe_on_host(&ev.path, profile)
+                || is_stack_relevant_probe_on_host(&ev.query, profile);
             let blocked = is_edge_blocked(ev);
             let host_lower = ev.host.to_ascii_lowercase();
             let path_lower = ev.path.to_ascii_lowercase();

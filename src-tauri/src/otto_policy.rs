@@ -271,8 +271,12 @@ pub struct PolicyEvalRequest {
     pub classification: Option<String>,
     pub raw_payload_text: String,
     pub target_ips: Vec<String>,
+    #[serde(default)]
+    pub target_asns: Vec<String>,
     pub target_paths: Vec<String>,
     pub protected_ips: Vec<String>,
+    #[serde(default)]
+    pub protected_asns: Vec<String>,
     pub proposed_semver_bump: Option<(String, String)>, // (old_ver, new_ver)
 }
 
@@ -314,6 +318,63 @@ pub fn is_major_or_minor_bump(old_ver: &str, new_ver: &str) -> bool {
     }
 }
 
+fn parse_ip_or_cidr(raw: &str) -> Option<(IpAddr, u8)> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some((ip_part, prefix_part)) = trimmed.split_once('/') {
+        let addr = ip_part.trim().parse::<IpAddr>().ok()?;
+        let prefix = prefix_part.trim().parse::<u8>().ok()?;
+        let max_p = if addr.is_ipv4() { 32 } else { 128 };
+        if prefix > max_p {
+            return None;
+        }
+        Some((addr, prefix))
+    } else {
+        let addr = trimmed.parse::<IpAddr>().ok()?;
+        let max_p = if addr.is_ipv4() { 32 } else { 128 };
+        Some((addr, max_p))
+    }
+}
+
+fn ipv4_mask(prefix: u8) -> u32 {
+    if prefix == 0 {
+        0
+    } else if prefix >= 32 {
+        u32::MAX
+    } else {
+        !0u32 << (32 - prefix)
+    }
+}
+
+fn ipv6_mask(prefix: u8) -> u128 {
+    if prefix == 0 {
+        0
+    } else if prefix >= 128 {
+        u128::MAX
+    } else {
+        !0u128 << (128 - prefix)
+    }
+}
+
+fn cidrs_overlap(a: (IpAddr, u8), b: (IpAddr, u8)) -> bool {
+    match (a.0, b.0) {
+        (IpAddr::V4(va), IpAddr::V4(vb)) => {
+            let mask = ipv4_mask(a.1.min(b.1));
+            (u32::from(va) & mask) == (u32::from(vb) & mask)
+        }
+        (IpAddr::V6(va), IpAddr::V6(vb)) => {
+            let mask = ipv6_mask(a.1.min(b.1));
+            (u128::from(va) & mask) == (u128::from(vb) & mask)
+        }
+        _ => false,
+    }
+}
+
+/// Returns true if an IP or CIDR range overlaps any Protected Allowlist IP/CIDR,
+/// loopback, RFC1918 LAN, CGNAT, link-local, ULA, or Cloudflare infrastructure range.
+/// Malformed CIDR strings fail closed (return true).
 pub fn is_protected_ip(ip_str: &str, extra_protected: &[String]) -> bool {
     let trimmed = ip_str.trim();
     if trimmed.is_empty() {
@@ -325,30 +386,101 @@ pub fn is_protected_ip(ip_str: &str, extra_protected: &[String]) -> bool {
     {
         return true;
     }
-    let Ok(ip) = trimmed.parse::<IpAddr>() else {
-        return false;
+    let Some(target) = parse_ip_or_cidr(trimmed) else {
+        // Fail closed on malformed CIDR literals (e.g. "76.25.246.157/99")
+        return trimmed.contains('/');
     };
-    match ip {
-        IpAddr::V4(v4) => {
-            let o = v4.octets();
-            let is_cgnat = o[0] == 100 && (o[1] & 0xc0) == 64;
-            let is_cf_sample = (o[0] == 173 && o[1] == 245)
-                || (o[0] == 104 && (o[1] & 0xf0) == 16)
-                || (o[0] == 172 && o[1] >= 64 && o[1] <= 71);
-            v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || v4.is_unspecified()
-                || is_cgnat
-                || is_cf_sample
-        }
-        IpAddr::V6(v6) => {
-            let s = v6.segments();
-            let is_ula = (s[0] & 0xfe00) == 0xfc00;
-            let is_link_local = (s[0] & 0xffc0) == 0xfe80;
-            v6.is_loopback() || v6.is_unspecified() || is_ula || is_link_local
+
+    // Any /0 wildcard CIDR matches everything including protected infrastructure
+    if target.1 == 0 {
+        return true;
+    }
+
+    // Check bitwise overlap against every extra_protected IP or CIDR (e.g. Home WAN / allowlist)
+    for prot in extra_protected {
+        if let Some(prot_cidr) = parse_ip_or_cidr(prot) {
+            if cidrs_overlap(target, prot_cidr) {
+                return true;
+            }
         }
     }
+
+    // Built-in protected IPv4 & IPv6 CIDRs (loopback, RFC1918, CGNAT, link-local, Cloudflare)
+    const BUILTIN_PROTECTED_CIDRS: &[&str] = &[
+        "0.0.0.0/8",
+        "10.0.0.0/8",
+        "100.64.0.0/10",
+        "127.0.0.0/8",
+        "169.254.0.0/16",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        // Cloudflare published IPv4 edge ranges
+        "173.245.48.0/20",
+        "103.21.244.0/22",
+        "103.22.200.0/22",
+        "103.31.4.0/22",
+        "141.101.64.0/18",
+        "108.162.192.0/18",
+        "190.93.240.0/20",
+        "188.114.96.0/20",
+        "197.234.240.0/22",
+        "198.41.128.0/17",
+        "162.158.0.0/15",
+        "104.16.0.0/13",
+        "104.24.0.0/14",
+        "172.64.0.0/13",
+        "131.0.72.0/22",
+        // IPv6 loopback, unspecified, ULA, link-local & Cloudflare IPv6 edge ranges
+        "::/128",
+        "::1/128",
+        "fc00::/7",
+        "fe80::/10",
+        "2400:cb00::/32",
+        "2606:4700::/32",
+        "2803:f800::/32",
+        "2405:b500::/32",
+        "2405:8100::/32",
+        "2a06:98c0::/29",
+        "2c0f:f248::/32",
+    ];
+    for builtin in BUILTIN_PROTECTED_CIDRS {
+        if let Some(b_cidr) = parse_ip_or_cidr(builtin) {
+            if cidrs_overlap(target, b_cidr) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+fn normalize_asn_digits(raw: &str) -> String {
+    raw.trim()
+        .trim_start_matches("AS")
+        .trim_start_matches("as")
+        .chars()
+        .filter(|c| c.is_ascii_digit())
+        .collect()
+}
+
+/// Returns true if an ASN matches Cloudflare infrastructure ASNs or any user-allowlisted ASN.
+pub fn is_protected_asn(asn_str: &str, extra_protected_asns: &[String]) -> bool {
+    let digits = normalize_asn_digits(asn_str);
+    if digits.is_empty() {
+        return false;
+    }
+    const BUILTIN_PROTECTED_ASNS: &[&str] = &[
+        "13335",  // Cloudflare primary
+        "209242", // Cloudflare London / Spectrum
+        "132892", // Cloudflare Asia
+        "394536", // Cloudflare
+    ];
+    if BUILTIN_PROTECTED_ASNS.iter().any(|a| *a == digits) {
+        return true;
+    }
+    extra_protected_asns
+        .iter()
+        .any(|p| normalize_asn_digits(p) == digits)
 }
 
 fn contains_l4_forbidden_pattern(text: &str) -> Option<(&'static str, &'static str)> {
@@ -493,8 +625,22 @@ pub fn evaluate_policy_decision(req: &PolicyEvalRequest) -> PolicyDecision {
                     invariant_id: Some("L4-06".to_string()),
                     effective_mode: AutonomyMode::L4HardBlocked,
                     reason: format!(
-                        "Target IP '{}' belongs to Protected Allowlist / LAN / Loopback / Cloudflare infrastructure",
+                        "Target IP/CIDR '{}' overlaps Protected Allowlist / LAN / Loopback / Cloudflare infrastructure",
                         ip
+                    ),
+                    checks_passed,
+                };
+            }
+        }
+        for asn in &req.target_asns {
+            if is_protected_asn(asn, &req.protected_asns) {
+                return PolicyDecision {
+                    verdict: PolicyVerdict::DenyL4HardBlocked,
+                    invariant_id: Some("L4-06".to_string()),
+                    effective_mode: AutonomyMode::L4HardBlocked,
+                    reason: format!(
+                        "Target ASN '{}' belongs to Protected Allowlist or Cloudflare infrastructure",
+                        asn
                     ),
                     checks_passed,
                 };
@@ -667,8 +813,10 @@ mod tests {
             classification: None,
             raw_payload_text: "{}".to_string(),
             target_ips: vec![],
+            target_asns: vec![],
             target_paths: vec![],
             protected_ips: vec!["198.51.100.10".to_string()],
+            protected_asns: vec![],
             proposed_semver_bump: None,
         }
     }

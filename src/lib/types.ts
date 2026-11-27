@@ -1766,6 +1766,9 @@ export interface OttoContextSeed {
     | 'quarantined_email'
     | 'hud_incident'
     | 'wsh_invariant'
+    | 'unifi_client'
+    | 'unifi_zbf'
+    | 'defense_plan'
     | 'app_release'
     | 'soak_session'
     | 'smoke_failure'
@@ -1838,6 +1841,93 @@ export interface OttoLogDeltaProbeResult {
   lineCount: number;
   preview: string;
   suricata: SuricataGatekeeperStatusDto;
+}
+
+export interface SuiteExposureProfileDto {
+  strictPrivateHosts: string[];
+  publicWebHosts: string[];
+  apexMonitorHosts: string[];
+  activeBasePaths: string[];
+  lanOnlyAppliances: string[];
+  zeroWanPortForwards: boolean;
+  wshStackSummary: string;
+  publicWebStackSummary: string;
+}
+
+export interface OttoWafLeaseRow {
+  id: string;
+  proposalId?: string | null;
+  cfZoneId: string;
+  cfZoneName: string;
+  cfRulesetId: string;
+  cfRuleId: string;
+  ruleDescription: string;
+  ruleExpression: string;
+  actionType: 'managed_challenge' | 'block' | string;
+  targetSummary: string;
+  priorRulesetSnapshotJson: string;
+  ttlMinutes?: number | null;
+  createdAt: string;
+  expiresAt?: string | null;
+  revertedAt?: string | null;
+  status: 'ACTIVE' | 'EXPIRED_REVERTED' | 'MANUALLY_REVERTED' | 'FAILED' | string;
+  traceRunId?: string | null;
+  errorText?: string | null;
+}
+
+export interface OttoDroppedNoiseRow {
+  id: string;
+  actorIp: string;
+  actorAsn: string;
+  country: string;
+  host: string;
+  surface: 'StrictPrivate' | 'PublicWeb' | 'ApexMonitor' | string;
+  reason: 'absent_stack' | 'edge_blocked_zero_origin' | 'static_404_crawler' | 'wan_default_deny' | string;
+  score: number;
+  requestCount: number;
+  samplePathsJson: string;
+  createdAt: string;
+}
+
+export interface DroppedNoiseBreakdownDto {
+  totalEvents: number;
+  totalRequests: number;
+  absentStack: number;
+  edgeBlockedZeroOrigin: number;
+  static404Crawler: number;
+  wanDefaultDeny: number;
+}
+
+export interface OttoDefenseOverviewDto {
+  exposureProfile: SuiteExposureProfileDto;
+  activeLeases: OttoWafLeaseRow[];
+  leaseHistory: OttoWafLeaseRow[];
+  droppedNoise24h: DroppedNoiseBreakdownDto;
+  recentDroppedNoise: OttoDroppedNoiseRow[];
+  defenseProposals: OttoProposalRow[];
+  cfConfigured: boolean;
+  lastSweepTrace?: OttoTraceRunRow | null;
+}
+
+export interface FastEdgeSweepResultDto {
+  traceRunId: string;
+  windowMinutes: number;
+  eventsInspected: number;
+  droppedNoiseCount: number;
+  droppedNoiseRequests: number;
+  watchActorsCount: number;
+  materialThreatsCount: number;
+  insideDefectsFlagged: number;
+  proposalsStaged: number;
+  leasesReconciled: number;
+  summary: string;
+}
+
+export interface WafLeaseReconcileReportDto {
+  checkedExpired: number;
+  revertedCount: number;
+  failedCount: number;
+  details: string[];
 }
 
 

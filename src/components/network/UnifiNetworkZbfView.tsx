@@ -4,10 +4,12 @@ import { openUrl } from '@tauri-apps/plugin-opener';
 import { Waypoints, Network, Shield, ShieldAlert } from 'lucide-react';
 import {
   LanClientBaselineRow,
+  OttoContextSeed,
   UnifiTopologySnapshotDto,
 } from '../../lib/types';
 import { buildUnifiConsoleUrl } from '../../lib/threat-utils';
 import { UnifiVlanZbfPanel, type UnifiZbfPanelTab } from '../security/UnifiVlanZbfPanel';
+import { OttoIcon } from '../agent/OttoAvatar';
 
 interface UnifiNetworkZbfViewProps {
   unifiBaseUrl?: string;
@@ -18,6 +20,7 @@ interface UnifiNetworkZbfViewProps {
   onNavigateToTopology?: () => void;
   onNavigateToHardening?: () => void;
   onNavigateToSecurity?: () => void;
+  onAskOtto?: (seed: OttoContextSeed) => void;
 }
 
 export const UnifiNetworkZbfView: React.FC<UnifiNetworkZbfViewProps> = ({
@@ -29,6 +32,7 @@ export const UnifiNetworkZbfView: React.FC<UnifiNetworkZbfViewProps> = ({
   onNavigateToTopology,
   onNavigateToHardening,
   onNavigateToSecurity,
+  onAskOtto,
 }) => {
   const [topology, setTopology] = useState<UnifiTopologySnapshotDto | null>(null);
   const [lanClients, setLanClients] = useState<LanClientBaselineRow[]>([]);
@@ -136,6 +140,35 @@ export const UnifiNetworkZbfView: React.FC<UnifiNetworkZbfViewProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {onAskOtto && (
+            <button
+              type="button"
+              onClick={() =>
+                onAskOtto({
+                  kind: 'unifi_zbf',
+                  entityId: 'unifi-zbf-posture',
+                  originView: 'unifi-zbf',
+                  title: `UniFi ZBF & LAN Baseline (${lanClients.length} clients)`,
+                  severity: 'LOW',
+                  summary: `${topology?.zones.length ?? 0} ZBF zones, ${topology?.policies.length ?? 0} policies, ${lanClients.filter((c) => c.isTrusted).length}/${lanClients.length} LAN clients trusted.`,
+                  metadata: {
+                    zonesCount: topology?.zones.length ?? 0,
+                    policiesCount: topology?.policies.length ?? 0,
+                    lanClientsTotal: lanClients.length,
+                    untrustedClientsCount: lanClients.filter((c) => !c.isTrusted).length,
+                  },
+                  starterPrompts: [
+                    'Audit our UniFi Zone-Based Firewall segmentation and check whether any untrusted LAN clients or inter-VLAN paths pose lateral movement risk.',
+                    'Confirm our zero-WAN-port-forward posture and UniFi SIEM UDP 5514 collector isolation.',
+                  ],
+                })
+              }
+              className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+            >
+              <OttoIcon state="IDLE" className="w-3.5 h-3.5" />
+              <span>Ask Otto</span>
+            </button>
+          )}
           {onNavigateToTopology && (
             <button
               type="button"
@@ -199,6 +232,7 @@ export const UnifiNetworkZbfView: React.FC<UnifiNetworkZbfViewProps> = ({
         onTrustAllBaseline={() => void handleTrustAllBaseline()}
         onRefreshLanBaseline={() => void loadUnifiData(false)}
         isLoadingLanBaseline={isLoading}
+        onAskOtto={onAskOtto}
       />
     </div>
   );

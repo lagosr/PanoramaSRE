@@ -21,11 +21,13 @@ import { formatLocalDateTime, formatRelativeTime } from '../../lib/formatters';
 import { filterLanClients } from '../../lib/threat-utils';
 import type {
   LanClientBaselineRow,
+  OttoContextSeed,
   UnifiNetworkDto,
   UnifiPolicyDto,
   UnifiTopologySnapshotDto,
   UnifiZoneDto,
 } from '../../lib/types';
+import { OttoIcon } from '../agent/OttoAvatar';
 import {
   buildZbfMatrix,
   computeZoneReachability,
@@ -51,6 +53,7 @@ interface UnifiVlanZbfPanelProps {
   onTrustAllBaseline?: () => void;
   onRefreshLanBaseline?: () => void;
   isLoadingLanBaseline?: boolean;
+  onAskOtto?: (seed: OttoContextSeed) => void;
 }
 
 function verdictPillMeta(verdict: ZbfCellVerdict): {
@@ -119,6 +122,7 @@ export const UnifiVlanZbfPanel: React.FC<UnifiVlanZbfPanelProps> = ({
   onTrustAllBaseline,
   onRefreshLanBaseline,
   isLoadingLanBaseline = false,
+  onAskOtto,
 }) => {
   const [panelTab, setPanelTab] = useState<UnifiZbfPanelTab>(initialTab ?? 'flow');
   const [activeZonesOnly, setActiveZonesOnly] = useState<boolean>(true);
@@ -1074,7 +1078,39 @@ export const UnifiVlanZbfPanel: React.FC<UnifiVlanZbfPanelProps> = ({
                           {formatRelativeTime(cli.lastSeenAt)}
                         </td>
                         <td className="py-2 px-3 text-right">
-                          <div className="inline-flex justify-end">
+                          <div className="inline-flex items-center justify-end gap-2">
+                            {onAskOtto && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onAskOtto({
+                                    kind: 'unifi_client',
+                                    entityId: cli.macAddress,
+                                    originView: 'unifi-zbf',
+                                    title: `UniFi Client: ${cli.label || cli.hostname || cli.macAddress}`,
+                                    severity: cli.isTrusted ? 'LOW' : 'MEDIUM',
+                                    summary: `MAC ${cli.macAddress} · IP ${cli.ipAddress || 'unknown'} · VLAN ${cli.networkVlan || 'unknown'} · ${cli.isTrusted ? 'Trusted' : 'Unreviewed'}`,
+                                    metadata: {
+                                      macAddress: cli.macAddress,
+                                      ipAddress: cli.ipAddress,
+                                      hostname: cli.hostname,
+                                      networkVlan: cli.networkVlan,
+                                      ouiVendor: cli.ouiVendor,
+                                      isTrusted: cli.isTrusted,
+                                    },
+                                    starterPrompts: [
+                                      `Investigate LAN client ${cli.label || cli.hostname || cli.macAddress} (${cli.ipAddress || 'unknown IP'} on ${cli.networkVlan || 'unknown VLAN'}): is there any anomalous IPS/CEF or WSH activity?`,
+                                      `Should ${cli.macAddress} remain isolated or be marked Owner-Verified trusted?`,
+                                    ],
+                                  })
+                                }
+                                className="btn-ghost text-[11px] py-0.5 px-1.5 flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+                                title={`Ask Otto about ${cli.label || cli.hostname || cli.macAddress}`}
+                              >
+                                <OttoIcon state="IDLE" className="w-3 h-3" />
+                                <span>Ask Otto</span>
+                              </button>
+                            )}
                             <ToggleSwitch
                               size="sm"
                               checked={cli.isTrusted}

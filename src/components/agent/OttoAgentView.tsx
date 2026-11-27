@@ -15,6 +15,7 @@ import {
   MessageSquare,
   PauseCircle,
   PlayCircle,
+  Radar,
   RefreshCw,
   RotateCcw,
   ShieldAlert,
@@ -35,6 +36,7 @@ import { formatLocalDateTime, formatRelativeTime } from '../../lib/formatters';
 import type {
   DiscoveredApp,
   OttoContextSeed,
+  OttoDefenseOverviewDto,
   OttoL4Invariant,
   OttoLogDeltaProbeResult,
   OttoPolicyRow,
@@ -45,10 +47,11 @@ import type {
   OttoTraceRunRow,
 } from '../../lib/types';
 import { AskOttoPanel } from './AskOttoPanel';
+import { OttoDefensePanel } from './OttoDefensePanel';
 import { OttoIcon } from './OttoAvatar';
 import { OttoTraceInspectorDrawer } from './OttoTraceInspectorDrawer';
 
-export type OttoSubView = 'ask' | 'traces' | 'approvals' | 'policies';
+export type OttoSubView = 'ask' | 'traces' | 'defense' | 'approvals' | 'policies';
 
 interface OttoAgentViewProps {
   apps: DiscoveredApp[];
@@ -58,6 +61,9 @@ interface OttoAgentViewProps {
   traces: OttoTraceRunRow[];
   proposals: OttoProposalRow[];
   soaks?: OttoSoakSessionRow[];
+  defenseOverview?: OttoDefenseOverviewDto | null;
+  isLoadingDefense?: boolean;
+  onRefreshDefense?: () => Promise<void>;
   initialSubView?: OttoSubView;
   initialSubViewNonce?: number;
   pendingContextSeed?: OttoContextSeed | null;
@@ -131,6 +137,9 @@ export const OttoAgentView: React.FC<OttoAgentViewProps> = ({
   traces,
   proposals,
   soaks = [],
+  defenseOverview = null,
+  isLoadingDefense = false,
+  onRefreshDefense,
   initialSubView = 'ask',
   initialSubViewNonce = 0,
   pendingContextSeed = null,
@@ -533,6 +542,11 @@ export const OttoAgentView: React.FC<OttoAgentViewProps> = ({
               icon: <Activity className="w-3.5 h-3.5" />,
             },
             {
+              value: 'defense',
+              label: `Defense Plans & Leases (${defenseOverview?.activeLeases.length ?? 0})`,
+              icon: <Radar className="w-3.5 h-3.5" />,
+            },
+            {
               value: 'approvals',
               label: `Approval Queue (${pendingApprovals.length})`,
               icon: <ShieldAlert className="w-3.5 h-3.5" />,
@@ -565,6 +579,18 @@ export const OttoAgentView: React.FC<OttoAgentViewProps> = ({
       )}
 
       {/* Sub-View 2: Verbose Traces, Active 15m Post-Deploy Soaks & Shadow Mode Graduation */}
+      {subView === 'defense' && (
+        <OttoDefensePanel
+          overview={defenseOverview}
+          isLoading={isLoadingDefense}
+          onRefreshDefense={onRefreshDefense ?? onRefreshOtto}
+          onRefreshOtto={onRefreshOtto}
+          onInspectTrace={(id) => setInspectedTraceId(id)}
+          onDecideProposal={onDecideProposal}
+          onAskOtto={onAskOtto}
+        />
+      )}
+
       {subView === 'traces' && (
         <div className="space-y-5">
           {/* Active & Recent 15m Post-Deploy Soak Sessions */}

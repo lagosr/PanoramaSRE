@@ -15,15 +15,17 @@ import {
   X,
 } from 'lucide-react';
 import { SynthesizedTopology } from '../../lib/topology-synthesizer';
-import { SecurityPostureInvariant } from '../../lib/types';
+import { OttoContextSeed, SecurityPostureInvariant } from '../../lib/types';
 import { buildRemoteSshCommand } from '../../lib/script-adapters';
 import { formatConsoleLine } from '../layout/ConsoleColorizer';
+import { OttoIcon } from '../agent/OttoAvatar';
 
 interface DockerNetworkRulesAdvisorProps {
   topology: SynthesizedTopology;
   onRunAuditCommand?: (label: string, cmd: string, args: string[]) => void;
   onRunPenetrationAudit?: () => void;
   onReapplyHardening?: () => void;
+  onAskOtto?: (seed: OttoContextSeed) => void;
 }
 
 export const DockerNetworkRulesAdvisor: React.FC<DockerNetworkRulesAdvisorProps> = ({
@@ -31,6 +33,7 @@ export const DockerNetworkRulesAdvisor: React.FC<DockerNetworkRulesAdvisorProps>
   onRunAuditCommand,
   onRunPenetrationAudit,
   onReapplyHardening,
+  onAskOtto,
 }) => {
   const [activeTab, setActiveTab] = useState<'invariants' | 'architecture' | 'icc' | 'loopback' | 'daemon'>('invariants');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -244,7 +247,7 @@ networks:
                 )}
 
                 {/* Evidence & Probe Trace Inspector Trigger */}
-                <div className="mt-3 pt-2.5 border-t border-slate-200/60 dark:border-slate-800/60 flex items-center justify-between gap-2">
+                <div className="mt-3 pt-2.5 border-t border-slate-200/60 dark:border-slate-800/60 flex flex-wrap items-center justify-between gap-2">
                   <button
                     onClick={() => setSelectedInvariant(inv)}
                     className="inline-flex items-center gap-1.5 text-xs font-mono font-medium text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 transition-colors cursor-pointer"
@@ -253,11 +256,46 @@ networks:
                     <Terminal className="w-3.5 h-3.5" />
                     <span>Inspect Evidence & Raw Output</span>
                   </button>
-                  {inv.evaluatedAt && (
-                    <span className="text-[10px] font-mono text-slate-400 shrink-0">
-                      {new Date(inv.evaluatedAt).toLocaleTimeString()}
-                    </span>
-                  )}
+                  <div className="flex items-center gap-2 shrink-0">
+                    {onAskOtto && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onAskOtto({
+                            kind: 'wsh_invariant',
+                            entityId: inv.id,
+                            originView: 'hardening',
+                            title: `WSH Invariant ${inv.id}: ${inv.title}`,
+                            severity: inv.status === 'PASS' ? 'LOW' : 'HIGH',
+                            summary: `${inv.status} (${inv.category}) — ${inv.details}`,
+                            metadata: {
+                              invariantId: inv.id,
+                              category: inv.category,
+                              status: inv.status,
+                              remediation: inv.remediation,
+                              details: inv.details,
+                            },
+                            starterPrompts: [
+                              `Explain WSH security invariant ${inv.id} ("${inv.title}") and verify whether our current posture (${inv.status}) has any subtle exposure.`,
+                              inv.status !== 'PASS'
+                                ? `What is the safest L3 remediation plan for ${inv.id} without disrupting live containers or SSH?`
+                                : `How does ${inv.id} protect against container escape or lateral VLAN movement?`,
+                            ],
+                          })
+                        }
+                        className="btn-tonal text-[11px] py-1 px-2 flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+                        title={`Ask Otto about ${inv.id}`}
+                      >
+                        <OttoIcon state="IDLE" className="w-3 h-3" />
+                        <span>Ask Otto</span>
+                      </button>
+                    )}
+                    {inv.evaluatedAt && (
+                      <span className="text-[10px] font-mono text-slate-400 shrink-0 tabular-nums">
+                        {new Date(inv.evaluatedAt).toLocaleTimeString()}
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
             ))}

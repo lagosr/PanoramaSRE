@@ -1,8 +1,9 @@
 import React, { useMemo } from 'react';
 import { Shield, ShieldCheck, ShieldAlert, Network, Lock } from 'lucide-react';
-import { DiscoveredApp, WshSnapshot } from '../../lib/types';
+import { DiscoveredApp, OttoContextSeed, WshSnapshot } from '../../lib/types';
 import { synthesizeTopology } from '../../lib/topology-synthesizer';
 import { DockerNetworkRulesAdvisor } from '../topology/DockerNetworkRulesAdvisor';
+import { OttoIcon } from '../agent/OttoAvatar';
 
 interface WshHardeningViewProps {
   snapshot: WshSnapshot | null;
@@ -13,6 +14,7 @@ interface WshHardeningViewProps {
   onNavigateToTopology?: () => void;
   onNavigateToSecurity?: () => void;
   onNavigateToUnifi?: () => void;
+  onAskOtto?: (seed: OttoContextSeed) => void;
 }
 
 export const WshHardeningView: React.FC<WshHardeningViewProps> = ({
@@ -24,6 +26,7 @@ export const WshHardeningView: React.FC<WshHardeningViewProps> = ({
   onNavigateToTopology,
   onNavigateToSecurity,
   onNavigateToUnifi,
+  onAskOtto,
 }) => {
   const topology = useMemo(
     () => synthesizeTopology(apps, snapshot, null),
@@ -74,11 +77,45 @@ export const WshHardeningView: React.FC<WshHardeningViewProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {onAskOtto && (
+            <button
+              type="button"
+              onClick={() =>
+                onAskOtto({
+                  kind: 'wsh_invariant',
+                  entityId: 'wsh-hardening-posture',
+                  originView: 'hardening',
+                  title: `WSH Hardening Posture (${passingCount}/${totalCount} Pass)`,
+                  severity: violationCount > 0 ? 'HIGH' : 'LOW',
+                  summary: `${passingCount}/${totalCount} SEC-01..SEC-09 invariants passing (${violationCount} violations).`,
+                  metadata: {
+                    passingCount,
+                    totalCount,
+                    violationCount,
+                    invariants: topology.securityAudit.invariants.map((i) => ({
+                      id: i.id,
+                      title: i.title,
+                      status: i.status,
+                      details: i.details,
+                    })),
+                  },
+                  starterPrompts: [
+                    'Review our WSH SEC-01..SEC-09 hardening invariants and explain any drift or gaps against our CGNAT/loopback containment policy.',
+                    'Verify that cloudflared cf-egress-net (100.64.250.0/24), DOCKER-USER, and PANORAMA-INPUT remain fully sealed.',
+                  ],
+                })
+              }
+              className="btn-tonal text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+            >
+              <OttoIcon state="IDLE" className="w-3.5 h-3.5" />
+              <span>Ask Otto</span>
+            </button>
+          )}
           {onNavigateToTopology && (
             <button
               type="button"
               onClick={onNavigateToTopology}
-              className="btn-secondary text-xs flex items-center gap-1.5"
+              className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
             >
               <Network className="w-3.5 h-3.5" />
               <span>Topology &amp; Ingress →</span>
@@ -88,7 +125,7 @@ export const WshHardeningView: React.FC<WshHardeningViewProps> = ({
             <button
               type="button"
               onClick={onNavigateToUnifi}
-              className="btn-secondary text-xs flex items-center gap-1.5"
+              className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
             >
               <Lock className="w-3.5 h-3.5" />
               <span>UniFi Network &amp; ZBF →</span>
@@ -98,7 +135,7 @@ export const WshHardeningView: React.FC<WshHardeningViewProps> = ({
             <button
               type="button"
               onClick={onNavigateToSecurity}
-              className="btn-secondary text-xs flex items-center gap-1.5"
+              className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
             >
               <ShieldAlert className="w-3.5 h-3.5" />
               <span>Threat SOC →</span>
@@ -112,6 +149,7 @@ export const WshHardeningView: React.FC<WshHardeningViewProps> = ({
         onRunAuditCommand={onRunAuditCommand}
         onRunPenetrationAudit={onRunPenetrationAudit}
         onReapplyHardening={onReapplyHardening}
+        onAskOtto={onAskOtto}
       />
     </div>
   );

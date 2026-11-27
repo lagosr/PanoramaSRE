@@ -212,6 +212,16 @@ interface ThreatIntelViewProps {
   quarantinedAccessEmails?: QuarantinedAccessEmailRow[];
   onQuarantineChanged?: () => void;
   onAskOtto?: (seed: OttoContextSeed) => void;
+  onOpenDefensePlans?: () => void;
+  onStageWafDefense?: (input: {
+    title: string;
+    targetZone: string;
+    targetHost?: string | null;
+    actionType: 'managed_challenge' | 'block';
+    targetIps: string[];
+    targetAsns: string[];
+    rcaSummary: string;
+  }) => Promise<void>;
 }
 
 const EMPTY_ZT_SUMMARY: ZeroTrustSummary = {
@@ -291,6 +301,8 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
   quarantinedAccessEmails,
   onQuarantineChanged,
   onAskOtto,
+  onOpenDefensePlans,
+  onStageWafDefense,
 }) => {
   const [subView, setSubView] = useState<SubViewTab>(() => initialSubView || 'overview');
   const [focusedItemId, setFocusedItemId] = useState<string | null>(() => initialFocusId || null);
@@ -2703,6 +2715,25 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
           </button>
         </div>
 
+        {onOpenDefensePlans && (
+          <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-[var(--color-brand-ring)]/60 text-xs">
+            <div className="flex items-center gap-2 min-w-0">
+              <OttoIcon state="IDLE" className="w-4 h-4 shrink-0" />
+              <span className="text-slate-700 dark:text-slate-300 truncate">
+                <strong className="text-slate-900 dark:text-slate-100">Otto Proactive Defense:</strong>{' '}
+                Zero-SSH fast edge sweep, Stage-0 dropped noise ($0 LLM), and Cloudflare WAF TTL leases with 1-Click Revert.
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={onOpenDefensePlans}
+              className="btn-tonal text-xs py-1 px-2.5 whitespace-nowrap flex-shrink-0"
+            >
+              Open Defense Plans &amp; Leases →
+            </button>
+          </div>
+        )}
+
         {/* Domain-Separated Sub-View Switcher */}
         <div className="pt-1 flex flex-wrap items-center justify-between gap-3">
           <SegmentedControl<SubViewTab>
@@ -3541,6 +3572,32 @@ export const ThreatIntelView: React.FC<ThreatIntelViewProps> = ({
                             <SnoozeSplitButton
                               onSnooze={(days) => void handleSnoozeActor(actor.id, days)}
                             />
+                          )}
+                          {onStageWafDefense && actor.ipAddress && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const actorIp = actor.ipAddress;
+                                if (!actorIp) return;
+                                const targetZone = hosts.some((h) => h.toLowerCase().includes('parakith'))
+                                  ? 'parakith.com'
+                                  : 'panoramadr.com';
+                                void onStageWafDefense({
+                                  title: `60m Managed Challenge: ${actorIp}`,
+                                  targetZone,
+                                  targetHost: hosts[0] ?? null,
+                                  actionType: 'managed_challenge',
+                                  targetIps: [actorIp],
+                                  targetAsns: [],
+                                  rcaSummary: `Staged from Threat SOC for external actor ${actorIp} (${actor.asOrg || actor.asn || 'unknown ASN'}, ${actor.totalRequests} reqs, ${actor.totalOrigin200s} origin 200s).`,
+                                });
+                              }}
+                              className="btn-secondary text-xs flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                              title="Stage a Policy-Kernel-validated 60m Managed Challenge Defense Plan in Otto"
+                            >
+                              <ShieldAlert className="w-3.5 h-3.5 text-[var(--color-brand-text)]" />
+                              <span>Stage Defense Plan</span>
+                            </button>
                           )}
                           {onAskOtto && (
                             <button

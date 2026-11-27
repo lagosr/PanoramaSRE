@@ -23,6 +23,7 @@ pub mod ipc_security;
 pub mod job_manager;
 pub mod notifications;
 pub mod otto_db;
+pub mod otto_defense;
 pub mod otto_policy;
 pub mod otto_runtime;
 pub mod otto_soak;
@@ -253,7 +254,12 @@ pub fn run() {
             evaluate_otto_soak_tick,
             cancel_otto_soak_session,
             evaluate_otto_steady_state,
-            queue_otto_manual_proposal
+            queue_otto_manual_proposal,
+            get_otto_defense_overview,
+            run_otto_fast_edge_sweep,
+            stage_otto_waf_defense_proposal,
+            revert_otto_waf_lease,
+            reconcile_otto_waf_leases
         ])
         .setup(move |app| {
             // Setup System Tray

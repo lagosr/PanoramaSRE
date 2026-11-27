@@ -83,6 +83,7 @@ import {
   CloudflareWafSnapshotDto,
   QuarantinedAccessEmailRow,
   OttoContextSeed,
+  OttoDefenseOverviewDto,
   OttoL4Invariant,
   OttoLifecycleSnapshot,
   OttoPolicyRow,
@@ -292,6 +293,8 @@ export const App: React.FC = () => {
   const [ottoTraces, setOttoTraces] = useState<OttoTraceRunRow[]>([]);
   const [ottoProposals, setOttoProposals] = useState<OttoProposalRow[]>([]);
   const [ottoSoaks, setOttoSoaks] = useState<OttoSoakSessionRow[]>([]);
+  const [ottoDefenseOverview, setOttoDefenseOverview] = useState<OttoDefenseOverviewDto | null>(null);
+  const [isLoadingOttoDefense, setIsLoadingOttoDefense] = useState<boolean>(false);
   const ottoSoaksRef = useRef<OttoSoakSessionRow[]>([]);
   ottoSoaksRef.current = ottoSoaks;
   const dockerDiskUsageRef = useRef<LocalDockerDiskUsage | null>(null);
@@ -653,6 +656,7 @@ export const App: React.FC = () => {
         view === 'agent' &&
         (ctx.tab === 'ask' ||
           ctx.tab === 'traces' ||
+          ctx.tab === 'defense' ||
           ctx.tab === 'approvals' ||
           ctx.tab === 'policies')
       ) {
@@ -1535,17 +1539,43 @@ export const App: React.FC = () => {
     }).then((unsub) => {
       unlistenOttoSoaks = unsub;
     });
+    let unlistenOttoDefense: (() => void) | undefined;
+    listen('sre://agent-defense-updated', () => {
+      void invoke<OttoDefenseOverviewDto>('get_otto_defense_overview')
+        .then((dto) => setOttoDefenseOverview(dto))
+        .catch(() => {});
+      void invoke<OttoProposalRow[]>('get_otto_proposals', { limit: 80 })
+        .then((list) => {
+          if (Array.isArray(list)) setOttoProposals(list);
+        })
+        .catch(() => {});
+    }).then((unsub) => {
+      unlistenOttoDefense = unsub;
+    });
     return () => {
       if (unlistenThreat) unlistenThreat();
       if (unlistenQuarantine) unlistenQuarantine();
       if (unlistenOtto) unlistenOtto();
       if (unlistenOttoSoaks) unlistenOttoSoaks();
+      if (unlistenOttoDefense) unlistenOttoDefense();
     };
   }, [refreshThreatIntelState]);
 
+  const refreshOttoDefense = useCallback(async () => {
+    setIsLoadingOttoDefense(true);
+    try {
+      const dto = await invoke<OttoDefenseOverviewDto>('get_otto_defense_overview');
+      setOttoDefenseOverview(dto ?? null);
+    } catch (err) {
+      console.warn('[PanoramaSRE] Failed to hydrate Otto defense overview:', err);
+    } finally {
+      setIsLoadingOttoDefense(false);
+    }
+  }, []);
+
   const refreshOttoState = useCallback(async () => {
     try {
-      const [statusDto, policiesList, invariantsList, tracesList, proposalsList, soaksList] =
+      const [statusDto, policiesList, invariantsList, tracesList, proposalsList, soaksList, defenseDto] =
         await Promise.all([
           invoke<OttoStatusDto>('get_otto_status'),
           invoke<OttoPolicyRow[]>('get_otto_policies'),
@@ -1553,6 +1583,7 @@ export const App: React.FC = () => {
           invoke<OttoTraceRunRow[]>('get_otto_trace_runs', { limit: 60 }),
           invoke<OttoProposalRow[]>('get_otto_proposals', { limit: 80 }),
           invoke<OttoSoakSessionRow[]>('get_otto_soak_sessions', { limit: 25 }),
+          invoke<OttoDefenseOverviewDto>('get_otto_defense_overview').catch(() => null),
         ]);
       setOttoStatus(statusDto);
       setOttoPolicies(Array.isArray(policiesList) ? policiesList : []);
@@ -1560,10 +1591,52 @@ export const App: React.FC = () => {
       setOttoTraces(Array.isArray(tracesList) ? tracesList : []);
       setOttoProposals(Array.isArray(proposalsList) ? proposalsList : []);
       setOttoSoaks(Array.isArray(soaksList) ? soaksList : []);
+      if (defenseDto) setOttoDefenseOverview(defenseDto);
     } catch (err) {
       console.warn('[PanoramaSRE] Failed to hydrate Otto state:', err);
     }
   }, []);
+
+  // Periodic 5-minute Zero-SSH Cloudflare WAF TTL lease reconciler
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (ottoStatus?.lifecycle?.killSwitchActive) return;
+      if (!ottoDefenseOverview?.activeLeases?.length) return;
+      void invoke('reconcile_otto_waf_leases')
+        .then(() => refreshOttoDefense())
+        .catch(() => {});
+    }, 5 * 60_000);
+    return () => clearInterval(timer);
+  }, [ottoStatus?.lifecycle?.killSwitchActive, ottoDefenseOverview?.activeLeases?.length, refreshOttoDefense]);
+
+  const handleStageWafDefenseFromThreat = useCallback(
+    async (input: {
+      title: string;
+      targetZone: string;
+      targetHost?: string | null;
+      actionType: 'managed_challenge' | 'block';
+      targetIps: string[];
+      targetAsns: string[];
+      rcaSummary: string;
+    }) => {
+      try {
+        await invoke<OttoProposalRow>('stage_otto_waf_defense_proposal', {
+          input: {
+            ...input,
+            targetPaths: [],
+            ttlMinutes: input.actionType === 'managed_challenge' ? 60 : null,
+            evidenceJson: '[]',
+            classification: 'MATERIAL_THREAT',
+          },
+        });
+        await refreshOttoState();
+        navigateTo('agent', { tab: 'defense', returnFromCurrent: true });
+      } catch (err) {
+        showActionFeedback(`Defense plan blocked: ${String(err)}`, 'error', 7000);
+      }
+    },
+    [refreshOttoState, navigateTo, showActionFeedback]
+  );
 
   useEffect(() => {
     void refreshOttoState();
@@ -4975,6 +5048,9 @@ export const App: React.FC = () => {
               traces={ottoTraces}
               proposals={ottoProposals}
               soaks={ottoSoaks}
+              defenseOverview={ottoDefenseOverview}
+              isLoadingDefense={isLoadingOttoDefense}
+              onRefreshDefense={refreshOttoDefense}
               initialSubView={ottoNav.tab}
               initialSubViewNonce={ottoNav.nonce}
               pendingContextSeed={ottoPendingSeed.seed}
@@ -5073,6 +5149,7 @@ export const App: React.FC = () => {
                   returnFromCurrent: true,
                 })
               }
+              onAskOtto={openOttoWithContext}
             />
           )}
 
@@ -5098,6 +5175,7 @@ export const App: React.FC = () => {
                   returnFromCurrent: true,
                 })
               }
+              onAskOtto={openOttoWithContext}
             />
           )}
 
@@ -5371,6 +5449,13 @@ export const App: React.FC = () => {
                 void refreshThreatIntelState(selectedThreatDetail?.run?.id);
               }}
               onAskOtto={openOttoWithContext}
+              onOpenDefensePlans={() =>
+                navigateTo('agent', {
+                  tab: 'defense',
+                  returnFromCurrent: true,
+                })
+              }
+              onStageWafDefense={handleStageWafDefenseFromThreat}
             />
           )}
 

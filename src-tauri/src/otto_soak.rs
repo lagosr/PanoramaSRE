@@ -1,8 +1,16 @@
 use crate::commands::telemetry_ops::parse_docker_system_df_json;
+use crate::commands::threat_intel_ops::{
+    free_plan_rule_limit_for_plan, resolve_cf_account_and_zones, resolve_cf_api_token,
+    shared_cf_http_client,
+};
 use crate::commands::workspace::resolve_suite_workspace_root;
 use crate::db::SreDatabase;
 use crate::job_manager::{JobManager, JobStatus, ResourceLock};
-use crate::otto_db::OttoHandoffPacketRow;
+use crate::otto_db::{OttoHandoffPacketRow, OttoWafLeaseRow};
+use crate::otto_defense::{
+    apply_cloudflare_waf_lease_via_api, build_compiled_waf_expression, CLOUDFLARE_API_BASE_URL,
+    DEFAULT_TEMP_CHALLENGE_TTL_MINS,
+};
 use crate::otto_policy::{
     evaluate_policy_decision, AssetTier, AutonomyMode, PolicyEvalRequest, PolicyVerdict,
 };
@@ -290,8 +298,10 @@ pub fn evaluate_soak_decision(ctx: &SoakEvaluationInput) -> SoakDecision {
         classification: Some("RELIABILITY".to_string()),
         raw_payload_text: format!("rollback {} to {}", ctx.app_slug, prev_tag),
         target_ips: vec![],
+        target_asns: vec![],
         target_paths: vec![],
         protected_ips: vec![],
+        protected_asns: vec![],
         proposed_semver_bump: None,
     });
 
@@ -722,6 +732,8 @@ pub async fn execute_compiled_otto_action(
         hourly_l2_executions,
         suite_root,
         base_step_idx,
+        protected_ips,
+        protected_asns,
     ) = {
         let guard = db.lock().map_err(|_| "DB lock poisoned".to_string())?;
         let state = guard
@@ -742,6 +754,17 @@ pub async fn execute_compiled_otto_action(
         let tier = AssetTier::from_slug(asset_slug, None);
         let configured_ws = guard.get_setting("workspace_root").ok().flatten();
         let suite_root = resolve_suite_workspace_root(configured_ws.as_deref());
+        let allowlist_rows = guard.list_threat_allowlist().unwrap_or_default();
+        let protected_ips: Vec<String> = allowlist_rows
+            .iter()
+            .filter(|a| a.entry_type.eq_ignore_ascii_case("IP"))
+            .map(|a| a.value.clone())
+            .collect();
+        let protected_asns: Vec<String> = allowlist_rows
+            .iter()
+            .filter(|a| a.entry_type.eq_ignore_ascii_case("ASN"))
+            .map(|a| a.value.clone())
+            .collect();
 
         let (tid, next_idx) = if let Some(existing) = existing_trace_run_id {
             let count = guard
@@ -755,7 +778,11 @@ pub async fn execute_compiled_otto_action(
             let id = guard
                 .create_otto_trace_run(
                     if is_human_approved_l3 { "L3_EXEC" } else { "L2_AUTO" },
-                    "HEAL",
+                    if action_id.starts_with("apply_cf_") {
+                        "DEFENSE"
+                    } else {
+                        "HEAL"
+                    },
                     Some(asset_slug),
                     None,
                     None,
@@ -774,6 +801,8 @@ pub async fn execute_compiled_otto_action(
             hourly_l2,
             suite_root,
             next_idx,
+            protected_ips,
+            protected_asns,
         )
     };
 
@@ -781,6 +810,22 @@ pub async fn execute_compiled_otto_action(
         .get("hasDbMigration")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+
+    let extract_str_array = |key: &str| -> Vec<String> {
+        params_val
+            .get(key)
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|x| x.as_str().map(|s| s.trim().to_string()))
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let target_ips = extract_str_array("targetIps");
+    let target_asns = extract_str_array("targetAsns");
+    let target_paths = extract_str_array("targetPaths");
 
     let policy_decision = evaluate_policy_decision(&PolicyEvalRequest {
         action_id: action_id.to_string(),
@@ -796,9 +841,11 @@ pub async fn execute_compiled_otto_action(
         has_db_migration,
         classification: classification.map(|s| s.to_string()),
         raw_payload_text: format!("{} {} {}", action_id, asset_slug, params_json),
-        target_ips: vec![],
-        target_paths: vec![],
-        protected_ips: vec![],
+        target_ips: target_ips.clone(),
+        target_asns: target_asns.clone(),
+        target_paths: target_paths.clone(),
+        protected_ips,
+        protected_asns,
         proposed_semver_bump: None,
     });
 
@@ -868,21 +915,17 @@ pub async fn execute_compiled_otto_action(
         return Err(block_reason);
     }
 
-    // 2. Phase 3/4 actions still dry-run cleanly until those phases unlock
+    // 2. Phase 4 upgrade/worktree actions remain dry-run until Phase 4 unlocks
     if matches!(
         action_id,
-        "apply_cf_temp_challenge"
-            | "apply_cf_permanent_waf"
-            | "stage_worktree_patch"
-            | "deploy_verified_patch"
-            | "wsh_apt_dist_upgrade"
+        "stage_worktree_patch" | "deploy_verified_patch" | "wsh_apt_dist_upgrade"
     ) {
         let summary = format!(
-            "Approved '{}' for '{}' (executor unlocks in Phase 3/4; recorded dry-run audit)",
+            "Approved '{}' for '{}' (executor unlocks in Phase 4; recorded dry-run audit)",
             action_id, asset_slug
         );
         let verification_json = json!({
-            "phase": "PHASE_2_DEFERRED_TO_P3_P4",
+            "phase": "PHASE_3_DEFERRED_TO_P4",
             "verified": true,
             "note": scrub_secrets(note.unwrap_or(&summary)),
             "decidedAt": Utc::now().to_rfc3339()
@@ -1372,6 +1415,225 @@ pub async fn execute_compiled_otto_action(
                         ok && v_ok,
                         v_msg,
                         "ROLLED_BACK".to_string(),
+                    )
+                }
+                Err(err) => {
+                    emit_agent_stream_line(app, &job_id, &format!("[OTTO ERROR] {}", err));
+                    emit_agent_stream_end(app, &job_id, 1);
+                    (false, err.clone(), false, err, "FAILED".to_string())
+                }
+            }
+        }
+
+        "apply_cf_temp_challenge" | "apply_cf_permanent_waf" => {
+            emit_agent_stream_start(app, &job_id, &stream_title, asset_slug, is_human_approved_l3);
+            if action_id == "apply_cf_permanent_waf" && !is_human_approved_l3 {
+                let err = "Permanent Cloudflare WAF rules strictly require explicit Desktop L3 Approval (never autonomous L2).".to_string();
+                emit_agent_stream_line(app, &job_id, &format!("[OTTO BLOCKED] {}", err));
+                emit_agent_stream_end(app, &job_id, 1);
+                return Err(err);
+            }
+
+            let target_asns = extract_str_array("targetAsns");
+            let target_zone_hint = params_val
+                .get("targetZone")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_ascii_lowercase())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| asset_slug.trim().to_ascii_lowercase());
+            let target_host = params_val
+                .get("targetHost")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+
+            // Compile Wirefilter strictly in Rust from verified IPs/ASNs (zero raw LLM expressions)
+            let compiled_expr = match build_compiled_waf_expression(
+                &target_ips,
+                &target_asns,
+                target_host.as_deref(),
+            ) {
+                Ok(e) => e,
+                Err(err) => {
+                    emit_agent_stream_line(app, &job_id, &format!("[OTTO ERROR] {}", err));
+                    emit_agent_stream_end(app, &job_id, 1);
+                    return Err(err);
+                }
+            };
+
+            // Enforce action contract: temp challenge NEVER uses 'block'
+            let (cf_action, ttl_mins, expires_at_opt) = if action_id == "apply_cf_temp_challenge" {
+                let mins = params_val
+                    .get("ttlMinutes")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(DEFAULT_TEMP_CHALLENGE_TTL_MINS)
+                    .clamp(15, 240);
+                let exp = (Utc::now() + chrono::Duration::minutes(mins)).to_rfc3339();
+                ("managed_challenge", Some(mins), Some(exp))
+            } else {
+                let requested = params_val
+                    .get("cfAction")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("block")
+                    .trim()
+                    .to_ascii_lowercase();
+                let safe_act = if requested == "managed_challenge" {
+                    "managed_challenge"
+                } else {
+                    "block"
+                };
+                (safe_act, None, None)
+            };
+
+            let (cf_token, configured_acct) = {
+                let guard = db.lock().map_err(|_| "DB lock poisoned".to_string())?;
+                let tok = resolve_cf_api_token(&guard).map(|s| s.value);
+                let acct = guard.get_setting("cf_account_id").ok().flatten();
+                (tok, acct)
+            };
+            let Some(token) = cf_token else {
+                let err = "Cloudflare API token is not configured. Configure CLOUDFLARE_API_TOKEN under Settings -> AI, Credentials & Connectors.".to_string();
+                emit_agent_stream_line(app, &job_id, &format!("[OTTO PREFLIGHT] {}", err));
+                emit_agent_stream_end(app, &job_id, 1);
+                return Err(err);
+            };
+            let Some(cf_client) = shared_cf_http_client() else {
+                let err = "Failed initializing Cloudflare HTTPS client".to_string();
+                emit_agent_stream_line(app, &job_id, &format!("[OTTO ERROR] {}", err));
+                emit_agent_stream_end(app, &job_id, 1);
+                return Err(err);
+            };
+
+            emit_agent_stream_line(
+                app,
+                &job_id,
+                &format!(
+                    "[OTTO WAF] Resolving Cloudflare zone '{}' (action={}, expr={})...",
+                    target_zone_hint, cf_action, compiled_expr
+                ),
+            );
+            let zones_res =
+                resolve_cf_account_and_zones(cf_client, &token, configured_acct.as_deref()).await;
+            let matched_zone = match zones_res {
+                Ok((_acct, zones)) => zones
+                    .into_iter()
+                    .find(|(_, zname, _)| {
+                        zname.eq_ignore_ascii_case(&target_zone_hint)
+                            || target_zone_hint.ends_with(&format!(".{}", zname.to_ascii_lowercase()))
+                    }),
+                Err(err) => {
+                    emit_agent_stream_line(app, &job_id, &format!("[OTTO ERROR] {}", err));
+                    emit_agent_stream_end(app, &job_id, 1);
+                    return Err(err);
+                }
+            };
+
+            let Some((zone_id, zone_name, plan_name)) = matched_zone else {
+                let err = format!(
+                    "Could not resolve Cloudflare zone matching '{}' in your Cloudflare account.",
+                    target_zone_hint
+                );
+                emit_agent_stream_line(app, &job_id, &format!("[OTTO ERROR] {}", err));
+                emit_agent_stream_end(app, &job_id, 1);
+                return Err(err);
+            };
+
+            let lease_id = format!("lease-{}", Uuid::new_v4());
+            let base_desc = params_val
+                .get("description")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or("Otto Proactive Defense Rule");
+            let max_rules = free_plan_rule_limit_for_plan(&plan_name);
+
+            emit_agent_stream_line(
+                app,
+                &job_id,
+                &format!(
+                    "[OTTO WAF] Capturing prior custom WAF ruleset snapshot on {} (plan={}, limit={})...",
+                    zone_name, plan_name, max_rules
+                ),
+            );
+
+            match apply_cloudflare_waf_lease_via_api(
+                cf_client,
+                CLOUDFLARE_API_BASE_URL,
+                &token,
+                &zone_id,
+                &lease_id,
+                cf_action,
+                &compiled_expr,
+                base_desc,
+                expires_at_opt.as_deref(),
+                max_rules,
+            )
+            .await
+            {
+                Ok(receipt) => {
+                    emit_agent_stream_line(
+                        app,
+                        &job_id,
+                        &format!(
+                            "[OTTO PASS] Applied Cloudflare WAF rule '{}' on {} ({} -> {} rules; prior snapshot saved)",
+                            receipt.cf_rule_id,
+                            zone_name,
+                            receipt.rules_count_before,
+                            receipt.rules_count_after
+                        ),
+                    );
+                    let target_summary = {
+                        let mut parts = Vec::new();
+                        if !target_ips.is_empty() {
+                            parts.push(format!("IPs: {}", target_ips.join(", ")));
+                        }
+                        if !target_asns.is_empty() {
+                            parts.push(format!("ASNs: {}", target_asns.join(", ")));
+                        }
+                        parts.join(" · ")
+                    };
+                    let lease_row = OttoWafLeaseRow {
+                        id: lease_id.clone(),
+                        proposal_id: proposal_id.map(|s| s.to_string()),
+                        cf_zone_id: zone_id.clone(),
+                        cf_zone_name: zone_name.clone(),
+                        cf_ruleset_id: receipt.cf_ruleset_id.clone(),
+                        cf_rule_id: receipt.cf_rule_id.clone(),
+                        rule_description: receipt.rule_description.clone(),
+                        rule_expression: compiled_expr.clone(),
+                        action_type: cf_action.to_string(),
+                        target_summary,
+                        prior_ruleset_snapshot_json: receipt.prior_ruleset_snapshot_json,
+                        ttl_minutes: ttl_mins,
+                        created_at: Utc::now().to_rfc3339(),
+                        expires_at: expires_at_opt.clone(),
+                        reverted_at: None,
+                        status: "ACTIVE".to_string(),
+                        trace_run_id: Some(trace_run_id.clone()),
+                        error_text: None,
+                    };
+                    if let Ok(guard) = db.lock() {
+                        let _ = guard.insert_otto_waf_lease(&lease_row);
+                    }
+                    let verify_msg = format!(
+                        "Verified live Cloudflare rule '{}' on {} (lease={}, ttl={})",
+                        receipt.cf_rule_id,
+                        zone_name,
+                        lease_id,
+                        ttl_mins
+                            .map(|m| format!("{}m auto-revert", m))
+                            .unwrap_or_else(|| "permanent (1-click revert)".to_string())
+                    );
+                    emit_agent_stream_line(app, &job_id, &format!("[OTTO VERIFY] {}", verify_msg));
+                    emit_agent_stream_end(app, &job_id, 0);
+                    (
+                        true,
+                        format!(
+                            "Applied Cloudflare WAF {} on {} ({})",
+                            cf_action, zone_name, compiled_expr
+                        ),
+                        true,
+                        verify_msg,
+                        "VERIFIED".to_string(),
                     )
                 }
                 Err(err) => {
