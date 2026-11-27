@@ -70,7 +70,7 @@ interface OttoAgentViewProps {
   onAbortStep: () => Promise<void>;
   onResetCircuitBreaker: () => Promise<void>;
   onUpdatePolicyMode: (actionId: string, mode: string) => Promise<void>;
-  onDecideProposal: (proposalId: string, decision: string) => Promise<void>;
+  onDecideProposal: (proposalId: string, decision: string) => Promise<OttoProposalRow | void>;
   onCancelSoak?: (soakId: string) => Promise<void>;
   onEvaluateSteadyState?: () => Promise<string | void>;
   onQueueBuildKitPruneProposal?: () => Promise<void>;
@@ -275,11 +275,29 @@ export const OttoAgentView: React.FC<OttoAgentViewProps> = ({
     setIsExecutingProposalId(proposal.id);
     setProbeFeedback(null);
     try {
-      await onDecideProposal(proposal.id, 'APPROVE');
-      setProbeFeedback({
-        ok: true,
-        text: `Executed & verified '${proposal.actionId}' on '${proposal.assetSlug}'.`,
-      });
+      const updated = await onDecideProposal(proposal.id, 'APPROVE');
+      if (updated && (updated.status === 'FAILED' || updated.status === 'BLOCKED')) {
+        let detail = `Action '${proposal.actionId}' ended with status ${updated.status}.`;
+        if (updated.verificationResultJson) {
+          try {
+            const parsed = JSON.parse(updated.verificationResultJson) as {
+              verifyDetail?: string;
+              reason?: string;
+            };
+            if (parsed.reason || parsed.verifyDetail) {
+              detail = parsed.reason || parsed.verifyDetail || detail;
+            }
+          } catch {
+            // keep default detail
+          }
+        }
+        setProbeFeedback({ ok: false, text: detail });
+      } else {
+        setProbeFeedback({
+          ok: true,
+          text: `Executed & verified '${proposal.actionId}' on '${proposal.assetSlug}'.`,
+        });
+      }
     } catch (err) {
       setProbeFeedback({ ok: false, text: `Execution failed: ${String(err)}` });
     } finally {

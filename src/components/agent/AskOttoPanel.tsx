@@ -44,7 +44,7 @@ interface AskOttoPanelProps {
   proposals: OttoProposalRow[];
   onRefreshOtto: () => Promise<void>;
   onInspectTrace: (traceRunId: string) => void;
-  onDecideProposal: (proposalId: string, decision: string) => Promise<void>;
+  onDecideProposal: (proposalId: string, decision: string) => Promise<OttoProposalRow | void>;
   onAbortStep: () => Promise<void>;
   onNavigateToSettings?: () => void;
 }

@@ -13,6 +13,7 @@ import {
   OptInComplianceSnapshot,
   OttoContextSeed,
   OttoLifecycleSnapshot,
+  OttoProposalRow,
   OttoSoakSessionRow,
   QuarantinedAccessEmailRow,
   SecurityPostureInvariant,
@@ -91,6 +92,7 @@ interface CommandCenterViewProps {
   onClearTab?: (id: string) => void;
   ottoLifecycle?: OttoLifecycleSnapshot | null;
   ottoSoaks?: OttoSoakSessionRow[];
+  pendingOttoProposals?: OttoProposalRow[];
   onOpenOtto?: () => void;
   onOpenOttoApprovals?: () => void;
   onAskOtto?: (seed: OttoContextSeed) => void;
@@ -141,6 +143,7 @@ export function CommandCenterView({
   onTriggerDeployAll,
   ottoLifecycle = null,
   ottoSoaks = [],
+  pendingOttoProposals = [],
   onOpenOtto,
   onOpenOttoApprovals,
   onAskOtto,
@@ -367,11 +370,12 @@ export function CommandCenterView({
         </div>
       </div>
 
-      {/* Zone 1: Unified Priority Attention Queue (All 7 Domains) */}
+      {/* Zone 1: Unified Priority Attention Queue (All 7 Domains + Otto L3 Approvals) */}
       <PriorityAttentionQueue
         incidents={incidentQueue}
         isInitialSyncComplete={isInitialSyncComplete}
         pendingAgentApprovalsCount={ottoLifecycle?.pendingApprovalsCount ?? 0}
+        pendingOttoProposals={pendingOttoProposals}
         onAction={handleIncidentAction}
         onRunPenetrationAudit={onRunPenetrationAudit}
         onAskOtto={onAskOtto}
@@ -393,16 +397,22 @@ export function CommandCenterView({
           activeSoaks.length > 0
             ? `Monitoring ${activeSoaks.length} post-deploy soak window${activeSoaks.length === 1 ? '' : 's'} (${firstSoak.releaseId}${firstSoak.hasDbMigration ? ' · DB_MIGRATION L3-only' : ' · DB-Safe N-3 ready'})`
             : ottoLifecycle?.summary || '';
+        const ribbonTargetHandler =
+          activeSoaks.length === 0 &&
+          (pendingOttoProposals.length > 0 || (ottoLifecycle?.pendingApprovalsCount ?? 0) > 0) &&
+          onOpenOttoApprovals
+            ? onOpenOttoApprovals
+            : onOpenOtto;
         return (
           <ExecutiveScorecardStrip
             cards={scorecardCards}
             onNavigate={handleScorecardNavigate}
             agentRibbon={
-              (ottoLifecycle || activeSoaks.length > 0) && onOpenOtto
+              (ottoLifecycle || activeSoaks.length > 0) && ribbonTargetHandler
                 ? {
                     modeLabel: ribbonModeLabel,
                     detail: ribbonDetail,
-                    onOpenAgent: onOpenOtto,
+                    onOpenAgent: ribbonTargetHandler,
                   }
                 : null
             }

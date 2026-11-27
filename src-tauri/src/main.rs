@@ -3962,5 +3962,13 @@ mod tests {
             proposed_semver_bump: None,
         });
         assert_eq!(d_danger.verdict, PolicyVerdict::DenyL4HardBlocked);
+
+        // 12. BuildKit usage human formatter
+        use panorama_sre_lib::otto_soak::format_buildkit_usage;
+        assert_eq!(format_buildkit_usage(None), "unavailable");
+        assert_eq!(
+            format_buildkit_usage(Some((14_200_000_000, 48_500_000_000))),
+            "14.20 GB reclaimable / 48.50 GB total"
+        );
     }
 }

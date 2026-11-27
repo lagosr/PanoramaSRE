@@ -283,8 +283,26 @@ describe('Otto AI SRE — Phase 2 Soak Engine, Approval Queue, Pushover & Cross-
     expect(incidentIdx).toBeGreaterThan(ottoIdx);
   });
 
-  it('PriorityAttentionQueue renders clickable L3 APPROVALS pill and FleetAppCard renders SOAKING badge + Ask Otto on unhealthy cards', () => {
+  it('PriorityAttentionQueue renders clickable L3 APPROVALS pill, real approval rows with accurate count, and FleetAppCard renders SOAKING badge + Ask Otto on unhealthy cards', () => {
     const queueHtml = renderToStaticMarkup(
+      <PriorityAttentionQueue
+        isInitialSyncComplete={true}
+        pendingAgentApprovalsCount={1}
+        pendingOttoProposals={[SAMPLE_PROPOSALS[0]]}
+        onOpenOttoApprovals={vi.fn()}
+        onAskOtto={vi.fn()}
+        incidents={[]}
+        onAction={vi.fn()}
+      />
+    );
+    expect(queueHtml).toContain('1 L3 APPROVAL');
+    expect(queueHtml).toContain('Collapse (1)');
+    expect(queueHtml).toContain('data-testid="hud-queue-otto-approval-prop-l3-1"');
+    expect(queueHtml).toContain('Soak Regression: Review Rollback for spendy');
+    expect(queueHtml).toContain('Review &amp; Approve →');
+    expect(queueHtml).not.toContain('Expand (0)');
+
+    const summaryFallbackHtml = renderToStaticMarkup(
       <PriorityAttentionQueue
         isInitialSyncComplete={true}
         pendingAgentApprovalsCount={2}
@@ -293,7 +311,9 @@ describe('Otto AI SRE — Phase 2 Soak Engine, Approval Queue, Pushover & Cross-
         onAction={vi.fn()}
       />
     );
-    expect(queueHtml).toContain('2 L3 APPROVALS');
+    expect(summaryFallbackHtml).toContain('2 L3 APPROVALS');
+    expect(summaryFallbackHtml).toContain('Collapse (2)');
+    expect(summaryFallbackHtml).toContain('data-testid="hud-queue-otto-approval-summary"');
 
     const cardHtml = renderToStaticMarkup(
       <FleetAppCard

@@ -13,13 +13,14 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { HudIncidentAction, HudIncidentDomain, HudIncidentItem } from '../../lib/hud-synthesis';
-import type { OttoContextSeed } from '../../lib/types';
+import type { OttoContextSeed, OttoProposalRow } from '../../lib/types';
 import { OttoIcon } from '../agent/OttoAvatar';
 
 interface PriorityAttentionQueueProps {
   incidents: HudIncidentItem[];
   isInitialSyncComplete: boolean;
   pendingAgentApprovalsCount?: number;
+  pendingOttoProposals?: OttoProposalRow[];
   onAction: (action: HudIncidentAction) => void;
   onRunPenetrationAudit?: () => void;
   onAskOtto?: (seed: OttoContextSeed) => void;
@@ -40,6 +41,7 @@ export const PriorityAttentionQueue: React.FC<PriorityAttentionQueueProps> = ({
   incidents,
   isInitialSyncComplete,
   pendingAgentApprovalsCount = 0,
+  pendingOttoProposals = [],
   onAction,
   onRunPenetrationAudit,
   onAskOtto,
@@ -51,7 +53,11 @@ export const PriorityAttentionQueue: React.FC<PriorityAttentionQueueProps> = ({
     return null;
   }
 
-  if (incidents.length === 0 && pendingAgentApprovalsCount === 0) {
+  const effectiveApprovalsCount =
+    pendingOttoProposals.length > 0 ? pendingOttoProposals.length : pendingAgentApprovalsCount;
+  const totalQueueItems = incidents.length + effectiveApprovalsCount;
+
+  if (totalQueueItems === 0) {
     return (
       <div className="rounded-2xl border border-emerald-500/30 bg-white dark:bg-slate-900 px-4 py-2.5 shadow-sm flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2.5 min-w-0">
@@ -104,18 +110,18 @@ export const PriorityAttentionQueue: React.FC<PriorityAttentionQueueProps> = ({
               {warningCount} WARNING
             </span>
           )}
-          {pendingAgentApprovalsCount > 0 && (
+          {effectiveApprovalsCount > 0 && (
             onOpenOttoApprovals ? (
               <button
                 type="button"
                 onClick={onOpenOttoApprovals}
                 className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-[var(--color-brand-subtle)] text-[var(--color-brand-text)] border border-[var(--color-brand-ring)] hover:opacity-90 tabular-nums whitespace-nowrap cursor-pointer"
               >
-                {pendingAgentApprovalsCount} L3 APPROVAL{pendingAgentApprovalsCount > 1 ? 'S' : ''}
+                {effectiveApprovalsCount} L3 APPROVAL{effectiveApprovalsCount > 1 ? 'S' : ''}
               </button>
             ) : (
               <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-[var(--color-brand-subtle)] text-[var(--color-brand-text)] border border-[var(--color-brand-ring)] tabular-nums whitespace-nowrap">
-                {pendingAgentApprovalsCount} L3 APPROVAL{pendingAgentApprovalsCount > 1 ? 'S' : ''}
+                {effectiveApprovalsCount} L3 APPROVAL{effectiveApprovalsCount > 1 ? 'S' : ''}
               </span>
             )
           )}
@@ -124,10 +130,10 @@ export const PriorityAttentionQueue: React.FC<PriorityAttentionQueueProps> = ({
         <button
           type="button"
           onClick={() => setIsCollapsed((prev) => !prev)}
-          className="btn-ghost text-xs px-2.5 py-1 min-h-[32px] flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+          className="btn-ghost text-xs px-2.5 py-1 min-h-[32px] flex items-center gap-1 whitespace-nowrap flex-shrink-0 tabular-nums"
           aria-expanded={!isCollapsed}
         >
-          <span>{isCollapsed ? `Expand (${incidents.length})` : 'Collapse'}</span>
+          <span>{isCollapsed ? `Expand (${totalQueueItems})` : `Collapse (${totalQueueItems})`}</span>
           {isCollapsed ? (
             <ChevronDown className="w-3.5 h-3.5" />
           ) : (
@@ -136,9 +142,116 @@ export const PriorityAttentionQueue: React.FC<PriorityAttentionQueueProps> = ({
         </button>
       </div>
 
-      {/* Severity-Ranked Rows */}
+      {/* Severity-Ranked Rows (Pending L3 Otto Approvals + 7-Domain Operational Incidents) */}
       {!isCollapsed && (
         <div className="divide-y divide-slate-200 dark:divide-slate-800">
+          {pendingOttoProposals.length > 0 ? (
+            pendingOttoProposals.map((proposal) => (
+              <div
+                key={`otto-l3-${proposal.id}`}
+                data-testid={`hud-queue-otto-approval-${proposal.id}`}
+                className="px-4 py-3.5 flex flex-col lg:flex-row lg:items-center justify-between gap-3"
+              >
+                <div className="flex items-start gap-3 min-w-0">
+                  <div className="w-8 h-8 rounded-xl border bg-[var(--color-brand-subtle)] border-[var(--color-brand-ring)] flex items-center justify-center shrink-0 mt-0.5">
+                    <OttoIcon className="w-4 h-4" state="AWAITING_APPROVAL" />
+                  </div>
+                  <div className="min-w-0 space-y-0.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-wider bg-[var(--color-brand-subtle)] text-[var(--color-brand-text)] border border-[var(--color-brand-ring)]">
+                        Otto L3 Approval
+                      </span>
+                      <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                        {proposal.actionId} · {proposal.assetSlug} · {proposal.severity}
+                      </span>
+                    </div>
+                    <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-slate-100">
+                      {proposal.title}
+                    </h3>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 break-words">
+                      {proposal.rcaSummary}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 shrink-0">
+                  {onOpenOttoApprovals && (
+                    <button
+                      type="button"
+                      onClick={onOpenOttoApprovals}
+                      className="btn-primary text-xs py-1.5 px-3 whitespace-nowrap flex-shrink-0"
+                    >
+                      <span>Review &amp; Approve →</span>
+                    </button>
+                  )}
+                  {onAskOtto && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onAskOtto({
+                          kind: 'general',
+                          entityId: proposal.id,
+                          originView: 'hud',
+                          title: `Review L3 Proposal: ${proposal.title}`,
+                          severity: proposal.severity,
+                          summary: proposal.rcaSummary,
+                          metadata: {
+                            proposalId: proposal.id,
+                            actionId: proposal.actionId,
+                            assetSlug: proposal.assetSlug,
+                            paramsJson: proposal.paramsJson,
+                          },
+                          starterPrompts: [
+                            `Walk me through L3 proposal "${proposal.title}" (${proposal.actionId} on ${proposal.assetSlug}). What is the blast radius and verification plan?`,
+                            `Are there any prerequisite checks before approving ${proposal.actionId}?`,
+                          ],
+                        })
+                      }
+                      className="btn-tonal text-xs py-1.5 px-2.5 flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
+                      title="Open Ask Otto with this L3 proposal pinned as context"
+                    >
+                      <OttoIcon className="w-3.5 h-3.5" />
+                      <span>Ask Otto</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))
+          ) : effectiveApprovalsCount > 0 ? (
+            <div
+              data-testid="hud-queue-otto-approval-summary"
+              className="px-4 py-3.5 flex flex-col lg:flex-row lg:items-center justify-between gap-3"
+            >
+              <div className="flex items-start gap-3 min-w-0">
+                <div className="w-8 h-8 rounded-xl border bg-[var(--color-brand-subtle)] border-[var(--color-brand-ring)] flex items-center justify-center shrink-0 mt-0.5">
+                  <OttoIcon className="w-4 h-4" state="AWAITING_APPROVAL" />
+                </div>
+                <div className="min-w-0 space-y-0.5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-wider bg-[var(--color-brand-subtle)] text-[var(--color-brand-text)] border border-[var(--color-brand-ring)]">
+                      Otto L3 Approval
+                    </span>
+                  </div>
+                  <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-slate-100 tabular-nums">
+                    {effectiveApprovalsCount} Otto L3 Approval{effectiveApprovalsCount > 1 ? 's' : ''} Waiting for Desktop Review
+                  </h3>
+                  <p className="text-xs text-slate-600 dark:text-slate-400">
+                    Open the Otto AI SRE Approval Queue to inspect parameters, Policy Kernel checks, and approve or snooze.
+                  </p>
+                </div>
+              </div>
+              {onOpenOttoApprovals && (
+                <button
+                  type="button"
+                  onClick={onOpenOttoApprovals}
+                  className="btn-primary text-xs py-1.5 px-3 whitespace-nowrap flex-shrink-0"
+                >
+                  <span>Open Approval Queue →</span>
+                </button>
+              )}
+            </div>
+          ) : null}
+
           {incidents.map((item) => {
             const Icon = DOMAIN_ICONS[item.domain];
             const isCrit = item.severity === 'critical';

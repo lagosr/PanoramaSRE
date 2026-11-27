@@ -1605,11 +1605,12 @@ export const App: React.FC = () => {
   );
 
   const handleDecideOttoProposal = useCallback(
-    async (proposalId: string, decision: string) => {
-      await invoke<OttoProposalRow>('decide_otto_proposal', {
+    async (proposalId: string, decision: string): Promise<OttoProposalRow> => {
+      const updated = await invoke<OttoProposalRow>('decide_otto_proposal', {
         input: { proposalId, decision, note: null },
       });
       await refreshOttoState();
+      return updated;
     },
     [refreshOttoState]
   );
@@ -4918,6 +4919,7 @@ export const App: React.FC = () => {
               onClearTab={handleClearTab}
               ottoLifecycle={ottoStatus?.lifecycle ?? null}
               ottoSoaks={ottoSoaks}
+              pendingOttoProposals={pendingOttoProposals}
               onOpenOtto={() => navigateTo('agent', { tab: 'ask', returnFromCurrent: true })}
               onOpenOttoApprovals={() =>
                 navigateTo('agent', { tab: 'approvals', returnFromCurrent: true })

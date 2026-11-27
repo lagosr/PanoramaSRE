@@ -524,6 +524,67 @@ async fn run_compiled_process(
     Ok((exit_code, tail_text))
 }
 
+/// Checks whether the local Docker Desktop engine daemon is running and reachable.
+pub async fn check_local_docker_daemon() -> Result<String, String> {
+    let mut cmd = Command::new("docker");
+    cmd.args(["info", "--format", "{{.ServerVersion}}"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(target_os = "windows")]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let output = tokio::time::timeout(Duration::from_secs(8), cmd.output())
+        .await
+        .map_err(|_| {
+            "Local Docker Desktop engine timed out responding to `docker info`. Verify Docker Desktop is running on Windows."
+                .to_string()
+        })?
+        .map_err(|e| {
+            format!(
+                "Docker CLI could not be launched ({}). Ensure Docker Desktop is installed and on PATH.",
+                e
+            )
+        })?;
+
+    if output.status.success() {
+        let ver = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        return Ok(if ver.is_empty() { "ready".to_string() } else { ver });
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let lower = stderr.to_ascii_lowercase();
+    if lower.contains("dockerdesktoplinuxengine")
+        || lower.contains("docker_engine")
+        || lower.contains("cannot find the file specified")
+        || lower.contains("error during connect")
+        || lower.contains("daemon is running")
+    {
+        return Err(
+            "Local Docker Desktop is not running. Start Docker Desktop on Windows, wait for the engine to initialize, and click Approve & Execute again."
+                .to_string(),
+        );
+    }
+
+    Err(format!(
+        "Local Docker engine pre-flight failed: {}",
+        scrub_secrets(&stderr.chars().take(240).collect::<String>())
+    ))
+}
+
+/// Formats optional `(reclaimable_bytes, total_bytes)` BuildKit stats cleanly for logs.
+pub fn format_buildkit_usage(usage: Option<(u64, u64)>) -> String {
+    match usage {
+        Some((reclaim, total)) => format!(
+            "{:.2} GB reclaimable / {:.2} GB total",
+            reclaim as f64 / 1_000_000_000.0,
+            total as f64 / 1_000_000_000.0
+        ),
+        None => "unavailable".to_string(),
+    }
+}
+
 /// Checks local Docker BuildKit disk usage directly via compiled `docker system df --format json`.
 async fn read_local_buildkit_bytes() -> Option<(u64, u64)> {
     let mut cmd = Command::new("docker");
@@ -915,13 +976,83 @@ pub async fn execute_compiled_otto_action(
 
         "prune_buildkit_cache" => {
             emit_agent_stream_start(app, &job_id, &stream_title, asset_slug, is_human_approved_l3);
+            emit_agent_stream_line(
+                app,
+                &job_id,
+                "[OTTO PREFLIGHT] Checking local Docker Desktop engine availability...",
+            );
+            if let Err(daemon_err) = check_local_docker_daemon().await {
+                emit_agent_stream_line(app, &job_id, &format!("[OTTO PREFLIGHT] {}", daemon_err));
+                emit_agent_stream_end(app, &job_id, 1);
+                if let Ok(guard) = db.lock() {
+                    let _ = guard.append_otto_trace_step(
+                        &trace_run_id,
+                        base_step_idx + 1,
+                        "PREFLIGHT",
+                        &daemon_err,
+                        "PRECONDITION_UNMET",
+                        exec_start.elapsed().as_millis() as i64,
+                        None,
+                        Some(&json!({ "dockerDaemonRunning": false, "proposalKeptPending": is_human_approved_l3 }).to_string()),
+                    );
+                    if existing_trace_run_id.is_none() {
+                        let _ = guard.complete_otto_trace_run(
+                            &trace_run_id,
+                            "PRECONDITION_UNMET",
+                            None,
+                            None,
+                            0,
+                            0,
+                            0,
+                            started.elapsed().as_millis() as i64,
+                            &daemon_err,
+                            Some(&daemon_err),
+                        );
+                    }
+                    let _ = runtime.set_phase(
+                        Some(app),
+                        OttoRuntimePhase::Idle,
+                        "Otto: Idle · Shadow",
+                        None,
+                        None,
+                        None,
+                        "Ready",
+                        Some(trace_run_id.clone()),
+                        false,
+                    );
+                    if let Ok(st) = guard.get_otto_state() {
+                        let pending = guard.count_pending_otto_approvals().unwrap_or(0);
+                        let active_soaks = guard.count_active_otto_soaks().unwrap_or(0);
+                        let _ = runtime.sync_from_db_state(
+                            Some(app),
+                            st.kill_switch_active,
+                            &st.circuit_breaker_state,
+                            pending,
+                            active_soaks,
+                            st.daily_t1_calls,
+                            st.daily_t2_calls,
+                            st.dropped_noise_24h_count,
+                        );
+                    }
+                }
+                return Err(daemon_err);
+            }
+
             let before_usage = read_local_buildkit_bytes().await;
+            emit_agent_stream_line(
+                app,
+                &job_id,
+                &format!(
+                    "[OTTO PREFLIGHT] Local Docker engine online · BuildKit cache before prune: {}",
+                    format_buildkit_usage(before_usage)
+                ),
+            );
             if !is_human_approved_l3 {
                 if let Some((reclaim, total)) = before_usage {
                     if !is_buildkit_cache_high(reclaim, total) {
                         let msg = format!(
-                            "Calibrated BuildKit guard skipped L2 prune (reclaimable={} B < 35 GB, total={} B < 100 GB)",
-                            reclaim, total
+                            "Calibrated BuildKit guard skipped L2 prune ({} < 35 GB reclaimable / 100 GB total)",
+                            format_buildkit_usage(Some((reclaim, total)))
                         );
                         emit_agent_stream_line(app, &job_id, &msg);
                         emit_agent_stream_end(app, &job_id, 0);
@@ -966,8 +1097,10 @@ pub async fn execute_compiled_otto_action(
                     );
                     let after_usage = read_local_buildkit_bytes().await;
                     let verify_msg = format!(
-                        "docker buildx prune exited {} (before={:?}, after={:?})",
-                        code, before_usage, after_usage
+                        "docker buildx prune exited {} (before: {}; after: {})",
+                        code,
+                        format_buildkit_usage(before_usage),
+                        format_buildkit_usage(after_usage)
                     );
                     emit_agent_stream_line(app, &job_id, &format!("[OTTO VERIFY] {}", verify_msg));
                     emit_agent_stream_end(app, &job_id, code);
